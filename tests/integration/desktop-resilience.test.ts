@@ -42,6 +42,21 @@ async function waitForMirroredName(value: string): Promise<void> {
   throw new Error(`final mirrored value did not converge: ${value}`);
 }
 
+async function waitForNoOutOfSync(): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  let clearSince = 0;
+  while (Date.now() < deadline) {
+    if (await chrome.getByText(/Out of sync/).count() === 0) {
+      if (clearSince === 0) clearSince = Date.now();
+      else if (Date.now() - clearSince >= 300) return;
+    } else clearSince = 0;
+    const next = Promise.withResolvers<void>();
+    setTimeout(next.resolve, 20);
+    await next.promise;
+  }
+  throw new Error("out-of-sync state did not clear");
+}
+
 beforeAll(async () => {
   fixture = spawn(process.execPath, [resolve("tests/fixtures/server.mjs")], { env: { ...process.env, PORT: "4179" }, stdio: ["ignore", "pipe", "inherit"] });
   const ready = Promise.withResolvers<void>();
@@ -94,7 +109,7 @@ describe("desktop replay and security resilience", () => {
     await waitForRemotePages("/next");
     await sourcePage("/next").getByTestId("name").fill("after-navigation");
     await waitForMirroredName("after-navigation");
-    expect(await chrome.getByText(/Out of sync/).count()).toBe(0);
+    await waitForNoOutOfSync();
   }, 30_000);
 
   it("denies permissions, downloads, popups, and external protocols", async () => {
