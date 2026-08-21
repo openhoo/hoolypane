@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/contracts" },
+    { "path": "packages/flow" },
+    { "path": "packages/recorder" },
+    { "path": "packages/runner" },
+    { "path": "apps/desktop" }
+  ]
+}

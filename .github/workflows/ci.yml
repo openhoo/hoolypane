@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm architecture
+      - run: pnpm exec knip
+      - run: pnpm typecheck
+      - run: pnpm test:unit
+      - run: pnpm test:runner
+      - run: pnpm build
+      - run: xvfb-run -a pnpm test:desktop
+      - run: xvfb-run -a pnpm benchmark:desktop
+      - run: pnpm benchmark:recording
+      - run: pnpm pack:runner
+
+  native-package:
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            command: package:linux
+          - os: windows-latest
+            command: package:windows
+          - os: macos-latest
+            command: package:mac
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm ${{ matrix.command }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hoolypane-${{ matrix.os }}-unsigned
+          path: dist/desktop/*

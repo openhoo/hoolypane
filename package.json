@@ -1,0 +1,40 @@
+{
+  "name": "hoolypane",
+  "version": "0.1.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@10.15.0",
+  "scripts": {
+    "typecheck": "tsc -b --pretty false",
+    "test:unit": "vitest run packages apps",
+    "test:runner": "vitest run packages/runner/src tests/integration/runner.test.ts",
+    "test:desktop": "vitest run tests/integration/desktop.test.ts",
+    "build:runner": "pnpm --filter @hoolypane/runner build",
+    "hoolypane": "node packages/runner/dist/cli.js",
+    "fixture:start": "node tests/fixtures/server.mjs",
+    "desktop:dev": "pnpm --filter @hoolypane/desktop start",
+    "build": "pnpm typecheck && pnpm --filter @hoolypane/desktop build && pnpm build:runner",
+    "pack:runner": "pnpm --filter @hoolypane/runner pack --pack-destination dist",
+    "package:linux": "pnpm --filter @hoolypane/desktop package:linux",
+    "package:windows": "pnpm --filter @hoolypane/desktop package:windows",
+    "package:mac": "pnpm --filter @hoolypane/desktop package:mac",
+    "architecture": "depcruise apps packages --config .dependency-cruiser.cjs",
+    "knip": "knip",
+    "verify:artifacts": "node packages/runner/dist/cli.js verify",
+    "benchmark:recording": "vitest run tests/performance/recording-benchmark.test.ts",
+    "benchmark:desktop": "vitest run tests/performance/desktop-benchmark.test.ts"
+  },
+  "devDependencies": {
+    "@hoolypane/runner": "workspace:*",
+    "@types/node": "24.3.0",
+    "dependency-cruiser": "17.1.0",
+    "knip": "5.62.0",
+    "playwright": "1.62.1",
+    "sharp": "0.34.3",
+    "typescript": "5.9.2",
+    "vitest": "3.2.4"
+  }
+}

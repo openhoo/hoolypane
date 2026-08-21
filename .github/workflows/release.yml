@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm architecture && pnpm exec knip && pnpm typecheck && pnpm test:unit && pnpm test:runner
+      - run: pnpm benchmark:recording
+      - run: pnpm build && pnpm pack:runner
+      - name: Smoke packed runner in clean project
+        shell: bash
+        run: |
+          project="$(mktemp -d)"
+          cd "$project"
+          npm init -y
+          npm install "$GITHUB_WORKSPACE"/dist/hoolypane-runner-*.tgz
+          npx hoolypane --help || test $? -eq 1
+      - name: Publish runner
+        if: ${{ secrets.NPM_TOKEN != '' }}
+        run: pnpm --filter @hoolypane/runner publish --provenance --access public --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runner-tarball
+          path: dist/*.tgz
+
+  desktop:
+    needs: qualify
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            command: package:linux
+          - os: windows-latest
+            command: package:windows
+          - os: macos-latest
+            command: package:mac
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm ${{ matrix.command }}
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: dist/desktop/*
+
+  github-release:
+    needs: desktop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-artifacts/*

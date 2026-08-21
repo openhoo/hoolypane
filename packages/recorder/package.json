@@ -1,0 +1,17 @@
+{
+  "name": "@hoolypane/recorder",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./dist/index.js" },
+  "types": "./dist/index.d.ts",
+  "scripts": { "build": "tsc -b" },
+  "dependencies": {
+    "@hoolypane/contracts": "workspace:*",
+    "ffmpeg-static": "5.3.0",
+    "ffprobe-static": "3.1.0"
+  },
+  "devDependencies": {
+    "sharp": "0.34.3"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "@hoolypane/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "Direct Chromium multi-viewport desktop browser",
+  "author": { "name": "Hoolypane contributors", "email": "hoolypane@users.noreply.github.com" },
+  "homepage": "https://github.com/hoolypane/hoolypane",
+  "repository": { "type": "git", "url": "https://github.com/hoolypane/hoolypane.git" },
+  "main": "dist/main/index.js",
+  "scripts": {
+    "dev": "vite --config vite.renderer.config.ts",
+    "build": "vite build --config vite.main.config.ts && vite build --config vite.preload.config.ts --mode chrome && vite build --config vite.preload.config.ts --mode pane && vite build --config vite.renderer.config.ts",
+    "start": "electron .",
+    "package:linux": "pnpm build && electron-builder --linux --publish never --config electron-builder.yml",
+    "package:windows": "pnpm build && electron-builder --windows --publish never --config electron-builder.yml",
+    "package:mac": "pnpm build && electron-builder --mac --publish never --config electron-builder.yml"
+  },
+  "dependencies": {
+    "sharp": "0.34.3",
+    "zod": "4.1.5"
+  },
+  "devDependencies": {
+    "@hoolypane/contracts": "workspace:*",
+    "@hoolypane/flow": "workspace:*",
+    "@preact/preset-vite": "2.10.2",
+    "electron": "43.4.1",
+    "electron-builder": "26.0.12",
+    "preact": "10.27.1",
+    "vite": "7.1.3"
+  }
+}

@@ -1,0 +1,36 @@
+appId: dev.hoolypane.app
+productName: Hoolypane
+copyright: Copyright © 2026 Hoolypane contributors
+electronVersion: 43.4.1
+directories:
+  output: ../../dist/desktop
+files:
+  - dist/**
+  - package.json
+extraResources:
+  - from: ../../LICENSE
+    to: LICENSE
+asar: true
+asarUnpack:
+  - node_modules/sharp/**
+npmRebuild: true
+artifactName: ${productName}-${version}-${os}-${arch}-unsigned.${ext}
+linux:
+  category: Development
+  target:
+    - AppImage
+    - deb
+win:
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+mac:
+  category: public.app-category.developer-tools
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  target:
+    - dmg
+dmg:
+  sign: false
