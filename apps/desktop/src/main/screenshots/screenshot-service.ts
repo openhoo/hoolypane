@@ -1,5 +1,6 @@
 import { BrowserWindow, dialog } from "electron";
 import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { extname, isAbsolute } from "node:path";
 import type { PaneRegistry } from "../panes/pane-registry.js";
@@ -17,6 +18,17 @@ function testOutputPath(variable: "HOOLYPANE_TEST_PANE_PNG" | "HOOLYPANE_TEST_OV
   return value;
 }
 
+async function writePng(path: string, png: Uint8Array): Promise<void> {
+  const temporaryPath = `${path}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(temporaryPath, png);
+    await fs.rename(temporaryPath, path);
+  } catch (error) {
+    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
 export async function capturePane(window: BrowserWindow, registry: PaneRegistry, paneId: string): Promise<void> {
   const pane = registry.getPane(paneId);
   const state = registry.getPaneState(paneId);
@@ -24,7 +36,7 @@ export async function capturePane(window: BrowserWindow, registry: PaneRegistry,
   const image = await pane.view.webContents.capturePage();
   const directPath = testOutputPath("HOOLYPANE_TEST_PANE_PNG");
   if (directPath) {
-    await fs.writeFile(directPath, image.toPNG());
+    await writePng(directPath, image.toPNG());
     return;
   }
   const selection = await dialog.showSaveDialog(window, {
@@ -32,7 +44,7 @@ export async function capturePane(window: BrowserWindow, registry: PaneRegistry,
     defaultPath: `${state.id}.png`,
     filters: [{ name: "PNG image", extensions: ["png"] }],
   });
-  if (!selection.canceled && selection.filePath) await fs.writeFile(selection.filePath, image.toPNG());
+  if (!selection.canceled && selection.filePath) await writePng(selection.filePath, image.toPNG());
 }
 
 export async function captureOverview(window: BrowserWindow, registry: PaneRegistry): Promise<void> {
@@ -51,7 +63,7 @@ export async function captureOverview(window: BrowserWindow, registry: PaneRegis
   const png = await composeOverview(tiles, "#111318");
   const directPath = testOutputPath("HOOLYPANE_TEST_OVERVIEW_PNG");
   if (directPath) {
-    await fs.writeFile(directPath, png);
+    await writePng(directPath, png);
     return;
   }
   const selection = await dialog.showSaveDialog(window, {
@@ -59,7 +71,7 @@ export async function captureOverview(window: BrowserWindow, registry: PaneRegis
     defaultPath: "hoolypane-overview.png",
     filters: [{ name: "PNG image", extensions: ["png"] }],
   });
-  if (!selection.canceled && selection.filePath) await fs.writeFile(selection.filePath, png);
+  if (!selection.canceled && selection.filePath) await writePng(selection.filePath, png);
 }
 
 function composeOverview(tiles: readonly { name: string; dimensions: string; png?: Uint8Array; error?: string }[], background: string): Promise<Buffer> {
