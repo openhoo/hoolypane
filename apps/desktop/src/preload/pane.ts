@@ -146,7 +146,6 @@ document.addEventListener("scroll", (event) => {
 
 ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
   const request = ReplayRequestSchema.parse(value);
-  if (request.phase === "resolve" || request.phase === "apply-dom") suppressed.add(request.actionId);
   if (request.phase === "end") suppressed.delete(request.actionId);
   let result: ReplayResult = { actionId: request.actionId, paneId: "pending", phase: request.phase, ok: true };
   try {
@@ -156,6 +155,7 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
       const matches = elementsFor(request.action.locator);
       if (matches.length !== 1) throw new Error(`locator resolved ${matches.length} elements`);
       const element = matches[0]!;
+      suppressed.add(request.actionId);
       if (request.phase === "resolve" && (request.action.kind === "fill" || request.action.kind === "press") && element instanceof HTMLElement) {
         element.focus({ preventScroll: true });
       }
