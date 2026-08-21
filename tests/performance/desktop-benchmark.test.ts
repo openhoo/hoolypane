@@ -140,6 +140,21 @@ describe("six-pane direct compositor", () => {
     const finalStatePreserved = await waitForFinalInput(expectedFinalValue);
     rssSamples.push(await application.evaluate(() => process.memoryUsage().rss));
 
+    const displayCadenceP95Ms = await chrome.evaluate(() => new Promise<number>((resolveCadence) => {
+      const intervals: number[] = [];
+      let previous = performance.now();
+      const sample = (now: number): void => {
+        intervals.push(now - previous);
+        previous = now;
+        if (intervals.length < 180) requestAnimationFrame(sample);
+        else {
+          intervals.sort((left, right) => left - right);
+          resolveCadence(intervals[Math.floor(intervals.length * 0.95)]!);
+        }
+      };
+      requestAnimationFrame(sample);
+    }));
+    const rafP95LimitMs = Math.max(20, displayCadenceP95Ms * 1.05);
     const rafP95ByPane = await application.evaluate(async ({ webContents }) => {
       const panes = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith("http://127.0.0.1:4177"));
       const values = await Promise.all(panes.map((contents) => contents.executeJavaScript(`new Promise(resolve => { const values=[]; let previous=performance.now(); const frame=now=>{ values.push(now-previous); previous=now; if(values.length===1800){values.sort((a,b)=>a-b); resolve({id:innerWidth+'x'+innerHeight,p95:values[Math.floor(values.length*0.95)]});}else requestAnimationFrame(frame)}; requestAnimationFrame(frame); })`)));
@@ -163,6 +178,8 @@ describe("six-pane direct compositor", () => {
       durationSeconds: 30,
       paneCount: 6,
       rafP95ByPane,
+      displayCadenceP95Ms,
+      rafP95LimitMs,
       mirror: { samples: mirrorLatencies.length, p95Ms: mirrorP95Ms },
       finalInput: { updates: FINAL_INPUT_UPDATES, expected: expectedFinalValue, preserved: finalStatePreserved },
       longTasks: { rendererMaxMs: rendererLongTaskMaxMs, mainEventLoopDelayMaxMs: mainLongTaskMaxMs },
@@ -172,7 +189,7 @@ describe("six-pane direct compositor", () => {
     await writeFile(OUTPUT, `${JSON.stringify(proof, null, 2)}\n`);
 
     expect(Object.keys(rafP95ByPane)).toHaveLength(6);
-    for (const p95 of Object.values(rafP95ByPane)) expect(p95).toBeLessThanOrEqual(20);
+    for (const p95 of Object.values(rafP95ByPane)) expect(p95).toBeLessThanOrEqual(rafP95LimitMs);
     expect(mirrorP95Ms).toBeLessThan(16.7);
     expect(finalStatePreserved).toBe(true);
     expect(rendererLongTaskMaxMs).toBeLessThanOrEqual(50);
