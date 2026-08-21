@@ -16,7 +16,7 @@
     "apps/desktop": {
       "entry": ["src/main/index.ts!", "src/main/screenshots/overview-worker.ts!", "src/preload/*.ts!", "src/renderer/app/index.tsx!", "src/**/*.test.ts", "vite.*.config.ts", "scripts/*.mjs"],
       "project": ["src/**/*.ts", "src/**/*.tsx", "vite.*.config.ts", "scripts/*.mjs"],
-      "ignoreDependencies": ["electron-builder"]
+      "ignoreDependencies": ["electron-builder", "electron-builder-squirrel-windows"]
     }
   }
 }

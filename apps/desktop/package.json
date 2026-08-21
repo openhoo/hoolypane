@@ -19,7 +19,7 @@
     "package:mac": "pnpm build && node scripts/package-desktop.mjs mac"
   },
   "dependencies": {
-    "sharp": "0.34.3",
+    "sharp": "0.35.3",
     "zod": "4.1.5"
   },
   "devDependencies": {
@@ -27,7 +27,8 @@
     "@hoolypane/flow": "workspace:*",
     "@preact/preset-vite": "2.10.2",
     "electron": "43.4.1",
-    "electron-builder": "26.0.12",
+    "electron-builder": "26.15.3",
+    "electron-builder-squirrel-windows": "26.15.3",
     "preact": "10.27.3",
     "vite": "7.3.5"
   }
