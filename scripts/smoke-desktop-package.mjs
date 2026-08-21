@@ -110,5 +110,5 @@ try {
     const uninstaller = join(installedDirectory, "Uninstall Hoolypane.exe");
     try { await run(uninstaller, ["/S"]); } catch { /* temporary directory removal remains authoritative */ }
   }
-  await fs.rm(temporary, { recursive: true, force: true });
+  await fs.rm(temporary, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
 }

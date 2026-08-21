@@ -172,7 +172,6 @@ async function replayEnvelope(paneId: string, envelope: ActionEnvelope): Promise
     return;
   }
   const request = { actionId: envelope.actionId, documentGeneration: envelope.documentGeneration, action: envelope.action } as const;
-  await requestReplay(paneId, { ...request, phase: "begin" });
   try {
     if (envelope.action.kind === "select" || envelope.action.kind === "scroll") {
       const result = await requestReplay(paneId, { ...request, phase: "apply-dom" });

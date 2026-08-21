@@ -146,7 +146,7 @@ document.addEventListener("scroll", (event) => {
 
 ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
   const request = ReplayRequestSchema.parse(value);
-  if (request.phase === "begin") suppressed.add(request.actionId);
+  if (request.phase === "resolve" || request.phase === "apply-dom") suppressed.add(request.actionId);
   if (request.phase === "end") suppressed.delete(request.actionId);
   let result: ReplayResult = { actionId: request.actionId, paneId: "pending", phase: request.phase, ok: true };
   try {
