@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ViewportListSchema, type ViewportSpec } from "./viewport.js";
+import { ViewportListSchema } from "./viewport.js";
 
 export const DEFAULT_RECORDING = {
   fps: 60 as const,
@@ -33,26 +33,16 @@ export const HoolypaneConfigSchema = z
     ...config,
     timeoutMs: config.timeoutMs ?? 30_000,
     recording: {
-      ...DEFAULT_RECORDING,
-      ...config.recording,
+      fps: config.recording?.fps ?? DEFAULT_RECORDING.fps,
+      jpegQuality: config.recording?.jpegQuality ?? DEFAULT_RECORDING.jpegQuality,
+      layout: config.recording?.layout ?? DEFAULT_RECORDING.layout,
       compositeMaxSize: config.recording?.compositeMaxSize ?? DEFAULT_RECORDING.compositeMaxSize,
+      compositeBackground: config.recording?.compositeBackground ?? DEFAULT_RECORDING.compositeBackground,
+      outputDir: config.recording?.outputDir ?? DEFAULT_RECORDING.outputDir,
+      keepRaw: config.recording?.keepRaw ?? DEFAULT_RECORDING.keepRaw,
     },
   }));
 
 export type HoolypaneConfig = z.input<typeof HoolypaneConfigSchema>;
-export interface ResolvedRecordingConfig {
-  readonly fps: 30 | 60;
-  readonly jpegQuality: number;
-  readonly layout: "grid";
-  readonly compositeMaxSize: { readonly width: number; readonly height: number };
-  readonly compositeBackground: string;
-  readonly outputDir: string;
-  readonly keepRaw: boolean;
-}
-export interface ResolvedHoolypaneConfig {
-  readonly baseURL?: string;
-  readonly viewports: readonly ViewportSpec[];
-  readonly storageState?: string;
-  readonly timeoutMs: number;
-  readonly recording: ResolvedRecordingConfig;
-}
+export type ResolvedHoolypaneConfig = Readonly<z.output<typeof HoolypaneConfigSchema>>;
+export type ResolvedRecordingConfig = ResolvedHoolypaneConfig["recording"];

@@ -24,15 +24,22 @@ function actionStatements(action: Action): readonly string[] {
     case "select": return [`await ${locator}.selectOption(${literal(action.values)});`];
     case "check": return [`await ${locator}.${action.checked ? "check" : "uncheck"}();`];
     case "press": return [`await ${locator}.press(${literal(action.key)});`];
-    case "scroll": return [
-      `await ${locator}.evaluate((element, ratios) => {`,
-      "  const target = element as HTMLElement;",
-      "  target.scrollTo({",
-      "    left: ratios.horizontal * Math.max(0, target.scrollWidth - target.clientWidth),",
-      "    top: ratios.vertical * Math.max(0, target.scrollHeight - target.clientHeight),",
-      "  });",
-      `}, { horizontal: ${action.horizontalRatio}, vertical: ${action.verticalRatio} });`,
-    ];
+    case "scroll": {
+      const horizontal = Number(action.horizontalRatio);
+      const vertical = Number(action.verticalRatio);
+      if (!Number.isFinite(horizontal) || !Number.isFinite(vertical) || horizontal < 0 || horizontal > 1 || vertical < 0 || vertical > 1) {
+        throw new Error(`Invalid scroll ratios: ${String(action.horizontalRatio)}, ${String(action.verticalRatio)}`);
+      }
+      return [
+        `await ${locator}.evaluate((element, ratios) => {`,
+        "  const target = element as HTMLElement;",
+        "  target.scrollTo({",
+        "    left: ratios.horizontal * Math.max(0, target.scrollWidth - target.clientWidth),",
+        "    top: ratios.vertical * Math.max(0, target.scrollHeight - target.clientHeight),",
+        "  });",
+        `}, { horizontal: ${horizontal}, vertical: ${vertical} });`,
+      ];
+    }
   }
 }
 

@@ -1,11 +1,10 @@
 import { z } from "zod";
-import { ActionEnvelopeSchema, ActionSchema } from "./action.js";
+import { ActionSchema } from "./action.js";
 import { ViewportSpecSchema } from "./viewport.js";
 
 export const IPC_CHANNELS = {
   command: "hoolypane:command",
   bounds: "hoolypane:bounds",
-  interaction: "hoolypane:interaction",
   paneAction: "hoolypane:pane-action",
   paneGeneration: "hoolypane:pane-generation",
   replay: "hoolypane:replay",
@@ -45,7 +44,6 @@ export const ChromeCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.enum(["capture-overview", "record-start", "record-stop"]) }),
 ]);
 
-export const PaneInteractionSchema = ActionEnvelopeSchema;
 export const PaneObservedActionSchema = z.strictObject({
   documentGeneration: z.number().int().nonnegative(),
   action: ActionSchema,
@@ -53,18 +51,19 @@ export const PaneObservedActionSchema = z.strictObject({
 export const PaneGenerationSchema = z.strictObject({
   documentGeneration: z.number().int().nonnegative(),
 });
+const REPLAY_PHASES = ["resolve", "apply-dom", "end"] as const;
 export const ReplayRequestSchema = z.strictObject({
   actionId: z.number().int().positive(),
   documentGeneration: z.number().int().nonnegative(),
   action: ActionSchema,
-  phase: z.enum(["resolve", "apply-dom", "end"]),
+  phase: z.enum(REPLAY_PHASES),
 });
 export const ReplayResultSchema = z.strictObject({
   actionId: z.number().int().positive(),
-  paneId,
-  phase: z.enum(["resolve", "apply-dom", "confirm", "end"]),
+  paneId: paneId.optional(),
+  phase: z.enum([...REPLAY_PHASES, "confirm"]),
   ok: z.boolean(),
-  reason: z.string().optional(),
+  reason: z.string().max(512).optional(),
   box: z.strictObject({ x: z.number(), y: z.number(), width: z.number().nonnegative(), height: z.number().nonnegative() }).optional(),
   checked: z.boolean().optional(),
 });

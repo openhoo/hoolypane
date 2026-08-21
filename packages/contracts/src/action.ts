@@ -17,14 +17,19 @@ export const LocatorSpecSchema = z.discriminatedUnion("kind", [
   CssLocatorSchema,
 ]);
 export type LocatorSpec = z.infer<typeof LocatorSpecSchema>;
-export const LOCATOR_PRIORITY: readonly LocatorSpec["kind"][] = ["testId", "role", "label", "placeholder", "text", "css"];
 
 const target = { locator: LocatorSpecSchema };
 export const ActionSchema = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("navigate"), url: z.string().url() }),
+  z.strictObject({
+    kind: z.literal("navigate"),
+    url: z.string().url().refine((url) => {
+      const protocol = new URL(url).protocol;
+      return protocol === "http:" || protocol === "https:";
+    }, "navigate URL must use http or https"),
+  }),
   z.strictObject({ kind: z.literal("click"), ...target }),
   z.strictObject({ kind: z.literal("fill"), ...target, value: z.string() }),
-  z.strictObject({ kind: z.literal("select"), ...target, values: z.array(z.string()).min(1) }),
+  z.strictObject({ kind: z.literal("select"), ...target, values: z.array(z.string()) }),
   z.strictObject({ kind: z.literal("check"), ...target, checked: z.boolean() }),
   z.strictObject({ kind: z.literal("press"), ...target, key: nonEmpty }),
   z.strictObject({

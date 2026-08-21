@@ -22,7 +22,7 @@ const directories: string[] = [];
 afterEach(async () => Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))));
 
 function options(outputDir: string) {
-  return { recording: { fps: 30 as const, jpegQuality: 85, layout: "grid" as const, compositeMaxSize: { width: 128, height: 128 }, compositeBackground: "#111318", outputDir, keepRaw: false }, timeoutMs: 100, outputDir };
+  return { recording: { fps: 30 as const, jpegQuality: 85, layout: "grid" as const, compositeMaxSize: { width: 128, height: 128 }, compositeBackground: "#111318", keepRaw: false }, timeoutMs: 100, outputDir };
 }
 
 describe("recording session", () => {
@@ -42,7 +42,7 @@ describe("recording session", () => {
     const session = new RecordingSession(options(outputDir));
     await session.start([target]);
     const jpeg = await sharp({ create: { width: 2, height: 2, channels: 3, background: "#0088ff" } }).jpeg().toBuffer();
-    target.emit({ data: jpeg.toString("base64"), sessionId: 1, metadata: { timestamp: 1_800_000_000, frameSequence: 1, deviceWidth: 2, deviceHeight: 2 } });
+    target.emit({ data: jpeg.toString("base64"), sessionId: 1, metadata: { timestamp: 1_800_000_000, deviceWidth: 2, deviceHeight: 2 } });
     await session.awaitInitialFrames();
     session.markFlowStart();
     const result = await session.finalize({ status: "interrupted", failures: [{ message: "SIGINT" }] });

@@ -8,6 +8,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runFlow } from "../../packages/runner/src/run-flow.js";
 
 import { electronExecutablePath } from "../electron-executable.js";
+import { clickPaneSurface } from "./cdp-input.js";
+
 let fixture: ChildProcess;
 let application: ElectronApplication;
 let chrome: Page;
@@ -41,27 +43,7 @@ async function waitForPanes(expected: number): Promise<void> {
 }
 
 async function clickDesktopApply(): Promise<void> {
-  const surface = await chrome.locator('[data-pane-surface="desktop-1440"]').boundingBox();
-  if (!surface) throw new Error("desktop source surface missing");
-  const viewport = await chrome.evaluate(() => ({ width: innerWidth, height: innerHeight }));
-  const visibleWidth = Math.max(0, Math.min(viewport.width, surface.x + surface.width) - Math.max(0, surface.x));
-  const visibleHeight = Math.max(0, Math.min(viewport.height, surface.y + surface.height) - Math.max(0, surface.y));
-  const scale = Math.min(1, visibleWidth / 1440, visibleHeight / 900);
-  const result = await application.evaluate(async ({ webContents }, inputScale) => {
-    const candidates = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith("http://127.0.0.1:4178"));
-    let source: (typeof candidates)[number] | undefined;
-    for (const candidate of candidates) {
-      if (await candidate.executeJavaScript("innerWidth") === 1440) { source = candidate; break; }
-    }
-    if (!source) throw new Error("desktop source pane missing");
-    const box = await source.executeJavaScript(`document.querySelector('[data-testid=\"apply\"]').getBoundingClientRect().toJSON()`);
-    const x = (box.x + box.width / 2) * inputScale;
-    const y = (box.y + box.height / 2) * inputScale;
-    await source.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-    await source.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
-    return { box, x, y, status: await source.executeJavaScript(`document.querySelector('[data-testid=\"status\"]').textContent`) };
-  }, scale);
-  if (result.status !== "applied") throw new Error(`source Apply click did not activate: ${JSON.stringify({ surface, scale, result })}`);
+  await clickPaneSurface(application, chrome, { port: 4178, testId: "apply", expectedStatus: "applied" });
 }
 
 async function waitForAppliedCount(expected: number): Promise<void> {
@@ -83,6 +65,7 @@ beforeAll(async () => {
   const ready = Promise.withResolvers<void>();
   fixture.stdout?.on("data", (data: Buffer) => { if (data.toString().includes("fixture ready")) ready.resolve(); });
   fixture.once("error", ready.reject);
+  fixture.once("exit", (code) => ready.reject(new Error(`fixture exited before readiness (code ${code})`)));
   await ready.promise;
   directory = await mkdtemp(join(tmpdir(), "hoolypane-artifacts-"));
   panePng = join(directory, "pane.png");
@@ -111,7 +94,7 @@ afterAll(async () => {
   await application?.close().catch(() => undefined);
   fixture?.kill("SIGTERM");
   if (directory) await rm(directory, { recursive: true, force: true });
-});
+}, 30_000);
 
 describe("desktop screenshots and recorded flows", () => {
   it("exports stills, preserves good overview tiles, and runs the recorded flow", async () => {

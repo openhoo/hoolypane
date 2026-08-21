@@ -5,15 +5,17 @@ export const MAX_ENCODED_AREA = 67_108_864;
 const slug = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export function encodedDimension(cssDimension: number, deviceScaleFactor: number): number {
-  return 2 * Math.ceil((cssDimension * deviceScaleFactor) / 2);
+  const raw = cssDimension * deviceScaleFactor;
+  const snapped = Math.round(raw * 1e6) / 1e6;
+  return 2 * Math.ceil(snapped / 2);
 }
 
 export const ViewportSpecSchema = z
   .strictObject({
     id: z.string().min(1).regex(slug, "id must be a lowercase slug"),
     name: z.string().min(1),
-    width: z.number().int().min(1).max(16_384),
-    height: z.number().int().min(1).max(16_384),
+    width: z.number().int().min(1).max(MAX_ENCODED_DIMENSION),
+    height: z.number().int().min(1).max(MAX_ENCODED_DIMENSION),
     deviceScaleFactor: z.number().min(0.5).max(4),
     isMobile: z.boolean(),
     hasTouch: z.boolean(),

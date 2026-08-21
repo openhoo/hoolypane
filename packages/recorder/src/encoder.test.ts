@@ -23,10 +23,13 @@ describe("multi-viewport encoder", () => {
       const jpeg = await sharp({ create: { width: geometry.width, height: geometry.height, channels: 3, background: "#ff0000" } }).jpeg().toBuffer();
       const spool = new FrameSpool(id, join(directory, "raw"));
       await spool.open();
-      for (let sequence = 0; sequence < 10; sequence += 1) {
-        await spool.append(jpeg, { sequence, width: geometry.width, height: geometry.height, timestampUs: sequence * (trackIndex + 1) * 20_000 });
+      try {
+        for (let sequence = 0; sequence < 10; sequence += 1) {
+          await spool.append(jpeg, { sequence, width: geometry.width, height: geometry.height, timestampUs: sequence * (trackIndex + 1) * 20_000 });
+        }
+      } finally {
+        await spool.close().catch(() => undefined);
       }
-      await spool.close();
       const alignment = alignFrames(spool.index.frames, 0, 22, 30);
       return { id, spool, mappings: alignment.mappings, geometry: { id, encodedWidth: geometry.width, encodedHeight: geometry.height } };
     }));

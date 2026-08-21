@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { IPC_CHANNELS } from "../../packages/contracts/src/index.js";
 import { electronExecutablePath } from "../electron-executable.js";
 
 let fixture: ChildProcess;
@@ -62,6 +63,7 @@ beforeAll(async () => {
   const ready = Promise.withResolvers<void>();
   fixture.stdout?.on("data", (data: Buffer) => { if (data.toString().includes("fixture ready")) ready.resolve(); });
   fixture.once("error", ready.reject);
+  fixture.once("exit", (code) => ready.reject(new Error(`fixture exited before readiness (code ${code})`)));
   await ready.promise;
   directory = await mkdtemp(join(tmpdir(), "hoolypane-resilience-"));
   const environment = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
@@ -81,11 +83,11 @@ afterAll(async () => {
   await application?.close().catch(() => undefined);
   fixture?.kill("SIGTERM");
   if (directory) await rm(directory, { recursive: true, force: true });
-});
+}, 30_000);
 
 describe("desktop replay and security resilience", () => {
   it("rejects stale generations and converges after navigation with pending replay", async () => {
-    const stale = await application.evaluate(({ ipcMain, webContents }) => {
+    const stale = await application.evaluate(async ({ ipcMain, webContents }, channels) => {
       const pane = webContents.getAllWebContents().find((contents) => contents.getURL() === "http://127.0.0.1:4179/");
       if (!pane) throw new Error("pane missing for stale replay");
       const completion = Promise.withResolvers<unknown>();
@@ -93,13 +95,17 @@ describe("desktop replay and security resilience", () => {
       const listener = (event: Electron.IpcMainEvent, value: { actionId?: number }) => {
         if (event.sender !== pane || value.actionId !== 9_999) return;
         clearTimeout(timer);
-        ipcMain.removeListener("hoolypane:replay-result", listener);
         completion.resolve(value);
       };
-      ipcMain.on("hoolypane:replay-result", listener);
-      pane.send("hoolypane:replay", { actionId: 9_999, documentGeneration: 999, action: { kind: "click", locator: { kind: "testId", value: "apply" } }, phase: "resolve" });
-      return completion.promise;
-    }) as { ok: boolean; reason?: string };
+      ipcMain.on(channels.replayResult, listener);
+      pane.send(channels.replay, { actionId: 9_999, documentGeneration: 999, action: { kind: "click", locator: { kind: "testId", value: "apply" } }, phase: "resolve" });
+      try {
+        return await completion.promise;
+      } finally {
+        clearTimeout(timer);
+        ipcMain.removeListener(channels.replayResult, listener);
+      }
+    }, { replay: IPC_CHANNELS.replay, replayResult: IPC_CHANNELS.replayResult }) as { ok: boolean; reason?: string };
     expect(stale.ok).toBe(false);
     expect(stale.reason).toMatch(/stale document generation/);
 
@@ -123,13 +129,16 @@ describe("desktop replay and security resilience", () => {
       const pane = webContents.getAllWebContents().find((contents) => contents.getURL() === "http://127.0.0.1:4179/next");
       if (!pane) throw new Error("pane missing for download test");
       const completion = Promise.withResolvers<string>();
+      const onDownload = (_event: Electron.Event, item: Electron.DownloadItem) => setImmediate(() => completion.resolve(item.getState()));
       const timer = setTimeout(() => completion.reject(new Error("download event timeout")), 5_000);
-      pane.session.once("will-download", (_event, item) => setImmediate(() => {
+      pane.session.once("will-download", onDownload);
+      try {
+        await pane.executeJavaScript(`(() => { const link=document.createElement('a'); link.href='data:text/plain,blocked'; link.download='blocked.txt'; document.body.append(link); link.click(); link.remove(); })()`);
+        return await completion.promise;
+      } finally {
         clearTimeout(timer);
-        completion.resolve(item.getState());
-      }));
-      await pane.executeJavaScript(`(() => { const link=document.createElement('a'); link.href='data:text/plain,blocked'; link.download='blocked.txt'; document.body.append(link); link.click(); link.remove(); })()`);
-      return completion.promise;
+        pane.session.removeListener("will-download", onDownload);
+      }
     });
     expect(downloadState).toBe("cancelled");
 

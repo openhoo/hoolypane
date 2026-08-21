@@ -1,8 +1,8 @@
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, session, type Session, type WebContents, WebContentsView } from "electron";
-import { BoundsSnapshotSchema, IPC_CHANNELS, PaneGenerationSchema, ViewportSpecSchema, type ViewportSpec } from "@hoolypane/contracts";
-import { validateBoundsSnapshot, type Bounds } from "./layout.js";
-import { normalizeUrl } from "./url.js";
+import { IPC_CHANNELS, PaneGenerationSchema, ViewportSpecSchema, type Action, type BoundsSnapshot, type ViewportSpec } from "@hoolypane/contracts";
+import { displayScale, validateBoundsSnapshot, type Bounds } from "./layout.js";
+import { isAllowedProtocol, normalizeUrl } from "./url.js";
 import { addPane, closePane, defaultWorkspace, duplicatePane, reorderPane, rotatePane, updatePane, type PaneState, type WorkspaceState } from "./workspace.js";
 
 type PaneFailure = { paneId: string; message: string };
@@ -35,13 +35,13 @@ export class PaneRegistry {
     const width = bounds && bounds.width > 0 ? bounds.width : 1;
     const height = bounds && bounds.height > 0 ? bounds.height : 1;
     // Electron applies the emulation scale before routing Input-domain pointer coordinates into a WebContentsView.
-    return Math.min(1, width / pane.viewport.width, height / pane.viewport.height);
+    return displayScale(width, height, pane.viewport.width, pane.viewport.height);
   }
   paneIdForWebContents(contents: WebContents): string | undefined {
     for (const [paneId, record] of this.panes) if (record.view.webContents === contents) return paneId;
     return undefined;
   }
-  markOutOfSync(paneId: string, actionId: number, actionKind: string, reason: string): void {
+  markOutOfSync(paneId: string, actionId: number, actionKind: Action["kind"], reason: string): void {
     this.setPane(paneId, { outOfSync: { actionId, actionKind, reason } });
   }
   clearOutOfSync(paneId: string): void {
@@ -58,13 +58,21 @@ export class PaneRegistry {
     const record: PaneRecord = { id, view, debuggerAttached: false, documentGeneration: 0 };
     this.panes.set(id, record);
     this.window.contentView.addChildView(view);
-    this.workspace = this.workspace.order.includes(id) ? this.workspace : addPane(this.workspace, { ...valid, id }, this.workspace.sharedUrl);
+    this.workspace = this.workspace.order.includes(id) ? this.workspace : addPane(this.workspace, valid, this.workspace.sharedUrl, id);
     this.emitChange();
-    await view.webContents.loadURL("about:blank");
-    await this.configureViewport(record);
-    this.bindPane(record);
-    const pane = this.getPaneState(id);
-    await view.webContents.loadURL(pane?.url ?? this.workspace.sharedUrl);
+    try {
+      await view.webContents.loadURL("about:blank");
+      if (!this.isLive(record)) return id;
+      await this.configureViewport(record);
+      if (!this.isLive(record)) return id;
+      this.bindPane(record);
+      const pane = this.getPaneState(id);
+      // Content-load failures are reported per pane via did-fail-load; creation must not fail on network problems.
+      await Promise.allSettled([view.webContents.loadURL(this.restoreTarget(pane?.url ?? this.workspace.sharedUrl))]);
+    } catch (error) {
+      await this.rollbackCreate(record);
+      throw error;
+    }
     return id;
   }
 
@@ -120,10 +128,9 @@ export class PaneRegistry {
   forward(paneId: string): void { this.panes.get(paneId)?.view.webContents.goForward(); }
   reload(paneId: string): void { this.panes.get(paneId)?.view.webContents.reload(); }
 
-  applyBounds(snapshot: unknown): void {
-    const parsed = BoundsSnapshotSchema.parse(snapshot);
-    validateBoundsSnapshot(parsed, this.workspace.order);
-    for (const item of parsed.panes) {
+  applyBounds(snapshot: BoundsSnapshot): void {
+    validateBoundsSnapshot(snapshot, this.workspace.order);
+    for (const item of snapshot.panes) {
       const record = this.panes.get(item.paneId);
       if (!record || record.lastBounds && sameBounds(record.lastBounds, item.bounds)) continue;
       const visible = item.bounds.width > 0 && item.bounds.height > 0;
@@ -150,13 +157,16 @@ export class PaneRegistry {
     });
     contents.on("did-start-loading", () => this.setPane(record.id, { loading: true, failure: null }));
     contents.on("did-stop-loading", () => this.setPane(record.id, { loading: false, canGoBack: contents.canGoBack(), canGoForward: contents.canGoForward() }));
-    contents.on("did-navigate", (_event, url) => this.setPane(record.id, { url: normalizeUrl(url), canGoBack: contents.canGoBack(), canGoForward: contents.canGoForward() }));
+    contents.on("did-navigate", (_event, url) => {
+      if (!isAllowedProtocol(url)) return; // ignore chrome-error://chromewebdata/, about: and other non-http(s) commits
+      this.setPane(record.id, { url: normalizeUrl(url), canGoBack: contents.canGoBack(), canGoForward: contents.canGoForward() });
+    });
     contents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => { if (isMainFrame && errorCode !== -3) this.reportFailure(record.id, `${errorDescription} (${errorCode}) at ${validatedURL}`); });
     contents.on("render-process-gone", (_event, details) => this.reportFailure(record.id, `render process gone: ${details.reason}`));
     contents.on("will-navigate", (event, url) => { if (!isAllowedProtocol(url)) event.preventDefault(); });
     contents.on("will-redirect", (event, url) => { if (!isAllowedProtocol(url)) event.preventDefault(); });
     contents.setWindowOpenHandler(({ url }) => {
-      if (isAllowedProtocol(url)) void contents.loadURL(url);
+      if (isAllowedProtocol(url)) void contents.loadURL(url).catch(() => {});
       return { action: "deny" };
     });
   }
@@ -170,7 +180,7 @@ export class PaneRegistry {
       const bounds = record.lastBounds;
       const availableWidth = bounds && bounds.width > 0 ? bounds.width : 1;
       const availableHeight = bounds && bounds.height > 0 ? bounds.height : 1;
-      const scale = Math.min(1, availableWidth / pane.viewport.width, availableHeight / pane.viewport.height);
+      const scale = displayScale(availableWidth, availableHeight, pane.viewport.width, pane.viewport.height);
       await contents.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width: pane.viewport.width, height: pane.viewport.height, deviceScaleFactor: pane.viewport.deviceScaleFactor, mobile: pane.viewport.isMobile, scale });
       await contents.debugger.sendCommand("Emulation.setTouchEmulationEnabled", { enabled: pane.viewport.hasTouch, configuration: pane.viewport.hasTouch ? "mobile" : "desktop" });
     } catch (error) { this.reportFailure(record.id, `viewport emulation failed: ${error instanceof Error ? error.message : String(error)}`); }
@@ -192,8 +202,27 @@ export class PaneRegistry {
   private setPane(paneId: string, patch: Partial<PaneState>): void { this.workspace = updatePane(this.workspace, paneId, (pane) => ({ ...pane, ...patch })); this.emitChange(); }
   private reportFailure(paneId: string, message: string): void { this.setPane(paneId, { failure: message, loading: false }); this.onFailure?.({ paneId, message }); }
   private emitChange(): void { this.onChange?.(this.workspace); }
-  private nextPaneId(seed: string): string { let id = seed; let index = 2; while (this.panes.has(id)) id = `${seed}-${index++}`; return id; }
+  private nextPaneId(seed: string): string {
+    const used = new Set([...this.workspace.order, ...this.panes.keys()]);
+    if (!used.has(seed)) return seed;
+    let suffix = 2;
+    while (used.has(`${seed}-${suffix}`)) suffix += 1;
+    return `${seed}-${suffix}`;
+  }
+
+  private isLive(record: PaneRecord): boolean { return this.panes.get(record.id) === record && !record.view.webContents.isDestroyed(); }
+
+  private restoreTarget(value: string): string {
+    try { return normalizeUrl(value); } catch { /* corrupt persisted URL: fall through to sharedUrl */ }
+    try { return normalizeUrl(this.workspace.sharedUrl); } catch { return defaultWorkspace().sharedUrl; }
+  }
+
+  private async rollbackCreate(record: PaneRecord): Promise<void> {
+    this.panes.delete(record.id);
+    this.workspace = closePane(this.workspace, record.id);
+    await this.destroyRecord(record).catch(() => undefined);
+    this.emitChange();
+  }
   private panePreloadPath(): string { return fileURLToPath(new URL("../preload/pane.js", import.meta.url)); }
 }
 function sameBounds(left: Bounds, right: Bounds): boolean { return left.x === right.x && left.y === right.y && left.width === right.width && left.height === right.height; }
-function isAllowedProtocol(url: string): boolean { try { const protocol = new URL(url).protocol; return protocol === "http:" || protocol === "https:"; } catch { return false; } }

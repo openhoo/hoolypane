@@ -1,14 +1,16 @@
 import { chromium } from "playwright";
-import type { Browser, BrowserContext, Page, CDPSession } from "playwright";
+import type { Browser, BrowserContext, CDPSession } from "playwright";
 import { mkdir, access } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+import { HoolypaneConfigSchema } from "@hoolypane/contracts";
 import { resolve, dirname, join } from "node:path";
-import { DEFAULT_RECORDING, HoolypaneConfigSchema } from "@hoolypane/contracts";
 import type { ResolvedHoolypaneConfig, ViewportSpec } from "@hoolypane/contracts";
 import { createFlowContext } from "@hoolypane/flow";
 import type { FlowDefinition, FlowEvent, Screen } from "@hoolypane/flow";
 import { RecordingSession } from "@hoolypane/recorder";
 import type { RecordingTarget, RecorderFailure } from "@hoolypane/recorder";
 import { compileModule, validateConfigExport, validateFlowExport } from "./module-loader.js";
+import type { CompiledModule } from "./module-loader.js";
 import type { RunArguments } from "./cli-arguments.js";
 
 interface RunnerDependencies {
@@ -24,7 +26,13 @@ interface RunResult {
 const defaultDependencies: RunnerDependencies = {};
 
 async function exists(path: string): Promise<boolean> {
-  try { await access(path); return true; } catch { return false; }
+  try {
+    await access(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 export function buildContextOptions(config: ResolvedHoolypaneConfig, viewport: ViewportSpec): Parameters<Browser["newContext"]>[0] {
@@ -39,25 +47,7 @@ export function buildContextOptions(config: ResolvedHoolypaneConfig, viewport: V
 }
 
 export function validateResolvedConfig(config: unknown): ResolvedHoolypaneConfig {
-  const parsed = HoolypaneConfigSchema.parse(config);
-  const ids = new Set(parsed.viewports.map((viewport) => viewport.id));
-  if (ids.size !== parsed.viewports.length) throw new Error("Configuration contains duplicate viewport IDs");
-  if (parsed.viewports.length === 0) throw new Error("Configuration must contain at least one viewport");
-  return {
-    viewports: parsed.viewports,
-    timeoutMs: parsed.timeoutMs,
-    recording: {
-      fps: parsed.recording.fps ?? DEFAULT_RECORDING.fps,
-      jpegQuality: parsed.recording.jpegQuality ?? DEFAULT_RECORDING.jpegQuality,
-      layout: parsed.recording.layout ?? DEFAULT_RECORDING.layout,
-      compositeMaxSize: parsed.recording.compositeMaxSize ?? DEFAULT_RECORDING.compositeMaxSize,
-      compositeBackground: parsed.recording.compositeBackground ?? DEFAULT_RECORDING.compositeBackground,
-      outputDir: parsed.recording.outputDir ?? DEFAULT_RECORDING.outputDir,
-      keepRaw: parsed.recording.keepRaw ?? DEFAULT_RECORDING.keepRaw,
-    },
-    ...(parsed.baseURL === undefined ? {} : { baseURL: parsed.baseURL }),
-    ...(parsed.storageState === undefined ? {} : { storageState: parsed.storageState }),
-  };
+  return HoolypaneConfigSchema.parse(config);
 }
 
 function resolveExport<T>(module: Record<string, unknown>, names: readonly string[], source: string): T {
@@ -116,7 +106,14 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
   const configPath = resolve(args.configFile);
   if (!(await exists(configPath))) throw new Error(`Config file not found: ${configPath}`);
   const cacheDir = resolve(projectDir, ".hoolypane/cache");
-  const [flowCompiled, configCompiled] = await Promise.all([compileModule(flowPath, cacheDir), compileModule(configPath, cacheDir)]);
+  const settledModules = await Promise.allSettled([compileModule(flowPath, cacheDir), compileModule(configPath, cacheDir)]);
+  const rejected = settledModules.find((settled): settled is PromiseRejectedResult => settled.status === "rejected");
+  if (rejected) {
+    await Promise.allSettled(settledModules.flatMap((settled) => (settled.status === "fulfilled" ? [settled.value.cleanup()] : [])));
+    throw rejected.reason;
+  }
+  const flowCompiled = (settledModules[0] as PromiseFulfilledResult<CompiledModule>).value;
+  const configCompiled = (settledModules[1] as PromiseFulfilledResult<CompiledModule>).value;
   let browser: Browser | undefined;
   const contexts: BrowserContext[] = [];
   let interrupted = false;
@@ -133,17 +130,21 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
     signal.resolve();
     signalDeadline = setTimeout(() => {
       forced = true;
-      process.exitCode = 130;
+      process.exit(130);
     }, 10_000);
   };
+  const initialFramesAbort = new AbortController();
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
+  let recorder: RecordingSession | undefined;
+  let recorderFinalized = false;
   try {
-    const configModule = (await import(`${configCompiled.path}?run=${Date.now()}`)) as Record<string, unknown>;
+    // The specifiers are only known at runtime: freshly compiled cache artifacts with a cache-busting query.
+    const configModule = (await import(`${pathToFileURL(configCompiled.path).href}?run=${Date.now()}`)) as Record<string, unknown>;
     const configCandidate = resolveExport<unknown>(configModule, ["default", "config"], configPath);
     validateConfigExport(configCandidate, configPath);
     const config = validateResolvedConfig(configCandidate);
-    const flowModule = (await import(`${flowCompiled.path}?run=${Date.now()}`)) as Record<string, unknown>;
+    const flowModule = (await import(`${pathToFileURL(flowCompiled.path).href}?run=${Date.now()}`)) as Record<string, unknown>;
     const flow = resolveExport<FlowDefinition>(flowModule, ["default", "flow"], flowPath);
     validateFlowExport(flow, flowPath);
     const outputDir = resolve(args.outputDir ?? config.recording.outputDir);
@@ -168,46 +169,59 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
       targets.push(recorderTarget(viewport.id, viewport, cdp));
       screens.push({ id: viewport.id, viewport, page });
     }
-    const recorder = dependencies.createRecorder?.(config, config.timeoutMs, outputDir) ?? new RecordingSession({ recording: config.recording, timeoutMs: config.timeoutMs, outputDir });
+    recorder = dependencies.createRecorder?.(config, config.timeoutMs, outputDir) ?? new RecordingSession({ recording: config.recording, timeoutMs: config.timeoutMs, outputDir });
     await recorder.start(targets);
     let flowError: unknown;
+    let flowFailed = false;
     const flowEvents: FlowEvent[] = [];
-    const stopTraces = async (): Promise<void> => {
-      if (tracesStopped) return;
+    const stopTraces = async (): Promise<readonly RecorderFailure[]> => {
+      if (tracesStopped) return [];
       tracesStopped = true;
-      await Promise.allSettled(contexts.map((context, index) => context.tracing.stop({ path: join(outputDir, "traces", `${config.viewports[index]?.id ?? index}.zip`) })));
+      const results = await Promise.allSettled(contexts.map((context, index) => context.tracing.stop({ path: join(outputDir, "traces", `${config.viewports[index]?.id ?? index}.zip`) })));
+      return results.flatMap((result) => (result.status === "rejected" ? [failureFrom(result.reason)] : []));
     };
     try {
       if (!interrupted) {
-        const initial = recorder.awaitInitialFrames().then(() => "ready" as const, (error: unknown) => {
+        const initial = recorder.awaitInitialFrames(initialFramesAbort.signal).then(() => "ready" as const, (error: unknown) => {
           flowError = error;
+          if (!interrupted) flowFailed = true;
           return "failed" as const;
         });
         const initialOutcome = await Promise.race([initial, signal.promise.then(() => "interrupted" as const)]);
         if (initialOutcome === "ready" && !interrupted) {
           recorder.markFlowStart();
-          const execution = flow.run(createFlowContext(screens, (event) => flowEvents.push(event))).catch((error: unknown) => { flowError = error; });
+          const execution = Promise.resolve()
+            .then(() => flow.run(createFlowContext(screens, (event) => flowEvents.push(event))))
+            .catch((error: unknown) => {
+              flowFailed = true;
+              flowError = error;
+            });
           await Promise.race([execution, signal.promise]);
           void execution.catch(() => undefined);
         }
       }
-      await stopTraces();
-      const failures: RecorderFailure[] = [];
-      if (flowError) failures.push(failureFrom(flowError));
+      initialFramesAbort.abort();
+      const traceFailures = await stopTraces();
+      const failures: RecorderFailure[] = [...traceFailures];
+      if (flowFailed) failures.push(failureFrom(flowError));
       if (interrupted) failures.push({ message: "Interrupted by SIGINT or SIGTERM" });
-      await recorder.finalize({ status: interrupted ? "interrupted" : flowError ? "failed" : "success", failures, events: flowEvents });
+      await recorder.finalize({ status: interrupted ? "interrupted" : flowFailed ? "failed" : "success", failures, events: flowEvents });
+      recorderFinalized = true;
     } finally {
-      await stopTraces();
-      if (signalDeadline) clearTimeout(signalDeadline);
+      for (const failure of await stopTraces()) process.stderr.write(`tracing.stop failed: ${failure.message}\n`);
+      clearTimeout(signalDeadline);
     }
     if (forced) process.exitCode = 130;
-    return { outputDir, status: interrupted ? "interrupted" : flowError ? "failed" : "success" };
+    return { outputDir, status: interrupted ? "interrupted" : flowFailed ? "failed" : "success" };
   } finally {
     process.removeListener("SIGINT", onSignal);
     process.removeListener("SIGTERM", onSignal);
-    if (signalDeadline) clearTimeout(signalDeadline);
-    await Promise.allSettled(contexts.map((context) => context.close()));
-    await browser?.close();
+    clearTimeout(signalDeadline);
+    initialFramesAbort.abort();
+    await Promise.allSettled([...contexts.map((context) => context.close()), browser?.close()]);
+    if (recorder && !recorderFinalized) {
+      try { await recorder.finalize({ status: "failed", failures: [], events: [] }); } catch { /* best effort */ }
+    }
     await Promise.allSettled([flowCompiled.cleanup(), configCompiled.cleanup()]);
   }
 }

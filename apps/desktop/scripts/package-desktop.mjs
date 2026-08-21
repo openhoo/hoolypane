@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 
 const target = process.argv[2];
 const flagByTarget = { linux: "--linux", windows: "--windows", mac: "--mac" };
-const targetFlag = flagByTarget[target];
+const targetFlag = Object.hasOwn(flagByTarget, target) ? flagByTarget[target] : undefined;
 if (!targetFlag) throw new Error("Usage: node scripts/package-desktop.mjs <linux|windows|mac>");
 const hasCertificate = Boolean(process.env.CSC_LINK && process.env.CSC_KEY_PASSWORD);
 const canNotarize = Boolean(process.env.APPLE_ID && process.env.APPLE_APP_SPECIFIC_PASSWORD && process.env.APPLE_TEAM_ID);
@@ -28,8 +28,11 @@ if (!canNotarize) {
 }
 const builderCli = createRequire(import.meta.url).resolve("electron-builder/cli.js");
 const child = spawn(process.execPath, [builderCli, ...args], { stdio: "inherit", env: environment });
+const forwardSignal = (signal) => child.kill(signal);
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.once(signal, forwardSignal);
 child.once("error", (error) => { throw error; });
 child.once("exit", (code, signal) => {
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.removeListener(signal, forwardSignal);
   if (signal) throw new Error(`electron-builder terminated by ${signal}`);
   if (code !== 0) process.exitCode = code ?? 1;
 });

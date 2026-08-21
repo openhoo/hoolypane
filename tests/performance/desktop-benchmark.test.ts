@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -85,6 +86,7 @@ beforeAll(async () => {
   const ready = Promise.withResolvers<void>();
   fixture.stdout?.on("data", (data: Buffer) => { if (data.toString().includes("fixture ready")) ready.resolve(); });
   fixture.once("error", ready.reject);
+  fixture.once("exit", (code) => ready.reject(new Error(`fixture exited before readiness (code ${code})`)));
   await ready.promise;
   userData = await mkdtemp(join(tmpdir(), "hoolypane-benchmark-"));
   const environment = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
@@ -97,10 +99,15 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await application?.close().catch(() => undefined);
-  fixture?.kill("SIGTERM");
+  if (fixture) {
+    fixture.kill("SIGTERM");
+    const elapsed = Promise.withResolvers<void>();
+    setTimeout(elapsed.resolve, 2_000);
+    await Promise.race([once(fixture, "exit"), elapsed.promise]);
+    if (fixture.exitCode === null && fixture.signalCode === null) fixture.kill("SIGKILL");
+  }
   if (userData) await rm(userData, { recursive: true, force: true });
 });
-
 describe("six-pane direct compositor", () => {
   it("meets animation, mirrored-action, final-state, long-task, and RSS gates", async () => {
     const chrome = await application.firstWindow();

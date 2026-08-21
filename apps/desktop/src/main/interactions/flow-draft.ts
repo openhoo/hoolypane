@@ -7,9 +7,10 @@ export class FlowDraft {
   private active = false;
 
   start(url: string, sourcePaneId: string, actionId: number, recordedAtUnixMs: number): void {
+    const envelope = ActionEnvelopeSchema.parse({ actionId, documentGeneration: 0, sourcePaneId, action: { kind: "navigate", url }, recordedAtUnixMs });
     this.active = true;
     this.blocking.clear();
-    this.envelopes = [ActionEnvelopeSchema.parse({ actionId, documentGeneration: 0, sourcePaneId, action: { kind: "navigate", url }, recordedAtUnixMs })];
+    this.envelopes = [envelope];
   }
 
   append(envelope: ActionEnvelope): void {
@@ -24,13 +25,16 @@ export class FlowDraft {
   }
 
   stop(): string | null {
-    this.active = false;
+    if (!this.active) return null;
     if (this.blocking.size > 0) {
       const reasons = [...this.blocking.entries()].flatMap(([actionId, values]) => values.map((value) => `action ${actionId}: ${value}`));
       throw new Error(`Flow cannot be exported:\n${reasons.join("\n")}`);
     }
-    if (this.envelopes.length <= 1) return null;
-    return serializeFlow(this.envelopes, "@hoolypane/runner");
+    const source = this.envelopes.length <= 1 ? null : serializeFlow(this.envelopes, "@hoolypane/runner");
+    this.active = false;
+    this.envelopes = [];
+    this.blocking.clear();
+    return source;
   }
 
   cancel(): void {

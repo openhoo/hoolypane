@@ -11,7 +11,7 @@
     "packages/runner": {
       "entry": ["src/index.ts!", "src/cli.ts!", "src/**/*.test.ts", "tsup.config.ts", "rollup.dts.config.mjs"],
       "project": ["src/**/*.ts", "*.ts", "*.mjs"],
-      "ignoreDependencies": ["ffmpeg-static", "ffprobe-static", "zod"]
+      "ignoreDependencies": ["ffmpeg-static", "ffprobe-static"]
     },
     "apps/desktop": {
       "entry": ["src/main/index.ts!", "src/main/screenshots/overview-worker.ts!", "src/preload/*.ts!", "src/renderer/app/index.tsx!", "src/**/*.test.ts", "vite.*.config.ts", "scripts/*.mjs"],

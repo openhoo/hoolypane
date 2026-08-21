@@ -28,7 +28,8 @@
     "benchmark:recording": "vitest run tests/performance/recording-benchmark.test.ts",
     "benchmark:desktop": "vitest run tests/performance/desktop-benchmark.test.ts",
     "smoke:desktop-package": "node scripts/smoke-desktop-package.mjs",
-    "release:dry-run": "node scripts/release-dry-run.mjs"
+    "release:dry-run": "node scripts/release-dry-run.mjs",
+    "pins:check": "node scripts/check-version-pins.mjs"
   },
   "devDependencies": {
     "@hoolypane/runner": "workspace:*",

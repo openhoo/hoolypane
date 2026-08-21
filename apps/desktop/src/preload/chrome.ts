@@ -1,8 +1,16 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { BoundsSnapshotSchema, ChromeCommandSchema, type BoundsSnapshot, type ChromeCommand, IPC_CHANNELS } from "@hoolypane/contracts";
 
-const send = (command: ChromeCommand): void => { ipcRenderer.send(IPC_CHANNELS.command, ChromeCommandSchema.parse(command)); };
-const sendBounds = (bounds: BoundsSnapshot): void => { ipcRenderer.send(IPC_CHANNELS.bounds, BoundsSnapshotSchema.parse(bounds)); };
+const send = (command: ChromeCommand): void => {
+  const parsed = ChromeCommandSchema.safeParse(command);
+  if (!parsed.success) { console.error("[hoolypane] rejected chrome command", parsed.error.message); return; }
+  ipcRenderer.send(IPC_CHANNELS.command, parsed.data);
+};
+const sendBounds = (bounds: BoundsSnapshot): void => {
+  const parsed = BoundsSnapshotSchema.safeParse(bounds);
+  if (!parsed.success) { console.error("[hoolypane] rejected bounds snapshot", parsed.error.message); return; }
+  ipcRenderer.send(IPC_CHANNELS.bounds, parsed.data);
+};
 const subscribe = (callback: (state: unknown) => void): (() => void) => {
   const listener = (_event: Electron.IpcRendererEvent, state: unknown) => callback(state);
   ipcRenderer.on(IPC_CHANNELS.state, listener);

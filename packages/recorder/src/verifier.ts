@@ -71,20 +71,15 @@ export async function verifyArtifacts(outputDir: string, _fps: 30 | 60, duration
     const expected = vectors[0]!;
     if (!expected[0]?.startsWith("0/")) throw new Error("output timeline does not start at zero");
     if (vectors.some((vector) => vector.length !== expected.length || vector.some((entry, index) => entry !== expected[index]))) throw new Error("exact PTS/duration vectors differ");
-    const packets = probed[0]!.packets;
-    const last = packets.at(-1);
-    const previous = packets.at(-2);
-    if (last?.pts === undefined) throw new Error("stream lacks final integer PTS");
-    const lastDuration = last.duration === undefined ? previous?.pts === undefined ? undefined : BigInt(last.pts) - BigInt(previous.pts) : BigInt(last.duration);
-    if (lastDuration === undefined) throw new Error("stream lacks exact end duration");
-    const endTicks = BigInt(last.pts) + lastDuration;
+    const [lastPtsText, lastDurationText] = expected.at(-1)!.split("|");
+    const endTicks = BigInt(lastPtsText!.split("/")[0]!) + BigInt(lastDurationText!.split("/")[0]!);
     if (endTicks <= 0n) throw new Error("stream end time is not positive");
     const artifacts: Record<string, string> = {};
     const hashes: Record<string, string> = {};
     for (const name of names) {
       const path = join(outputDir, "videos", name);
       const key = relative(outputDir, path);
-      artifacts[name] = key;
+      artifacts[key] = key;
       hashes[key] = createHash("sha256").update(await readFile(path)).digest("hex");
     }
     return {

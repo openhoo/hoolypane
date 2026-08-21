@@ -1,8 +1,9 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join, relative } from "node:path";
 import { hrtime } from "node:process";
 import type { ResolvedRecordingConfig, ViewportSpec } from "@hoolypane/contracts";
+import { encodedDimension } from "@hoolypane/contracts";
 import {
   alignFrames,
   assertStateTransition,
@@ -60,6 +61,7 @@ interface Context {
   readonly listener: (event: unknown) => void;
   initialTimestampUs?: number;
   captureError?: Error;
+  fallbackSequence: number;
 }
 
 function monotonicUs(): number {
@@ -73,8 +75,13 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 async function atomicJson(path: string, value: unknown): Promise<void> {
-  const temporary = `${path}.${process.pid}.tmp`;
-  await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`);
+  const temporary = `${path}.${randomBytes(8).toString("hex")}.tmp`;
+  const handle = await fs.open(temporary, "wx");
+  try {
+    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`);
+  } finally {
+    await handle.close();
+  }
   await fs.rename(temporary, path);
 }
 
@@ -87,11 +94,13 @@ async function collectDirectoryArtifacts(outputDir: string, directoryName: strin
   try { names = await fs.readdir(directory); } catch { return; }
   for (const name of names) {
     const path = join(directory, name);
-    const metadata = await fs.stat(path);
-    if (!metadata.isFile()) continue;
-    const key = relative(outputDir, path);
-    artifacts[key] = key;
-    hashes[key] = await sha256(path);
+    try {
+      const metadata = await fs.stat(path);
+      if (!metadata.isFile()) continue;
+      const key = relative(outputDir, path);
+      artifacts[key] = key;
+      hashes[key] = await sha256(path);
+    } catch { continue; }
   }
 }
 
@@ -101,11 +110,12 @@ export class RecordingSession {
   private readonly contexts: Context[] = [];
   private started = false;
   private finalized = false;
+  private captureStopped = false;
   private t0Us: number | undefined;
   private flowStartUs: number | undefined;
   private runId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-  constructor(private readonly options: { readonly recording: ResolvedRecordingConfig; readonly timeoutMs: number; readonly outputDir: string }) {}
+  constructor(private readonly options: { readonly recording: Omit<ResolvedRecordingConfig, "outputDir">; readonly timeoutMs: number; readonly outputDir: string }) {}
 
   get currentState(): RecordingState { return this.state; }
   get t0(): number | undefined { return this.t0Us; }
@@ -123,21 +133,28 @@ export class RecordingSession {
     await fs.mkdir(this.options.outputDir, { recursive: true });
     await this.spools.create(targets, join(this.options.outputDir, "raw"));
     await atomicJson(join(this.options.outputDir, "run-state.json"), { runId: this.runId, state: this.state, contract: null });
-    for (const target of targets) {
-      const spool = this.spools.spools.get(target.id)!;
-      let context: Context;
-      const listener = (event: unknown) => { void this.receive(context, event as ScreencastFrame); };
-      context = { target, spool, listener };
-      this.contexts.push(context);
-      target.on("Page.screencastFrame", listener);
-      const geometry = geometryForViewport(target.viewport);
-      await target.send("Page.startScreencast", {
-        format: "jpeg",
-        quality: this.options.recording.jpegQuality,
-        maxWidth: geometry.encodedWidth,
-        maxHeight: geometry.encodedHeight,
-        everyNthFrame: 1,
-      });
+    try {
+      for (const target of targets) {
+        const spool = this.spools.spools.get(target.id)!;
+        let context: Context;
+        const listener = (event: unknown) => { void this.receive(context, event as ScreencastFrame); };
+        context = { target, spool, listener, fallbackSequence: 0 };
+        this.contexts.push(context);
+        target.on("Page.screencastFrame", listener);
+        const geometry = geometryForViewport(target.viewport);
+        await target.send("Page.startScreencast", {
+          format: "jpeg",
+          quality: this.options.recording.jpegQuality,
+          maxWidth: geometry.encodedWidth,
+          maxHeight: geometry.encodedHeight,
+          everyNthFrame: 1,
+        });
+      }
+    } catch (error) {
+      await Promise.allSettled(this.contexts.map((context) => context.target.send("Page.stopScreencast")));
+      for (const context of this.contexts) context.target.off("Page.screencastFrame", context.listener);
+      await this.spools.close().catch(() => undefined);
+      throw error;
     }
   }
 
@@ -145,10 +162,10 @@ export class RecordingSession {
     if (context.captureError) return;
     try {
       const data = decodeScreencastData(frame);
-      const metadata = frameMetadata(frame, context.spool.index.frames.length);
+      const metadata = frameMetadata(frame, context.fallbackSequence++);
       const viewport = context.target.viewport;
-      const maximumWidth = 2 * Math.ceil(viewport.width * viewport.deviceScaleFactor / 2);
-      const maximumHeight = 2 * Math.ceil(viewport.height * viewport.deviceScaleFactor / 2);
+      const maximumWidth = encodedDimension(viewport.width, viewport.deviceScaleFactor);
+      const maximumHeight = encodedDimension(viewport.height, viewport.deviceScaleFactor);
       if (metadata.width <= 0 || metadata.height <= 0 || metadata.width > maximumWidth || metadata.height > maximumHeight) {
         throw new Error(`unexpected source geometry ${metadata.width}x${metadata.height} for ${context.target.id}, maximum ${maximumWidth}x${maximumHeight}`);
       }
@@ -163,10 +180,17 @@ export class RecordingSession {
     }
   }
 
-  async awaitInitialFrames(): Promise<void> {
+  async awaitInitialFrames(signal?: AbortSignal): Promise<void> {
     if (!this.started) throw new Error("start must be called first");
     const deadline = Date.now() + this.options.timeoutMs;
-    while (this.contexts.some((context) => context.initialTimestampUs === undefined && context.captureError === undefined) && Date.now() < deadline) await delay(10);
+    while (
+      this.state === "awaiting-initial-frames" &&
+      signal?.aborted !== true &&
+      this.contexts.some((context) => context.initialTimestampUs === undefined && context.captureError === undefined) &&
+      Date.now() < deadline
+    ) await delay(10);
+    if (this.state !== "awaiting-initial-frames") throw new Error("recording session was finalized while waiting for initial frames");
+    if (signal?.aborted) throw new Error("waiting for initial screencast frames was aborted");
     const failure = this.contexts.find((context) => context.captureError)?.captureError;
     if (failure || this.contexts.some((context) => context.initialTimestampUs === undefined)) {
       await this.transition("failed");
@@ -182,6 +206,8 @@ export class RecordingSession {
   }
 
   private async stopCapture(): Promise<void> {
+    if (this.captureStopped) return;
+    this.captureStopped = true;
     await Promise.allSettled(this.contexts.map((context) => context.target.send("Page.stopScreencast")));
     for (const context of this.contexts) context.target.off("Page.screencastFrame", context.listener);
     await this.spools.close();
@@ -190,86 +216,106 @@ export class RecordingSession {
   async finalize(input: { readonly status: "success" | "failed" | "interrupted"; readonly failures: readonly RecorderFailure[]; readonly events?: readonly RecorderFlowEvent[] }): Promise<RecordingFinalizeResult> {
     if (this.finalized) throw new Error("recording session already finalized");
     this.finalized = true;
-    if (this.t0Us === undefined) {
-      if (this.state !== "failed") await this.transition("failed");
-      await this.stopCapture();
-      const diagnosticsPath = join(this.options.outputDir, "diagnostics.json");
-      await atomicJson(diagnosticsPath, { contract: null, status: input.status, failures: input.failures });
-      return { kind: "diagnostics", diagnosticsPath };
-    }
-
-    const elapsedUs = Math.max(0, monotonicUs() - (this.flowStartUs ?? monotonicUs()));
-    await this.transition("post-roll");
-    await delay(POST_ROLL_US / 1000);
-    const t1Us = this.t0Us + elapsedUs + POST_ROLL_US;
-    await this.transition("stopping");
-    await this.stopCapture();
-    await this.transition("aligning");
-    const durationFrames = durationFrameCount(this.t0Us, t1Us, this.options.recording.fps);
-    const mappings: Record<string, readonly SlotMapping[]> = {};
-    const aligned = this.contexts.map((context) => {
-      const result = alignFrames(context.spool.index.frames, this.t0Us!, durationFrames, this.options.recording.fps);
-      mappings[context.target.id] = result.mappings;
-      return { context, result, geometry: geometryForViewport(context.target.viewport) };
-    });
-    await this.transition("encoding");
-    const encoding = await encodeAligned(
-      this.options.outputDir,
-      aligned.map(({ context, result, geometry }) => ({ id: context.target.id, spool: context.spool, mappings: result.mappings, geometry })),
-      this.options.recording.fps,
-      durationFrames,
-      this.options.recording,
-    );
-    await this.transition("validating");
-    const verification = await verifyArtifacts(this.options.outputDir, this.options.recording.fps, durationFrames);
-    if (!verification.success) {
-      await this.transition("failed");
-      throw new Error(`artifact validation failed: ${verification.error ?? "unknown error"}`);
-    }
-    const artifacts = { ...verification.artifacts };
-    const hashes = { ...verification.sha256 };
-    await collectDirectoryArtifacts(this.options.outputDir, "traces", artifacts, hashes);
-    if (this.options.recording.keepRaw) await collectDirectoryArtifacts(this.options.outputDir, "raw", artifacts, hashes);
-    const manifest: RecordingManifest = {
-      contract: CAPTURE_CONTRACT,
-      validatorVersion: VALIDATOR_VERSION,
-      validationSuccess: true,
-      status: input.status,
-      runId: this.runId,
-      t0UnixUs: this.t0Us,
-      t1UnixUs: t1Us,
-      fps: this.options.recording.fps,
-      durationFrames,
-      codec: "vp8",
-      geometry: encoding.geometry,
-      viewports: aligned.map(({ context, result, geometry }) => {
-        const first = context.spool.index.frames[0]!;
-        return {
-          id: context.target.id,
-          viewport: context.target.viewport,
-          sourceWidth: first.width,
-          sourceHeight: first.height,
-          encodedWidth: geometry.encodedWidth,
-          encodedHeight: geometry.encodedHeight,
-          heldFrames: result.heldFrames,
-          maximumSelectedSourceSkewUs: result.maximumSkewUs,
-          queue: { maxFrames: context.spool.index.maxQueuedFrames, maxBytes: context.spool.index.maxQueuedBytes },
+    try {
+      if (this.t0Us === undefined) {
+        await fs.mkdir(this.options.outputDir, { recursive: true });
+        if (this.state !== "failed") await this.transition("failed");
+        await this.stopCapture();
+        const diagnosticsPath = join(this.options.outputDir, "diagnostics.json");
+        await atomicJson(diagnosticsPath, { contract: null, status: input.status, failures: input.failures });
+        return { kind: "diagnostics", diagnosticsPath };
+      }
+      try {
+        const elapsedUs = Math.max(0, monotonicUs() - (this.flowStartUs ?? monotonicUs()));
+        await this.transition("post-roll");
+        await delay(POST_ROLL_US / 1000);
+        const t1Us = this.t0Us + elapsedUs + POST_ROLL_US;
+        await this.transition("stopping");
+        await this.stopCapture();
+        await this.transition("aligning");
+        const durationFrames = durationFrameCount(this.t0Us, t1Us, this.options.recording.fps);
+        const captureFailures = this.contexts
+          .filter((context) => context.captureError)
+          .map((context) => ({ message: `capture ended early: ${context.captureError!.message}`, viewportId: context.target.id }));
+        const mappings: Record<string, readonly SlotMapping[]> = {};
+        const aligned = this.contexts.map((context) => {
+          const result = alignFrames(context.spool.index.frames, this.t0Us!, durationFrames, this.options.recording.fps);
+          mappings[context.target.id] = result.mappings;
+          return { context, result, geometry: geometryForViewport(context.target.viewport) };
+        });
+        await this.transition("encoding");
+        const encoding = await encodeAligned(
+          this.options.outputDir,
+          aligned.map(({ context, result, geometry }) => ({ id: context.target.id, spool: context.spool, mappings: result.mappings, geometry })),
+          this.options.recording.fps,
+          durationFrames,
+          this.options.recording,
+        );
+        await this.transition("validating");
+        const verification = await verifyArtifacts(this.options.outputDir, this.options.recording.fps, durationFrames);
+        if (!verification.success) {
+          await this.transition("failed");
+          throw new Error(`artifact validation failed: ${verification.error ?? "unknown error"}`);
+        }
+        const artifacts = { ...verification.artifacts };
+        const hashes = { ...verification.sha256 };
+        await collectDirectoryArtifacts(this.options.outputDir, "traces", artifacts, hashes);
+        if (this.options.recording.keepRaw) await collectDirectoryArtifacts(this.options.outputDir, "raw", artifacts, hashes);
+        const manifest: RecordingManifest = {
+          contract: CAPTURE_CONTRACT,
+          validatorVersion: VALIDATOR_VERSION,
+          validationSuccess: true,
+          status: captureFailures.length > 0 ? "failed" : input.status,
+          runId: this.runId,
+          t0UnixUs: this.t0Us,
+          t1UnixUs: t1Us,
+          fps: this.options.recording.fps,
+          durationFrames,
+          codec: "vp8",
+          geometry: encoding.geometry,
+          viewports: aligned.map(({ context, result, geometry }) => {
+            const first = context.spool.index.frames[0]!;
+            return {
+              id: context.target.id,
+              viewport: context.target.viewport,
+              sourceWidth: first.width,
+              sourceHeight: first.height,
+              encodedWidth: geometry.encodedWidth,
+              encodedHeight: geometry.encodedHeight,
+              heldFrames: result.heldFrames,
+              maximumSelectedSourceSkewUs: result.maximumSkewUs,
+              queue: { maxFrames: context.spool.index.maxQueuedFrames, maxBytes: context.spool.index.maxQueuedBytes },
+            };
+          }),
+          mappings,
+          failures: [...input.failures, ...captureFailures],
+          flowEvents: input.events ?? [],
+          artifacts,
+          sha256: hashes,
         };
-      }),
-      mappings,
-      failures: input.failures,
-      flowEvents: input.events ?? [],
-      artifacts,
-      sha256: hashes,
-    };
-    const manifestPath = join(this.options.outputDir, "manifest.json");
-    await atomicJson(manifestPath, manifest);
-    await this.transition("complete");
-    const statePath = join(this.options.outputDir, "run-state.json");
-    const stateKey = relative(this.options.outputDir, statePath);
-    const finalManifest = { ...manifest, artifacts: { ...manifest.artifacts, "run-state.json": stateKey }, sha256: { ...manifest.sha256, [stateKey]: await sha256(statePath) } };
-    await atomicJson(manifestPath, finalManifest);
-    if (!this.options.recording.keepRaw) await fs.rm(join(this.options.outputDir, "raw"), { recursive: true, force: true });
-    return { kind: "manifest", manifestPath, manifest: finalManifest };
+        const manifestPath = join(this.options.outputDir, "manifest.json");
+        await atomicJson(manifestPath, manifest);
+        await this.transition("complete");
+        const statePath = join(this.options.outputDir, "run-state.json");
+        const stateKey = relative(this.options.outputDir, statePath);
+        const finalManifest = { ...manifest, artifacts: { ...manifest.artifacts, "run-state.json": stateKey }, sha256: { ...manifest.sha256, [stateKey]: await sha256(statePath) } };
+        await atomicJson(manifestPath, finalManifest);
+        if (!this.options.recording.keepRaw) await fs.rm(join(this.options.outputDir, "raw"), { recursive: true, force: true });
+        return { kind: "manifest", manifestPath, manifest: finalManifest };
+      } catch (error) {
+        try {
+          if (this.state !== "complete" && this.state !== "failed") await this.transition("failed");
+        } catch { /* the original error takes precedence */ }
+        try {
+          const message = error instanceof Error ? error.message : String(error);
+          await atomicJson(join(this.options.outputDir, "diagnostics.json"), { contract: CAPTURE_CONTRACT, status: input.status, failures: [...input.failures, { message: `finalize pipeline failed: ${message}` }] });
+        } catch { /* the original error takes precedence */ }
+        throw error;
+      }
+    } finally {
+      try {
+        await this.stopCapture();
+      } catch { /* cleanup errors must not mask the original failure */ }
+    }
   }
 }

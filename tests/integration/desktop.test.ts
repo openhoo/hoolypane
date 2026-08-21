@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { electronExecutablePath } from "../electron-executable.js";
+import { clickPaneSurface } from "./cdp-input.js";
 
 let fixture: ChildProcess;
 let application: ElectronApplication;
@@ -64,24 +65,6 @@ function sourcePage(): Page {
   if (!source) throw new Error("source pane missing");
   return source;
 }
-async function clickSource(testId: string): Promise<void> {
-  const surface = await chrome.locator('[data-pane-surface="desktop-1440"]').boundingBox();
-  if (!surface) throw new Error("desktop source surface missing");
-  const scale = Math.min(1, surface.width / 1440, surface.height / 900);
-  await application.evaluate(async ({ webContents }, input) => {
-    const candidates = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith("http://127.0.0.1:4175"));
-    let source: (typeof candidates)[number] | undefined;
-    for (const candidate of candidates) {
-      if (await candidate.executeJavaScript("innerWidth") === 1440) { source = candidate; break; }
-    }
-    if (!source) throw new Error("desktop source pane missing");
-    const box = await source.executeJavaScript(`document.querySelector('[data-testid="${input.testId}"]').getBoundingClientRect().toJSON()`);
-    const x = (box.x + box.width / 2) * input.scale;
-    const y = (box.y + box.height / 2) * input.scale;
-    await source.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-    await source.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
-  }, { testId, scale });
-}
 
 async function fillSource(value: string): Promise<void> {
   await sourcePage().getByTestId("name").fill(value);
@@ -128,6 +111,7 @@ beforeAll(async () => {
   const ready = Promise.withResolvers<void>();
   fixture.stdout?.on("data", (data: Buffer) => { if (data.toString().includes("fixture ready")) ready.resolve(); });
   fixture.once("error", ready.reject);
+  fixture.once("exit", (code) => ready.reject(new Error(`fixture exited before readiness (code ${code})`)));
   await ready.promise;
   userData = await mkdtemp(join(tmpdir(), "hoolypane-desktop-"));
   const environment = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
@@ -161,11 +145,11 @@ describe("direct Electron surfaces", () => {
     expect(initial.every((value) => value.permission === "denied")).toBe(true);
     await fillSource("Mirrored value");
     await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.name === "Mirrored value"), "fill");
-    await clickSource("subscribe");
+    await clickPaneSurface(application, chrome, { port: 4175, testId: "subscribe" });
     await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.checked), "check");
     await selectSourceDark();
     await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.theme === "dark"), "select");
-    await clickSource("apply");
+    await clickPaneSurface(application, chrome, { port: 4175, testId: "apply" });
     await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.status === "applied"), "click");
     await pressSourceEnter();
     await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.status === "entered"), "press");

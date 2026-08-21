@@ -4,12 +4,8 @@ import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { extname, isAbsolute } from "node:path";
 import type { PaneRegistry } from "../panes/pane-registry.js";
+import type { OverviewInput, OverviewTileInput, OverviewWorkerResponse } from "./overview-protocol.js";
 
-interface WorkerResponse {
-  readonly ok: boolean;
-  readonly png?: Uint8Array;
-  readonly error?: string;
-}
 function testOutputPath(variable: "HOOLYPANE_TEST_PANE_PNG" | "HOOLYPANE_TEST_OVERVIEW_PNG"): string | undefined {
   if (process.env.HOOLYPANE_TEST_MODE !== "1") return undefined;
   const value = process.env[variable];
@@ -74,12 +70,12 @@ export async function captureOverview(window: BrowserWindow, registry: PaneRegis
   if (!selection.canceled && selection.filePath) await writePng(selection.filePath, png);
 }
 
-function composeOverview(tiles: readonly { name: string; dimensions: string; png?: Uint8Array; error?: string }[], background: string): Promise<Buffer> {
-  const worker = new Worker(new URL("./overview-worker.js", import.meta.url), { workerData: { tiles, background } });
+function composeOverview(tiles: readonly OverviewTileInput[], background: string): Promise<Buffer> {
+  const worker = new Worker(new URL("./overview-worker.js", import.meta.url), { workerData: { tiles, background } satisfies OverviewInput });
   const result = Promise.withResolvers<Buffer>();
-  worker.once("message", (value: WorkerResponse) => {
-    if (value.ok && value.png) result.resolve(Buffer.from(value.png));
-    else result.reject(new Error(value.error ?? "overview worker failed"));
+  worker.once("message", (value: OverviewWorkerResponse) => {
+    if (value.ok) result.resolve(Buffer.from(value.png));
+    else result.reject(new Error(value.error));
   });
   worker.once("error", result.reject);
   worker.once("exit", (code) => { if (code !== 0) result.reject(new Error(`overview worker exited ${code}`)); });

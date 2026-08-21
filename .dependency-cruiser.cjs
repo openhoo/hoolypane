@@ -23,7 +23,7 @@ module.exports = {
       name: "runner-dependencies",
       severity: "error",
       from: { path: "^packages/runner/src" },
-      to: { path: "^packages/(desktop)/src" },
+      to: { path: "^apps/desktop/src" },
     },
     {
       name: "no-deep-contract-imports",

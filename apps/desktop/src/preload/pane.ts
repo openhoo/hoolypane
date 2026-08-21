@@ -1,5 +1,5 @@
 import { ipcRenderer } from "electron";
-import { IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, ReplayRequestSchema, type Action, type LocatorSpec, type ReplayResult } from "@hoolypane/contracts";
+import { IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, ReplayRequestSchema, type Action, type LocatorSpec, type ReplayRequest, type ReplayResult } from "@hoolypane/contracts";
 
 let documentGeneration = 0;
 const suppressed = new Set<number>();
@@ -44,6 +44,7 @@ function accessibleName(element: Element): string {
   const aria = element.getAttribute("aria-label");
   if (aria) return normalizedText(aria);
   if (element instanceof HTMLInputElement && element.labels?.length) return normalizedText([...element.labels].map((label) => label.textContent).join(" "));
+  if (element instanceof HTMLInputElement && element.type === "password") return "";
   return normalizedText(element.textContent || element.getAttribute("title") || (element as HTMLInputElement).value);
 }
 
@@ -52,6 +53,7 @@ function unique(locator: LocatorSpec): boolean {
 }
 
 function cssPath(element: Element): string {
+  if (element === document.documentElement) return "html";
   if (element.id) {
     const selector = `#${CSS.escape(element.id)}`;
     if (document.querySelectorAll(selector).length === 1) return selector;
@@ -94,16 +96,21 @@ function emit(action: Action): void {
   ipcRenderer.send(IPC_CHANNELS.paneAction, PaneObservedActionSchema.parse({ documentGeneration, action }));
 }
 
+function record(action: () => Action): void {
+  try { emit(action()); } catch (error) { console.error("[hoolypane] failed to record action", error); }
+}
+
 function flushFill(): void {
   if (!pendingFill) return;
   window.clearTimeout(pendingFill.timer);
   const element = pendingFill.element;
   pendingFill = undefined;
-  emit({ kind: "fill", locator: locatorFor(element), value: element.value });
+  if (!element.isConnected) return;
+  record(() => ({ kind: "fill", locator: locatorFor(element), value: element.value }));
 }
 
 ipcRenderer.on(IPC_CHANNELS.paneGeneration, (_event, value: unknown) => {
-  documentGeneration = PaneGenerationSchema.parse(value).documentGeneration;
+  try { documentGeneration = PaneGenerationSchema.parse(value).documentGeneration; } catch (error) { console.error("[hoolypane] invalid pane generation", error); }
 });
 window.addEventListener("beforeunload", flushFill);
 ipcRenderer.on(IPC_CHANNELS.flush, flushFill);
@@ -111,7 +118,7 @@ ipcRenderer.on(IPC_CHANNELS.flush, flushFill);
 document.addEventListener("input", (event) => {
   if (!event.isTrusted || suppressed.size > 0) return;
   const element = event.target;
-  if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) || ["checkbox", "radio"].includes(element.type)) return;
+  if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) || ["checkbox", "radio", "password"].includes(element.type)) return;
   if (pendingFill) window.clearTimeout(pendingFill.timer);
   pendingFill = { element, timer: window.setTimeout(flushFill, 300) };
 }, true);
@@ -119,40 +126,52 @@ document.addEventListener("blur", (event) => { if (event.target === pendingFill?
 document.addEventListener("change", (event) => {
   if (!event.isTrusted || suppressed.size > 0) return;
   const element = event.target;
-  if (element instanceof HTMLInputElement && ["checkbox", "radio"].includes(element.type)) emit({ kind: "check", locator: locatorFor(element), checked: element.checked });
-  else if (element instanceof HTMLSelectElement) emit({ kind: "select", locator: locatorFor(element), values: [...element.selectedOptions].map((option) => option.value) });
+  if (element instanceof HTMLInputElement && ["checkbox", "radio"].includes(element.type)) record(() => ({ kind: "check", locator: locatorFor(element), checked: element.checked }));
+  else if (element instanceof HTMLSelectElement) record(() => ({ kind: "select", locator: locatorFor(element), values: [...element.selectedOptions].map((option) => option.value) }));
 }, true);
 document.addEventListener("click", (event) => {
   if (!event.isTrusted) return;
   const suppressedActionId = suppressed.values().next().value;
   if (suppressedActionId !== undefined) {
-    ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId: suppressedActionId, paneId: "pending", phase: "confirm", ok: true } satisfies ReplayResult);
+    ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId: suppressedActionId, phase: "confirm", ok: true } satisfies ReplayResult);
     return;
   }
   const target = event.target instanceof Element ? event.target.closest("button,a,[role],input") : null;
-  if (!target || target instanceof HTMLInputElement && ["checkbox", "radio", "text", "email", "search", "url", "number"].includes(target.type)) return;
-  emit({ kind: "click", locator: locatorFor(target) });
+  if (!target || target instanceof HTMLInputElement && ["checkbox", "radio", "text", "email", "search", "url", "number", "password", "tel"].includes(target.type)) return;
+  record(() => ({ kind: "click", locator: locatorFor(target) }));
 }, true);
 document.addEventListener("keydown", (event) => {
   if (!event.isTrusted || suppressed.size > 0 || !["Enter", "Escape", "Tab"].includes(event.key)) return;
   flushFill();
-  if (event.target instanceof Element) emit({ kind: "press", locator: locatorFor(event.target), key: event.key });
+  const target = event.target instanceof Element ? event.target : null;
+  if (!target) return;
+  if (event.key === "Enter" && target.closest("button,a")) return;
+  record(() => ({ kind: "press", locator: locatorFor(target), key: event.key }));
 }, true);
 document.addEventListener("scroll", (event) => {
   if (!event.isTrusted || suppressed.size > 0 || scrollFrame) return;
   scrollFrame = window.requestAnimationFrame(() => {
     scrollFrame = 0;
     const target = event.target instanceof HTMLElement ? event.target : document.documentElement;
-    const horizontalRatio = target.scrollWidth === target.clientWidth ? 0 : target.scrollLeft / (target.scrollWidth - target.clientWidth);
-    const verticalRatio = target.scrollHeight === target.clientHeight ? 0 : target.scrollTop / (target.scrollHeight - target.clientHeight);
-    emit({ kind: "scroll", locator: locatorFor(target), horizontalRatio, verticalRatio });
+    const horizontalRatio = target.scrollWidth === target.clientWidth ? 0 : Math.min(1, Math.max(0, target.scrollLeft / (target.scrollWidth - target.clientWidth)));
+    const verticalRatio = target.scrollHeight === target.clientHeight ? 0 : Math.min(1, Math.max(0, target.scrollTop / (target.scrollHeight - target.clientHeight)));
+    record(() => ({ kind: "scroll", locator: locatorFor(target), horizontalRatio, verticalRatio }));
   });
 }, true);
 
 ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
-  const request = ReplayRequestSchema.parse(value);
+  let request: ReplayRequest;
+  try {
+    request = ReplayRequestSchema.parse(value);
+  } catch (error) {
+    const raw = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+    const actionId = typeof raw.actionId === "number" && Number.isInteger(raw.actionId) && raw.actionId > 0 ? raw.actionId : 1;
+    const phase = raw.phase === "resolve" || raw.phase === "apply-dom" || raw.phase === "end" || raw.phase === "confirm" ? raw.phase : "resolve";
+    ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId, phase, ok: false, reason: (error instanceof Error ? error.message : String(error)).slice(0, 512) } satisfies ReplayResult);
+    return;
+  }
   if (request.phase === "end") suppressed.delete(request.actionId);
-  let result: ReplayResult = { actionId: request.actionId, paneId: "pending", phase: request.phase, ok: true };
+  let result: ReplayResult = { actionId: request.actionId, phase: request.phase, ok: true };
   try {
     if (request.documentGeneration !== documentGeneration) throw new Error(`stale document generation ${request.documentGeneration}, current ${documentGeneration}`);
     if (request.phase === "resolve" || request.phase === "apply-dom") {
@@ -179,7 +198,7 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
       result = { ...result, box: { x: box.x, y: box.y, width: box.width, height: box.height }, ...(element instanceof HTMLInputElement ? { checked: element.checked } : {}) };
     }
   } catch (error) {
-    result = { ...result, ok: false, reason: error instanceof Error ? error.message : String(error) };
+    result = { ...result, ok: false, reason: (error instanceof Error ? error.message : String(error)).slice(0, 512) };
   }
   ipcRenderer.send(IPC_CHANNELS.replayResult, result);
 });

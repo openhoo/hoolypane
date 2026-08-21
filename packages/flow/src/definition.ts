@@ -1,4 +1,4 @@
-import type { HoolypaneConfig, ViewportSpec } from "@hoolypane/contracts";
+import type { HoolypaneConfig, ResolvedHoolypaneConfig, ViewportSpec } from "@hoolypane/contracts";
 import { HoolypaneConfigSchema } from "@hoolypane/contracts";
 import type { Page } from "playwright";
 
@@ -23,7 +23,7 @@ export interface FlowEvent {
   readonly atUnixMs: number;
 }
 
-export function defineConfig(config: HoolypaneConfig): HoolypaneConfig {
+export function defineConfig(config: HoolypaneConfig): ResolvedHoolypaneConfig {
   return HoolypaneConfigSchema.parse(config);
 }
 

@@ -5,22 +5,15 @@ type RendererWorkspace = { version: 1; panes: RendererPaneState[]; order: string
 
 type WorkspaceState = RendererWorkspace;
 
-export type ChromeState = WorkspaceState & { error: string | null };
-type ChromeAction =
-  | { type: "state"; state: WorkspaceState }
-  | { type: "error"; message: string }
-  | { type: "url"; value: string }
-  | { type: "clear-error" };
+export type ChromeState = WorkspaceState;
+type ChromeAction = { type: "state"; state: WorkspaceState };
 
 export function initialChromeState(): ChromeState {
   const panes = VIEWPORT_PRESETS.map((viewport) => ({ id: viewport.id, name: viewport.name, viewport, url: "https://example.com/", canGoBack: false, canGoForward: false, loading: false, failure: null, outOfSync: null }));
-  return { version: 1, panes, order: panes.map((pane) => pane.id), layout: "grid", focusedPaneId: null, syncEnabled: true, sharedUrl: "https://example.com/", recording: false, error: null };
+  return { version: 1, panes, order: panes.map((pane) => pane.id), layout: "grid", focusedPaneId: null, syncEnabled: true, sharedUrl: "https://example.com/", recording: false };
 }
-export function chromeReducer(state: ChromeState, action: ChromeAction): ChromeState {
-  if (action.type === "state") return { ...action.state, error: null };
-  if (action.type === "error") return { ...state, error: action.message };
-  if (action.type === "clear-error") return { ...state, error: null };
-  return state;
+export function chromeReducer(_state: ChromeState, action: ChromeAction): ChromeState {
+  return action.state;
 }
 export function customViewport(width: number, height: number): ViewportSpec {
   const safeWidth = Math.max(1, Math.round(width));

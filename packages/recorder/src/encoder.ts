@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import type { Writable } from "node:stream";
-import { access, mkdir } from "node:fs/promises";
+import { access, constants, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import ffmpegStaticPath from "ffmpeg-static";
 import ffprobeStatic from "ffprobe-static";
@@ -9,10 +9,10 @@ import type { FrameSpool } from "./spool.js";
 
 export interface EncoderPaths { readonly ffmpeg: string; readonly ffprobe: string }
 interface AlignedTrack { readonly id: string; readonly spool: FrameSpool; readonly mappings: readonly SlotMapping[]; readonly geometry: TrackGeometry }
-interface EncodingResult { readonly geometry: CompositeGeometry; readonly paths: EncoderPaths; readonly videos: readonly string[]; readonly composite: string }
+interface EncodingResult { readonly geometry: CompositeGeometry }
 
 async function executable(path: string): Promise<string> {
-  await access(path);
+  await access(path, constants.X_OK);
   return path;
 }
 
@@ -73,7 +73,7 @@ export async function encodeAligned(
   const geometry = compositeGeometry(tracks.map((track) => track.geometry), recording.compositeMaxSize);
   const videos = tracks.map((track) => join(outputDir, "videos", `${track.id}.webm`));
   const composite = join(outputDir, "videos", "composite.webm");
-  const args: string[] = ["-hide_banner", "-loglevel", "error"];
+  const args: string[] = ["-hide_banner", "-loglevel", "error", "-y", "-nostdin"];
   for (let index = 0; index < tracks.length; index += 1) {
     args.push("-probesize", "32", "-analyzeduration", "0", "-c:v", "mjpeg", "-f", "image2pipe", "-framerate", String(fps), "-i", `pipe:${index + 3}`);
   }
@@ -90,7 +90,10 @@ export async function encodeAligned(
   const completion = Promise.withResolvers<void>();
   child.once("error", completion.reject);
   child.once("close", (code: number | null) => code === 0 ? completion.resolve() : completion.reject(new Error(`ffmpeg ${paths.ffmpeg} exited ${code}: ${stderr}`)));
-  void completion.promise.catch(() => undefined);
+  let spawnError: Error | undefined;
+  completion.promise.catch((error: unknown) => {
+    spawnError ??= error instanceof Error ? error : new Error(String(error));
+  });
   const pipes = tracks.map((_track, index) => {
     const pipe = child.stdio[index + 3];
     if (!pipe || !("write" in pipe)) throw new Error(`ffmpeg input pipe ${index} unavailable`);
@@ -111,11 +114,11 @@ export async function encodeAligned(
     }
     for (const pipe of pipes) pipe.end();
     await completion.promise;
-    return { geometry, paths, videos, composite };
+    return { geometry };
   } catch (error) {
     for (const pipe of pipes) pipe.destroy();
     child.kill("SIGTERM");
     await completion.promise.catch(() => undefined);
-    throw new Error(`ffmpeg ${paths.ffmpeg} failed (ffprobe ${paths.ffprobe}): ${error instanceof Error ? error.message : String(error)}${stderr ? `\n${stderr}` : ""}`);
+    throw new Error(`ffmpeg ${paths.ffmpeg} failed (ffprobe ${paths.ffprobe}): ${spawnError?.message ?? (error instanceof Error ? error.message : String(error))}${stderr ? `\n${stderr}` : ""}`);
   }
 }

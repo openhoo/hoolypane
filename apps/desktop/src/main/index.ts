@@ -28,6 +28,9 @@ let nextActionId = 1;
 const coordinator = new InteractionCoordinator();
 const flowDraft = new FlowDraft();
 const pendingReplay = new Map<string, { resolve: (result: ReplayResult) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+let chromeStarting = false;
+let commandQueue = Promise.resolve();
+let flushBarrier = false;
 
 function trustedChrome(event: IpcMainEvent): boolean {
   return chromeWindow !== undefined && event.sender === chromeWindow.webContents && event.senderFrame === chromeWindow.webContents.mainFrame;
@@ -43,7 +46,7 @@ function publishState(): void {
 }
 
 function report(paneId: string, message: string): void {
-  chromeWindow?.webContents.send(IPC_CHANNELS.paneEvent, { paneId, message });
+  console.error(`[hoolypane] ${paneId === "" ? "main" : `pane ${paneId}`}: ${message}`);
 }
 function testFlowSavePath(): string | undefined {
   if (process.env.HOOLYPANE_TEST_MODE !== "1") return undefined;
@@ -64,19 +67,29 @@ async function applyTestReplayDelay(): Promise<void> {
 }
 
 async function stopAndSaveFlow(): Promise<void> {
-  if (!registry || !chromeWindow) return;
-  for (const record of registry.panes.values()) record.view.webContents.send(IPC_CHANNELS.flush);
-  await new Promise((resolve) => setTimeout(resolve, 325));
-  const source = flowDraft.stop();
-  publishState();
-  if (source === null) return;
+  const paneRegistry = registry;
+  const chrome = chromeWindow;
+  if (!paneRegistry || !chrome) return;
+  flushBarrier = true;
+  try {
+    for (const record of paneRegistry.panes.values()) record.view.webContents.send(IPC_CHANNELS.flush);
+    const { promise: flushed, resolve: flushSettled } = Promise.withResolvers<void>();
+    setTimeout(flushSettled, 325);
+    await flushed;
+    let source: string | null;
+    try {
+      source = flowDraft.stop();
+    } finally {
+      publishState();
+    }
+    if (source === null) return;
   const directPath = testFlowSavePath();
   if (directPath === "") return;
   if (directPath) {
     await fs.writeFile(directPath, source, "utf8");
     return;
   }
-  const selection = await dialog.showSaveDialog(chromeWindow, {
+  const selection = await dialog.showSaveDialog(chrome, {
     title: "Save Hoolypane flow",
     defaultPath: "hoolypane-flow.ts",
     filters: [{ name: "TypeScript", extensions: ["ts"] }],
@@ -85,6 +98,9 @@ async function stopAndSaveFlow(): Promise<void> {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     await fs.writeFile(selection.filePath!, source, "utf8");
   });
+  } finally {
+    flushBarrier = false;
+  }
 }
 
 async function handleCommand(command: ChromeCommand): Promise<void> {
@@ -99,8 +115,13 @@ async function handleCommand(command: ChromeCommand): Promise<void> {
     case "rotate": registry.rotate(command.paneId); break;
     case "focus": registry.focus(command.paneId); break;
     case "navigate": {
-      for (const record of registry.panes.values()) record.view.webContents.send(IPC_CHANNELS.flush);
-      await registry.navigate(command.url);
+      flushBarrier = true;
+      try {
+        for (const record of registry.panes.values()) record.view.webContents.send(IPC_CHANNELS.flush);
+        await registry.navigate(command.url);
+      } finally {
+        flushBarrier = false;
+      }
       break;
     }
     case "back": registry.back(command.paneId); break;
@@ -175,7 +196,7 @@ async function applyCdp(paneId: string, envelope: ActionEnvelope, resolved: Repl
 async function replayEnvelope(paneId: string, envelope: ActionEnvelope): Promise<void> {
   await applyTestReplayDelay();
   if (envelope.action.kind === "navigate") {
-    await registry?.getPane(paneId)?.view.webContents.loadURL(envelope.action.url);
+    await registry?.getPane(paneId)?.view.webContents.loadURL(normalizeUrl(envelope.action.url));
     return;
   }
   const request = { actionId: envelope.actionId, documentGeneration: envelope.documentGeneration, action: envelope.action } as const;
@@ -194,7 +215,7 @@ async function replayEnvelope(paneId: string, envelope: ActionEnvelope): Promise
 }
 
 async function acceptSourceAction(sourcePaneId: string, observed: unknown): Promise<void> {
-  if (!registry) return;
+  if (!registry || flushBarrier) return;
   const source = PaneObservedActionSchema.parse(observed);
   const envelope = ActionEnvelopeSchema.parse({
     actionId: nextActionId++,
@@ -209,6 +230,7 @@ async function acceptSourceAction(sourcePaneId: string, observed: unknown): Prom
   const outcomes = await coordinator.dispatch(envelope, targets, replayEnvelope);
   for (const outcome of outcomes) {
     if (outcome.ok) registry.clearOutOfSync(outcome.paneId);
+    else if (!registry.getPane(outcome.paneId)) continue;
     else {
       const reason = outcome.reason ?? "unknown replay failure";
       registry.markOutOfSync(outcome.paneId, envelope.actionId, envelope.action.kind, reason);
@@ -222,6 +244,10 @@ async function acceptSourceAction(sourcePaneId: string, observed: unknown): Prom
 async function createChrome(): Promise<void> {
   workspacePath = join(app.getPath("userData"), "workspace.json");
   let workspace = await loadWorkspace(workspacePath);
+  workspace = {
+    ...workspace,
+    panes: workspace.panes.map((pane) => ({ ...pane, canGoBack: false, canGoForward: false, loading: false, failure: null, outOfSync: null })),
+  };
   const urlIndex = process.argv.indexOf("--url");
   const requestedUrl = urlIndex >= 0 ? process.argv[urlIndex + 1] : undefined;
   if (requestedUrl) {
@@ -236,15 +262,41 @@ async function createChrome(): Promise<void> {
     show: false,
     webPreferences: { preload: fileURLToPath(new URL("../preload/chrome.js", import.meta.url)), nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false },
   });
+  chromeWindow.on("closed", () => { flowDraft.cancel(); void registry?.destroy(); chromeWindow = undefined; registry = undefined; });
   registry = new PaneRegistry({ workspace, onChange: publishState, onFailure: (failure) => report(failure.paneId, failure.message) });
   registry.attachWindow(chromeWindow);
+  chromeWindow.once("ready-to-show", () => chromeWindow?.show());
+  await chromeWindow.loadFile(join(dirname(fileURLToPath(import.meta.url)), "renderer/index.html"));
+  for (const pane of workspace.panes) {
+    if (chromeWindow.isDestroyed()) return;
+    if (!registry.panes.has(pane.id)) await registry.create(pane.viewport, pane.id);
+  }
+  if (chromeWindow.isDestroyed()) return;
+  publishState();
+}
+
+app.commandLine.appendSwitch("disable-background-timer-throttling");
+app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
+void app.whenReady().then(launchChrome).catch((error: unknown) => { console.error(error); app.quit(); });
+app.on("activate", () => { void launchChrome().catch((error: unknown) => { console.error(error); }); });
+
+async function launchChrome(): Promise<void> {
+  if (chromeWindow !== undefined || chromeStarting) return;
+  chromeStarting = true;
+  try {
+    await createChrome();
+  } finally {
+    chromeStarting = false;
+  }
+}
+
   ipcMain.on(IPC_CHANNELS.bounds, (event, value: unknown) => {
     if (!trustedChrome(event)) return;
     try { registry?.applyBounds(BoundsSnapshotSchema.parse(value)); } catch (error) { report("", error instanceof Error ? error.message : String(error)); }
   });
   ipcMain.on(IPC_CHANNELS.command, (event, value: unknown) => {
     if (!trustedChrome(event)) return;
-    try { void handleCommand(ChromeCommandSchema.parse(value)).catch((error: unknown) => report("", error instanceof Error ? error.message : String(error))); } catch (error) { report("", error instanceof Error ? error.message : String(error)); }
+    try { commandQueue = commandQueue.then(() => handleCommand(ChromeCommandSchema.parse(value))).catch((error: unknown) => report("", error instanceof Error ? error.message : String(error))); } catch (error) { report("", error instanceof Error ? error.message : String(error)); }
   });
   ipcMain.on(IPC_CHANNELS.paneAction, (event, value: unknown) => {
     const paneId = sourcePane(event);
@@ -264,13 +316,3 @@ async function createChrome(): Promise<void> {
       pending.resolve({ ...parsed, paneId });
     } catch (error) { report(paneId, error instanceof Error ? error.message : String(error)); }
   });
-  chromeWindow.once("ready-to-show", () => chromeWindow?.show());
-  await chromeWindow.loadFile(join(dirname(fileURLToPath(import.meta.url)), "renderer/index.html"));
-  for (const pane of workspace.panes) if (!registry.panes.has(pane.id)) await registry.create(pane.viewport, pane.id);
-  chromeWindow.on("closed", () => { flowDraft.cancel(); void registry?.destroy(); chromeWindow = undefined; registry = undefined; });
-  publishState();
-}
-
-app.commandLine.appendSwitch("disable-background-timer-throttling");
-app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
-app.whenReady().then(createChrome).catch((error) => { console.error(error); app.quit(); });

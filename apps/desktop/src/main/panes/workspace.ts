@@ -1,20 +1,24 @@
-import { VIEWPORT_PRESETS, ViewportSpecSchema, type ViewportSpec } from "@hoolypane/contracts";
+import { VIEWPORT_PRESETS, ViewportSpecSchema, ActionSchema, type ViewportSpec, type Action } from "@hoolypane/contracts";
 import { z } from "zod";
 
 const LayoutModeSchema = z.enum(["grid", "horizontal", "focus"]);
+
+const HttpUrlSchema = z.url({ protocol: /^https?$/ });
+const ActionKinds = ActionSchema.options.map((option) => option.shape.kind.value) as [Action["kind"], ...Action["kind"][]];
+const ActionKindSchema = z.enum(ActionKinds);
 
 const PaneStateSchema = z.strictObject({
   id: z.string().min(1),
   name: z.string().min(1),
   viewport: ViewportSpecSchema,
-  url: z.string().min(1),
+  url: HttpUrlSchema,
   canGoBack: z.boolean(),
   canGoForward: z.boolean(),
   loading: z.boolean(),
   failure: z.string().nullable(),
   outOfSync: z.strictObject({
     actionId: z.number().int().positive(),
-    actionKind: z.string().min(1),
+    actionKind: ActionKindSchema,
     reason: z.string().min(1),
   }).nullable(),
 });
@@ -27,7 +31,7 @@ export const WorkspaceStateSchema = z.strictObject({
   layout: LayoutModeSchema,
   focusedPaneId: z.string().min(1).nullable(),
   syncEnabled: z.boolean(),
-  sharedUrl: z.string().min(1),
+  sharedUrl: HttpUrlSchema,
 }).superRefine((workspace, context) => {
   const paneIds = workspace.panes.map((pane) => pane.id);
   const uniquePaneIds = new Set(paneIds);
@@ -59,8 +63,7 @@ function uniquePaneId(workspace: WorkspaceState, seed: string): string {
   return `${seed}-${suffix}`;
 }
 
-export function addPane(workspace: WorkspaceState, viewport: ViewportSpec, url = workspace.sharedUrl): WorkspaceState {
-  const id = uniquePaneId(workspace, viewport.id);
+export function addPane(workspace: WorkspaceState, viewport: ViewportSpec, url = workspace.sharedUrl, id: string = uniquePaneId(workspace, viewport.id)): WorkspaceState {
   const pane = paneFromViewport(viewport, id, url);
   return { ...workspace, panes: [...workspace.panes, pane], order: [...workspace.order, id] };
 }

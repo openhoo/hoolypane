@@ -17,6 +17,13 @@ describe("viewport contracts", () => {
     expect(encodedDimension(391, 1.5)).toBe(588);
   });
 
+  it("does not round non-binary device scale factors up", () => {
+    expect(encodedDimension(100, 1.1)).toBe(110);
+    expect(encodedDimension(180, 1.1)).toBe(198);
+    expect(encodedDimension(200, 1.1)).toBe(220);
+    expect(encodedDimension(360, 1.1)).toBe(396);
+  });
+
   it("rejects duplicate ids and unsafe encoded geometry", () => {
     expect(ViewportListSchema.safeParse([VIEWPORT_PRESETS[0], VIEWPORT_PRESETS[0]]).success).toBe(false);
     expect(ViewportSpecSchema.safeParse({ id: "unsafe", name: "Unsafe", width: 16_384, height: 16_384, deviceScaleFactor: 4, isMobile: false, hasTouch: false }).success).toBe(false);

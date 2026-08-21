@@ -9,6 +9,7 @@ import { verifyArtifacts } from "@hoolypane/recorder";
 async function verifyDirectory(path: string): Promise<number> {
   const outputDir = resolve(path);
   const value = JSON.parse(await readFile(resolve(outputDir, "manifest.json"), "utf8")) as unknown;
+  // No runtime schema for RecordingManifest exists yet (@hoolypane/recorder exports the type only); these checks mirror the fps 30|60 and durationFrames >= 1 contract by hand.
   if (!value || typeof value !== "object" || !("fps" in value) || !("durationFrames" in value)) throw new Error("manifest.json lacks fps or durationFrames");
   const fps = value.fps;
   const durationFrames = value.durationFrames;

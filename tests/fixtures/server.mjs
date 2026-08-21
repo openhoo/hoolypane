@@ -14,8 +14,13 @@ const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://${request.headers.host}`);
   if (request.method === "POST" && url.pathname === "/result") {
     let body = "";
-    for await (const chunk of request) body += chunk;
-    results.push(JSON.parse(body));
+    try {
+      for await (const chunk of request) body += chunk;
+      results.push(JSON.parse(body));
+    } catch {
+      response.writeHead(400).end();
+      return;
+    }
     response.writeHead(204).end();
     return;
   }
@@ -42,6 +47,10 @@ const server = createServer(async (request, response) => {
   }
   response.setHeader("content-type", "text/html; charset=utf-8");
   response.end(page);
+});
+server.on("error", (error) => {
+  console.error(`fixture server error: ${error.message}`);
+  process.exit(1);
 });
 server.listen(port, "127.0.0.1", () => console.log(`fixture ready http://127.0.0.1:${port}`));
 for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => server.close(() => process.exit(0)));

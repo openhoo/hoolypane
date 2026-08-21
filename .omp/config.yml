@@ -1,0 +1,7 @@
+modelRoles:
+  default: openrouter/stealth/ox-alpha:high
+  plan: openrouter/stealth/ox-alpha:high
+  slow: openrouter/stealth/ox-alpha:max
+  smol: openrouter/stealth/ox-alpha:high
+  advisor: openrouter/stealth/ox-alpha:high
+  designer: openrouter/stealth/ox-alpha:max

@@ -1,18 +1,8 @@
 import { parentPort, workerData } from "node:worker_threads";
 import sharp from "sharp";
+import type { OverviewInput, OverviewWorkerResponse } from "./overview-protocol.js";
 import type Sharp = require("sharp");
 
-interface TileInput {
-  readonly name: string;
-  readonly dimensions: string;
-  readonly png?: Uint8Array;
-  readonly error?: string;
-}
-
-interface OverviewInput {
-  readonly tiles: readonly TileInput[];
-  readonly background: string;
-}
 
 function escapeXml(value: string): string {
   return value.replace(/[<>&"']/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" })[character] ?? character);
@@ -43,4 +33,7 @@ async function render(input: OverviewInput): Promise<Buffer> {
   return sharp({ create: { width: columns * tileWidth, height: rows * tileHeight, channels: 4, background: input.background } }).composite(overlays).png().toBuffer();
 }
 
-void render(workerData as OverviewInput).then((png) => parentPort?.postMessage({ ok: true, png }), (error: unknown) => parentPort?.postMessage({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+void render(workerData as OverviewInput).then(
+  (png) => parentPort?.postMessage({ ok: true, png } satisfies OverviewWorkerResponse),
+  (error: unknown) => parentPort?.postMessage({ ok: false, error: error instanceof Error ? error.message : String(error) } satisfies OverviewWorkerResponse),
+);

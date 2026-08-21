@@ -13,6 +13,7 @@ beforeAll(async () => {
   const ready = Promise.withResolvers<void>();
   fixture.stdout?.on("data", (data: Buffer) => { if (data.toString().includes("fixture ready")) ready.resolve(); });
   fixture.once("error", ready.reject);
+  fixture.once("exit", (code) => ready.reject(new Error(`fixture exited before readiness (code ${code})`)));
   await ready.promise;
 }, 10_000);
 
@@ -80,13 +81,18 @@ describe("real runner", () => {
       resolve("tests/fixtures/hoolypane.config.ts"),
       "--output",
       output,
-    ], { stdio: ["ignore", "ignore", "pipe"] });
+    ], { stdio: ["ignore", "ignore", "inherit"] });
     const exited = Promise.withResolvers<number | null>();
     child.once("error", exited.reject);
     child.once("exit", (code) => exited.resolve(code));
-    await waitForRecorderState(output, "recording");
-    child.kill("SIGINT");
-    expect(await exited.promise).toBe(130);
+    try {
+      await waitForRecorderState(output, "recording");
+      child.kill("SIGINT");
+      expect(await exited.promise).toBe(130);
+    } finally {
+      if (child.exitCode === null && !child.killed) child.kill("SIGKILL");
+      await exited.promise.catch(() => undefined);
+    }
     const manifest = JSON.parse(await readFile(join(output, "manifest.json"), "utf8")) as { status: string; validationSuccess: boolean; durationFrames: number };
     expect(manifest).toMatchObject({ status: "interrupted", validationSuccess: true });
     expect(manifest.durationFrames).toBeGreaterThan(0);
