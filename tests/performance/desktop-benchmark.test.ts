@@ -113,7 +113,7 @@ describe("six-pane direct compositor", () => {
       const state = globalThis as typeof globalThis & { __longTasks?: number[]; __mirrorTimes?: number[] };
       state.__longTasks = [];
       state.__mirrorTimes = [];
-      new PerformanceObserver((list) => state.__longTasks!.push(...list.getEntries().map((entry) => entry.duration))).observe({ type: "longtask", buffered: true });
+      new PerformanceObserver((list) => state.__longTasks!.push(...list.getEntries().map((entry) => entry.duration))).observe({ type: "longtask" });
       document.querySelector('[data-testid="apply"]')?.addEventListener("click", () => state.__mirrorTimes!.push(Date.now()), true);
     })));
     await application.evaluate(() => {
