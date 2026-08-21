@@ -1,5 +1,6 @@
 appId: dev.hoolypane.app
 productName: Hoolypane
+executableName: Hoolypane
 copyright: Copyright © 2026 Hoolypane contributors
 electronVersion: 43.4.1
 directories:

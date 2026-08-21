@@ -8,6 +8,7 @@ import { electronExecutablePath } from "../electron-executable.js";
 
 const OUTPUT = resolve(process.env.HOOLYPANE_DESKTOP_BENCHMARK_OUTPUT ?? ".tmp/desktop-benchmark-proof.json");
 const MIRROR_SAMPLES = 120;
+const RAF_P95_LIMIT_MS = Number(process.env.HOOLYPANE_RAF_P95_LIMIT_MS ?? 20);
 const FINAL_INPUT_UPDATES = 100;
 let fixture: ChildProcess;
 let application: ElectronApplication;
@@ -163,6 +164,7 @@ describe("six-pane direct compositor", () => {
       durationSeconds: 30,
       paneCount: 6,
       rafP95ByPane,
+      rafP95LimitMs: RAF_P95_LIMIT_MS,
       mirror: { samples: mirrorLatencies.length, p95Ms: mirrorP95Ms },
       finalInput: { updates: FINAL_INPUT_UPDATES, expected: expectedFinalValue, preserved: finalStatePreserved },
       longTasks: { rendererMaxMs: rendererLongTaskMaxMs, mainEventLoopDelayMaxMs: mainLongTaskMaxMs },
@@ -172,7 +174,7 @@ describe("six-pane direct compositor", () => {
     await writeFile(OUTPUT, `${JSON.stringify(proof, null, 2)}\n`);
 
     expect(Object.keys(rafP95ByPane)).toHaveLength(6);
-    for (const p95 of Object.values(rafP95ByPane)) expect(p95).toBeLessThanOrEqual(20);
+    for (const p95 of Object.values(rafP95ByPane)) expect(p95).toBeLessThanOrEqual(RAF_P95_LIMIT_MS);
     expect(mirrorP95Ms).toBeLessThan(16.7);
     expect(finalStatePreserved).toBe(true);
     expect(rendererLongTaskMaxMs).toBeLessThanOrEqual(50);
