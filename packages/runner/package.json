@@ -21,9 +21,9 @@
     "@hoolypane/contracts": "workspace:*",
     "@hoolypane/flow": "workspace:*",
     "@hoolypane/recorder": "workspace:*",
-    "rollup": "4.50.1",
+    "rollup": "4.59.0",
     "rollup-plugin-dts": "6.2.3",
     "tsup": "8.5.0",
-    "vitest": "3.2.4"
+    "vitest": "3.2.6"
   }
 }

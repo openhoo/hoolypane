@@ -38,6 +38,6 @@
     "playwright": "1.62.1",
     "sharp": "0.34.3",
     "typescript": "5.9.2",
-    "vitest": "3.2.4"
+    "vitest": "3.2.6"
   }
 }
