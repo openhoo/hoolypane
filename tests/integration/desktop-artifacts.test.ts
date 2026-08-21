@@ -7,6 +7,7 @@ import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runFlow } from "../../packages/runner/src/run-flow.js";
 
+import { electronExecutablePath } from "../electron-executable.js";
 let fixture: ChildProcess;
 let application: ElectronApplication;
 let chrome: Page;
@@ -100,7 +101,7 @@ beforeAll(async () => {
     delete environment.WAYLAND_DISPLAY;
   }
   const graphicsArguments = process.platform === "linux" ? ["--ozone-platform=x11", "--use-gl=angle", "--use-angle=swiftshader"] : [];
-  const electronExecutable = resolve(`apps/desktop/node_modules/electron/dist/electron${process.platform === "win32" ? ".exe" : ""}`);
+  const electronExecutable = electronExecutablePath();
   application = await electron.launch({ executablePath: electronExecutable, args: [...graphicsArguments, resolve("apps/desktop"), `--user-data-dir=${join(directory, "user-data")}`, "--url", "http://127.0.0.1:4178"], env: environment });
   chrome = await application.firstWindow();
   await waitForPanes(5);

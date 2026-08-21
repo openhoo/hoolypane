@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { electronExecutablePath } from "../electron-executable.js";
 
 let fixture: ChildProcess;
 let application: ElectronApplication;
@@ -132,7 +133,7 @@ beforeAll(async () => {
   if (process.platform === "linux") environment.XDG_SESSION_TYPE = "x11";
   if (process.platform === "linux") delete environment.WAYLAND_DISPLAY;
   const graphicsArguments = process.platform === "linux" ? ["--ozone-platform=x11", "--use-gl=angle", "--use-angle=swiftshader"] : [];
-  const electronExecutable = resolve(`apps/desktop/node_modules/electron/dist/electron${process.platform === "win32" ? ".exe" : ""}`);
+  const electronExecutable = electronExecutablePath();
   application = await electron.launch({
     executablePath: electronExecutable,
     args: [...graphicsArguments, resolve("apps/desktop"), `--user-data-dir=${userData}`, "--url", "http://127.0.0.1:4175"],

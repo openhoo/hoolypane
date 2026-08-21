@@ -75,7 +75,8 @@ try {
     executable = join(artifactDir, artifact);
     await fs.chmod(executable, 0o755);
     environment = { ...environment, LIBGL_ALWAYS_SOFTWARE: environment.LIBGL_ALWAYS_SOFTWARE ?? "1" };
-    launchArgs = ["--appimage-extract-and-run", "--ozone-platform=x11", "--use-gl=angle", "--use-angle=swiftshader", ...launchArgs];
+    // Extraction mode cannot preserve the AppImage's setuid sandbox ownership; this flag is smoke-only.
+    launchArgs = ["--appimage-extract-and-run", "--no-sandbox", "--ozone-platform=x11", "--use-gl=angle", "--use-angle=swiftshader", ...launchArgs];
   } else if (process.platform === "win32") {
     const installer = files.find((file) => file.endsWith(".exe"));
     if (!installer) throw new Error("Windows NSIS artifact missing");
