@@ -62,7 +62,7 @@ export const ReplayRequestSchema = z.strictObject({
 export const ReplayResultSchema = z.strictObject({
   actionId: z.number().int().positive(),
   paneId,
-  phase: z.enum(["resolve", "apply-dom", "end"]),
+  phase: z.enum(["resolve", "apply-dom", "confirm", "end"]),
   ok: z.boolean(),
   reason: z.string().optional(),
   box: z.strictObject({ x: z.number(), y: z.number(), width: z.number().nonnegative(), height: z.number().nonnegative() }).optional(),

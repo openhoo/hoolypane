@@ -123,7 +123,12 @@ document.addEventListener("change", (event) => {
   else if (element instanceof HTMLSelectElement) emit({ kind: "select", locator: locatorFor(element), values: [...element.selectedOptions].map((option) => option.value) });
 }, true);
 document.addEventListener("click", (event) => {
-  if (!event.isTrusted || suppressed.size > 0) return;
+  if (!event.isTrusted) return;
+  const suppressedActionId = suppressed.values().next().value;
+  if (suppressedActionId !== undefined) {
+    ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId: suppressedActionId, paneId: "pending", phase: "confirm", ok: true } satisfies ReplayResult);
+    return;
+  }
   const target = event.target instanceof Element ? event.target.closest("button,a,[role],input") : null;
   if (!target || target instanceof HTMLInputElement && ["checkbox", "radio", "text", "email", "search", "url", "number"].includes(target.type)) return;
   emit({ kind: "click", locator: locatorFor(target) });

@@ -107,6 +107,7 @@ describe("six-pane direct compositor", () => {
     await chrome.getByRole("button", { name: "Add custom" }).click();
     await waitForPaneCount(6);
     const pages = remotePages();
+    await Promise.all(pages.map((page) => page.getByTestId("apply").waitFor({ state: "visible" })));
     const source = pages.find((page) => page.viewportSize()?.width === 1440) ?? pages[0]!;
     const rssSamples: number[] = [await application.evaluate(() => process.memoryUsage().rss)];
 

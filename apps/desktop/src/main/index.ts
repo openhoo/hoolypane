@@ -121,22 +121,27 @@ async function handleCommand(command: ChromeCommand): Promise<void> {
   await saveWorkspace(workspacePath, registry.getState());
 }
 
-function replayKey(paneId: string, actionId: number, phase: ReplayRequest["phase"]): string {
+function replayKey(paneId: string, actionId: number, phase: ReplayResult["phase"]): string {
   return `${paneId}:${actionId}:${phase}`;
+}
+
+function waitForReplayResult(paneId: string, actionId: number, phase: ReplayResult["phase"]): Promise<ReplayResult> {
+  return new Promise((resolve, reject) => {
+    const key = replayKey(paneId, actionId, phase);
+    const timer = setTimeout(() => {
+      pendingReplay.delete(key);
+      reject(new Error(`pane ${paneId} timed out during ${phase}`));
+    }, 5_000);
+    pendingReplay.set(key, { resolve, reject, timer });
+  });
 }
 
 function requestReplay(paneId: string, request: ReplayRequest): Promise<ReplayResult> {
   const record = registry?.getPane(paneId);
   if (!record) return Promise.reject(new Error(`pane closed: ${paneId}`));
-  return new Promise((resolve, reject) => {
-    const key = replayKey(paneId, request.actionId, request.phase);
-    const timer = setTimeout(() => {
-      pendingReplay.delete(key);
-      reject(new Error(`pane ${paneId} timed out during ${request.phase}`));
-    }, 5_000);
-    pendingReplay.set(key, { resolve, reject, timer });
-    record.view.webContents.send(IPC_CHANNELS.replay, request);
-  });
+  const result = waitForReplayResult(paneId, request.actionId, request.phase);
+  record.view.webContents.send(IPC_CHANNELS.replay, request);
+  return result;
 }
 
 async function applyCdp(paneId: string, envelope: ActionEnvelope, resolved: ReplayResult): Promise<void> {
@@ -148,8 +153,10 @@ async function applyCdp(paneId: string, envelope: ActionEnvelope, resolved: Repl
   const x = (box.x + box.width / 2) * scale;
   const y = (box.y + box.height / 2) * scale;
   const click = async (): Promise<void> => {
-    await cdp.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-    await cdp.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+    const confirmation = waitForReplayResult(paneId, envelope.actionId, "confirm");
+    record.view.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(x), y: Math.round(y), button: "left", clickCount: 1 });
+    record.view.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(x), y: Math.round(y), button: "left", clickCount: 1 });
+    await confirmation;
   };
   const action = envelope.action;
   if (action.kind === "click") await click();
