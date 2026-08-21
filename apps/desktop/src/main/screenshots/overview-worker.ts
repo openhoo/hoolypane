@@ -1,5 +1,6 @@
 import { parentPort, workerData } from "node:worker_threads";
 import sharp from "sharp";
+import type Sharp = require("sharp");
 
 interface TileInput {
   readonly name: string;
@@ -25,7 +26,7 @@ async function render(input: OverviewInput): Promise<Buffer> {
   const tileHeight = imageHeight + headerHeight;
   const columns = Math.ceil(Math.sqrt(input.tiles.length));
   const rows = Math.ceil(input.tiles.length / columns);
-  const overlays: sharp.OverlayOptions[] = [];
+  const overlays: Sharp.OverlayOptions[] = [];
   for (const [index, tile] of input.tiles.entries()) {
     const left = index % columns * tileWidth;
     const top = Math.floor(index / columns) * tileHeight;

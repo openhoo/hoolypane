@@ -100,10 +100,10 @@ async function selectSourceDark(): Promise<void> {
       if (await candidate.executeJavaScript("innerWidth") === 1440) { source = candidate; break; }
     }
     if (!source) throw new Error("desktop source pane missing");
-    await source.debugger.sendCommand("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "ArrowDown", code: "ArrowDown" });
-    await source.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "ArrowDown", code: "ArrowDown" });
-    await source.debugger.sendCommand("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Enter", code: "Enter" });
-    await source.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter" });
+    await source.debugger.sendCommand("Input.dispatchKeyEvent", {
+      type: "keyDown", key: "d", code: "KeyD", text: "d", unmodifiedText: "d", windowsVirtualKeyCode: 68,
+    });
+    await source.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "d", code: "KeyD", windowsVirtualKeyCode: 68 });
   });
 }
 
@@ -148,7 +148,7 @@ afterAll(async () => {
   await application?.close().catch(() => undefined);
   fixture?.kill("SIGTERM");
   if (userData) await rm(userData, { recursive: true, force: true });
-});
+}, 30_000);
 
 describe("direct Electron surfaces", () => {
   it("creates direct emulated panes with hardened sessions and tears them down", async () => {
