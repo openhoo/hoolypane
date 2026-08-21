@@ -16,7 +16,16 @@ if (target === "mac") {
   args.push(`--config.dmg.sign=${signed}`);
 }
 const environment = { ...process.env };
-if (!hasCertificate) environment.CSC_IDENTITY_AUTO_DISCOVERY = "false";
+if (!hasCertificate) {
+  delete environment.CSC_LINK;
+  delete environment.CSC_KEY_PASSWORD;
+  environment.CSC_IDENTITY_AUTO_DISCOVERY = "false";
+}
+if (!canNotarize) {
+  delete environment.APPLE_ID;
+  delete environment.APPLE_APP_SPECIFIC_PASSWORD;
+  delete environment.APPLE_TEAM_ID;
+}
 const builderCli = createRequire(import.meta.url).resolve("electron-builder/cli.js");
 const child = spawn(process.execPath, [builderCli, ...args], { stdio: "inherit", env: environment });
 child.once("error", (error) => { throw error; });
