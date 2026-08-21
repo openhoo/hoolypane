@@ -111,7 +111,7 @@ jobs:
           merge-multiple: true
       - name: Publish runner
         if: env.NODE_AUTH_TOKEN != ''
-        run: npm publish release-artifacts/hoolypane-runner-*.tgz --provenance --access public
+        run: npm publish ./release-artifacts/hoolypane-runner-*.tgz --provenance --access public --tag beta
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: release-artifacts/*
