@@ -13,6 +13,7 @@
     "test:runner": "vitest run packages/runner/src tests/integration/runner.test.ts",
     "test:desktop": "vitest run tests/integration/desktop.test.ts tests/integration/desktop-artifacts.test.ts tests/integration/desktop-resilience.test.ts",
     "build:runner": "pnpm --filter @hoolypane/runner build",
+    "prepare:electron": "pnpm --filter @hoolypane/desktop exec electron --version",
     "hoolypane": "node packages/runner/dist/cli.js",
     "fixture:start": "node tests/fixtures/server.mjs",
     "desktop:dev": "pnpm --filter @hoolypane/desktop start",

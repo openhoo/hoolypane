@@ -19,6 +19,7 @@ jobs:
           node-version: 24
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
+      - run: pnpm prepare:electron
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm architecture
       - run: pnpm exec knip
@@ -54,6 +55,7 @@ jobs:
           node-version: 24
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
+      - run: pnpm prepare:electron
       - name: Build native desktop
         run: pnpm build
       - name: Run native desktop E2E

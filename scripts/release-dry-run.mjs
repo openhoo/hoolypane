@@ -14,6 +14,7 @@ await run(pnpm, ["exec", "knip"]);
 await run(pnpm, ["typecheck"]);
 await run(pnpm, ["test:unit"]);
 await run(pnpm, ["test:runner"]);
+await run(pnpm, ["prepare:electron"]);
 await run(pnpm, ["build"]);
 if (process.platform === "linux") {
   const environment = { ...process.env, LIBGL_ALWAYS_SOFTWARE: "1" };

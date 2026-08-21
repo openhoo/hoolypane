@@ -21,6 +21,7 @@ jobs:
           registry-url: https://registry.npmjs.org
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
+      - run: pnpm prepare:electron
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm architecture && pnpm exec knip && pnpm typecheck && pnpm test:unit && pnpm test:runner
       - run: pnpm benchmark:recording
@@ -60,6 +61,7 @@ jobs:
           node-version: 24
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
+      - run: pnpm prepare:electron
       - run: pnpm build
       - name: Run Linux desktop E2E
         if: runner.os == 'Linux'
