@@ -1,6 +1,6 @@
 {
   "name": "hoolypane",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.1",
   "private": true,
   "license": "AGPL-3.0-only",
   "engines": {
@@ -11,7 +11,7 @@
     "typecheck": "tsc -b --pretty false",
     "test:unit": "vitest run packages apps",
     "test:runner": "vitest run packages/runner/src tests/integration/runner.test.ts",
-    "test:desktop": "vitest run tests/integration/desktop.test.ts",
+    "test:desktop": "vitest run tests/integration/desktop.test.ts tests/integration/desktop-artifacts.test.ts tests/integration/desktop-resilience.test.ts",
     "build:runner": "pnpm --filter @hoolypane/runner build",
     "hoolypane": "node packages/runner/dist/cli.js",
     "fixture:start": "node tests/fixtures/server.mjs",
@@ -25,7 +25,9 @@
     "knip": "knip",
     "verify:artifacts": "node packages/runner/dist/cli.js verify",
     "benchmark:recording": "vitest run tests/performance/recording-benchmark.test.ts",
-    "benchmark:desktop": "vitest run tests/performance/desktop-benchmark.test.ts"
+    "benchmark:desktop": "vitest run tests/performance/desktop-benchmark.test.ts",
+    "smoke:desktop-package": "node scripts/smoke-desktop-package.mjs",
+    "release:dry-run": "node scripts/release-dry-run.mjs"
   },
   "devDependencies": {
     "@hoolypane/runner": "workspace:*",

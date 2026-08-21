@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, type IpcMainEvent } from "electron";
 import { promises as fs } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, extname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   ActionEnvelopeSchema,
@@ -45,6 +45,23 @@ function publishState(): void {
 function report(paneId: string, message: string): void {
   chromeWindow?.webContents.send(IPC_CHANNELS.paneEvent, { paneId, message });
 }
+function testFlowSavePath(): string | undefined {
+  if (process.env.HOOLYPANE_TEST_MODE !== "1") return undefined;
+  if (process.env.HOOLYPANE_TEST_FLOW_SAVE_CANCEL === "1") return "";
+  const value = process.env.HOOLYPANE_TEST_FLOW_PATH;
+  if (!value) return undefined;
+  if (!isAbsolute(value) || extname(value).toLowerCase() !== ".ts") throw new Error("HOOLYPANE_TEST_FLOW_PATH must be an absolute TypeScript path");
+  return value;
+}
+async function applyTestReplayDelay(): Promise<void> {
+  if (process.env.HOOLYPANE_TEST_MODE !== "1") return;
+  const milliseconds = Number(process.env.HOOLYPANE_TEST_REPLAY_DELAY_MS ?? 0);
+  if (!Number.isInteger(milliseconds) || milliseconds < 0 || milliseconds > 1_000) throw new Error("HOOLYPANE_TEST_REPLAY_DELAY_MS must be an integer from 0 to 1000");
+  if (milliseconds === 0) return;
+  const completion = Promise.withResolvers<void>();
+  setTimeout(completion.resolve, milliseconds);
+  await completion.promise;
+}
 
 async function stopAndSaveFlow(): Promise<void> {
   if (!registry || !chromeWindow) return;
@@ -53,6 +70,12 @@ async function stopAndSaveFlow(): Promise<void> {
   const source = flowDraft.stop();
   publishState();
   if (source === null) return;
+  const directPath = testFlowSavePath();
+  if (directPath === "") return;
+  if (directPath) {
+    await fs.writeFile(directPath, source, "utf8");
+    return;
+  }
   const selection = await dialog.showSaveDialog(chromeWindow, {
     title: "Save Hoolypane flow",
     defaultPath: "hoolypane-flow.ts",
@@ -143,6 +166,7 @@ async function applyCdp(paneId: string, envelope: ActionEnvelope, resolved: Repl
 }
 
 async function replayEnvelope(paneId: string, envelope: ActionEnvelope): Promise<void> {
+  await applyTestReplayDelay();
   if (envelope.action.kind === "navigate") {
     await registry?.getPane(paneId)?.view.webContents.loadURL(envelope.action.url);
     return;

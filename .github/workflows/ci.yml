@@ -12,8 +12,8 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: pnpm
@@ -27,7 +27,7 @@ jobs:
       - run: pnpm test:runner
       - run: pnpm build
       - run: xvfb-run -a pnpm test:desktop
-      - run: xvfb-run -a pnpm benchmark:desktop
+      - run: env -u DBUS_SESSION_BUS_ADDRESS -u WAYLAND_DISPLAY LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a pnpm benchmark:desktop
       - run: pnpm benchmark:recording
       - run: pnpm pack:runner
 
@@ -38,22 +38,40 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            command: package:linux
+            package-command: package:linux
+            artifact-name: hoolypane-linux-unsigned
           - os: windows-latest
-            command: package:windows
+            package-command: package:windows
+            artifact-name: hoolypane-windows-unsigned
           - os: macos-latest
-            command: package:mac
+            package-command: package:mac
+            artifact-name: hoolypane-macos-unsigned
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: pnpm
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
-      - run: pnpm ${{ matrix.command }}
-      - uses: actions/upload-artifact@v4
+      - name: Build native desktop
+        run: pnpm build
+      - name: Run native desktop E2E
+        if: runner.os != 'Linux'
+        run: pnpm test:desktop
+      - name: Run native six-pane performance gate
+        if: runner.os != 'Linux'
+        run: pnpm benchmark:desktop
+      - name: Package native desktop
+        run: pnpm ${{ matrix.package-command }}
+      - name: Smoke Linux package
+        if: runner.os == 'Linux'
+        run: env -u DBUS_SESSION_BUS_ADDRESS -u WAYLAND_DISPLAY LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a pnpm smoke:desktop-package -- dist/desktop
+      - name: Smoke native package
+        if: runner.os != 'Linux'
+        run: pnpm smoke:desktop-package -- dist/desktop
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: hoolypane-${{ matrix.os }}-unsigned
+          name: ${{ matrix.artifact-name }}
           path: dist/desktop/*

@@ -1,5 +1,5 @@
 import { ipcRenderer } from "electron";
-import { IPC_CHANNELS, PaneObservedActionSchema, ReplayRequestSchema, type Action, type LocatorSpec, type ReplayResult } from "@hoolypane/contracts";
+import { IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, ReplayRequestSchema, type Action, type LocatorSpec, type ReplayResult } from "@hoolypane/contracts";
 
 let documentGeneration = 0;
 const suppressed = new Set<number>();
@@ -102,9 +102,8 @@ function flushFill(): void {
   emit({ kind: "fill", locator: locatorFor(element), value: element.value });
 }
 
-window.addEventListener("pageshow", () => {
-  documentGeneration += 1;
-  ipcRenderer.send(IPC_CHANNELS.paneGeneration, { documentGeneration });
+ipcRenderer.on(IPC_CHANNELS.paneGeneration, (_event, value: unknown) => {
+  documentGeneration = PaneGenerationSchema.parse(value).documentGeneration;
 });
 window.addEventListener("beforeunload", flushFill);
 ipcRenderer.on(IPC_CHANNELS.flush, flushFill);

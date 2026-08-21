@@ -1,8 +1,8 @@
 {
   "workspaces": {
     ".": {
-      "entry": ["vitest.config.ts", "tests/**/*.test.ts", "tests/fixtures/*.ts", "tests/fixtures/*.mjs"],
-      "project": ["vitest.config.ts", "tests/**/*.ts", "tests/**/*.mjs"]
+      "entry": ["vitest.config.ts", "tests/**/*.test.ts", "tests/fixtures/*.ts", "tests/fixtures/*.mjs", "scripts/*.mjs"],
+      "project": ["vitest.config.ts", "tests/**/*.ts", "tests/**/*.mjs", "scripts/*.mjs"]
     },
     "packages/*": {
       "entry": ["src/index.ts!", "src/**/*.test.ts"],
@@ -14,8 +14,9 @@
       "ignoreDependencies": ["ffmpeg-static", "ffprobe-static", "zod"]
     },
     "apps/desktop": {
-      "entry": ["src/main/index.ts!", "src/main/screenshots/overview-worker.ts!", "src/preload/*.ts!", "src/renderer/app/index.tsx!", "src/**/*.test.ts", "vite.*.config.ts"],
-      "project": ["src/**/*.ts", "src/**/*.tsx", "vite.*.config.ts"]
+      "entry": ["src/main/index.ts!", "src/main/screenshots/overview-worker.ts!", "src/preload/*.ts!", "src/renderer/app/index.tsx!", "src/**/*.test.ts", "vite.*.config.ts", "scripts/*.mjs"],
+      "project": ["src/**/*.ts", "src/**/*.tsx", "vite.*.config.ts", "scripts/*.mjs"],
+      "ignoreDependencies": ["electron-builder"]
     }
   }
 }

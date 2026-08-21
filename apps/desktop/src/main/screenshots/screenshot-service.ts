@@ -1,6 +1,7 @@
 import { BrowserWindow, dialog } from "electron";
 import { promises as fs } from "node:fs";
 import { Worker } from "node:worker_threads";
+import { extname, isAbsolute } from "node:path";
 import type { PaneRegistry } from "../panes/pane-registry.js";
 
 interface WorkerResponse {
@@ -8,12 +9,24 @@ interface WorkerResponse {
   readonly png?: Uint8Array;
   readonly error?: string;
 }
+function testOutputPath(variable: "HOOLYPANE_TEST_PANE_PNG" | "HOOLYPANE_TEST_OVERVIEW_PNG"): string | undefined {
+  if (process.env.HOOLYPANE_TEST_MODE !== "1") return undefined;
+  const value = process.env[variable];
+  if (!value) return undefined;
+  if (!isAbsolute(value) || extname(value).toLowerCase() !== ".png") throw new Error(`${variable} must be an absolute PNG path`);
+  return value;
+}
 
 export async function capturePane(window: BrowserWindow, registry: PaneRegistry, paneId: string): Promise<void> {
   const pane = registry.getPane(paneId);
   const state = registry.getPaneState(paneId);
   if (!pane || !state) throw new Error(`unknown pane: ${paneId}`);
   const image = await pane.view.webContents.capturePage();
+  const directPath = testOutputPath("HOOLYPANE_TEST_PANE_PNG");
+  if (directPath) {
+    await fs.writeFile(directPath, image.toPNG());
+    return;
+  }
   const selection = await dialog.showSaveDialog(window, {
     title: `Save ${state.name} screenshot`,
     defaultPath: `${state.id}.png`,
@@ -36,6 +49,11 @@ export async function captureOverview(window: BrowserWindow, registry: PaneRegis
     }
   }));
   const png = await composeOverview(tiles, "#111318");
+  const directPath = testOutputPath("HOOLYPANE_TEST_OVERVIEW_PNG");
+  if (directPath) {
+    await fs.writeFile(directPath, png);
+    return;
+  }
   const selection = await dialog.showSaveDialog(window, {
     title: "Save Hoolypane overview",
     defaultPath: "hoolypane-overview.png",

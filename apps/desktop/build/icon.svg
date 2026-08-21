@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#080b12"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#74c7ff"/>
+      <stop offset="1" stop-color="#5b7cff"/>
+    </linearGradient>
+  </defs>
+  <rect x="40" y="40" width="944" height="944" rx="220" fill="url(#background)"/>
+  <rect x="168" y="188" width="688" height="648" rx="76" fill="#151d2c" stroke="#34445f" stroke-width="24"/>
+  <rect x="220" y="246" width="250" height="220" rx="34" fill="#0b101b" stroke="url(#accent)" stroke-width="24"/>
+  <rect x="514" y="246" width="290" height="220" rx="34" fill="#0b101b" stroke="url(#accent)" stroke-width="24"/>
+  <rect x="220" y="510" width="340" height="266" rx="34" fill="#0b101b" stroke="url(#accent)" stroke-width="24"/>
+  <rect x="604" y="510" width="200" height="266" rx="34" fill="#0b101b" stroke="url(#accent)" stroke-width="24"/>
+  <path d="M342 318v76M306 356h72M636 318v76M600 356h72M384 598v90M339 643h90M704 598v90M659 643h90" stroke="#dff4ff" stroke-width="28" stroke-linecap="round"/>
+</svg>

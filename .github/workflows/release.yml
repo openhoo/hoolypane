@@ -12,10 +12,10 @@ jobs:
   qualify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: pnpm
@@ -34,12 +34,7 @@ jobs:
           npm init -y
           npm install "$GITHUB_WORKSPACE"/dist/hoolypane-runner-*.tgz
           npx hoolypane --help || test $? -eq 1
-      - name: Publish runner
-        if: ${{ secrets.NPM_TOKEN != '' }}
-        run: pnpm --filter @hoolypane/runner publish --provenance --access public --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: runner-tarball
           path: dist/*.tgz
@@ -47,6 +42,7 @@ jobs:
   desktop:
     needs: qualify
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -57,35 +53,64 @@ jobs:
             command: package:mac
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: pnpm
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
-      - run: pnpm ${{ matrix.command }}
+      - run: pnpm build
+      - name: Run Linux desktop E2E
+        if: runner.os == 'Linux'
+        run: env -u DBUS_SESSION_BUS_ADDRESS -u WAYLAND_DISPLAY LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a pnpm test:desktop
+      - name: Run native desktop E2E
+        if: runner.os != 'Linux'
+        run: pnpm test:desktop
+      - name: Run Linux desktop performance gate
+        if: runner.os == 'Linux'
+        run: env -u DBUS_SESSION_BUS_ADDRESS -u WAYLAND_DISPLAY LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a pnpm benchmark:desktop
+      - name: Run native desktop performance gate
+        if: runner.os != 'Linux'
+        run: pnpm benchmark:desktop
+      - name: Package native desktop
+        run: pnpm ${{ matrix.command }}
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      - uses: actions/upload-artifact@v4
+      - name: Smoke Linux package
+        if: runner.os == 'Linux'
+        run: env -u DBUS_SESSION_BUS_ADDRESS -u WAYLAND_DISPLAY LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a pnpm smoke:desktop-package -- dist/desktop
+      - name: Smoke native package
+        if: runner.os != 'Linux'
+        run: pnpm smoke:desktop-package -- dist/desktop
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: desktop-${{ matrix.os }}
           path: dist/desktop/*
 
-  github-release:
-    needs: desktop
+  publish:
+    needs: [qualify, desktop]
     runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: release-artifacts
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      - name: Publish runner
+        if: env.NODE_AUTH_TOKEN != ''
+        run: npm publish release-artifacts/hoolypane-runner-*.tgz --provenance --access public
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: release-artifacts/*

@@ -1,6 +1,6 @@
 {
   "name": "@hoolypane/desktop",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.1",
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-only",
@@ -11,11 +11,12 @@
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "vite --config vite.renderer.config.ts",
-    "build": "vite build --config vite.main.config.ts && vite build --config vite.preload.config.ts --mode chrome && vite build --config vite.preload.config.ts --mode pane && vite build --config vite.renderer.config.ts",
+    "icons": "node scripts/generate-icons.mjs",
+    "build": "pnpm icons && vite build --config vite.main.config.ts && vite build --config vite.preload.config.ts --mode chrome && vite build --config vite.preload.config.ts --mode pane && vite build --config vite.renderer.config.ts",
     "start": "electron .",
-    "package:linux": "pnpm build && electron-builder --linux --publish never --config electron-builder.yml",
-    "package:windows": "pnpm build && electron-builder --windows --publish never --config electron-builder.yml",
-    "package:mac": "pnpm build && electron-builder --mac --publish never --config electron-builder.yml"
+    "package:linux": "pnpm build && node scripts/package-desktop.mjs linux",
+    "package:windows": "pnpm build && node scripts/package-desktop.mjs windows",
+    "package:mac": "pnpm build && node scripts/package-desktop.mjs mac"
   },
   "dependencies": {
     "sharp": "0.34.3",

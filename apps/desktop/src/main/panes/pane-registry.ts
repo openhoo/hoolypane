@@ -1,12 +1,12 @@
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, session, type Session, type WebContents, WebContentsView } from "electron";
-import { BoundsSnapshotSchema, ViewportSpecSchema, type ViewportSpec } from "@hoolypane/contracts";
+import { BoundsSnapshotSchema, IPC_CHANNELS, PaneGenerationSchema, ViewportSpecSchema, type ViewportSpec } from "@hoolypane/contracts";
 import { validateBoundsSnapshot, type Bounds } from "./layout.js";
 import { normalizeUrl } from "./url.js";
 import { addPane, closePane, defaultWorkspace, duplicatePane, reorderPane, rotatePane, updatePane, type PaneState, type WorkspaceState } from "./workspace.js";
 
 type PaneFailure = { paneId: string; message: string };
-type PaneRecord = { id: string; view: WebContentsView; lastBounds?: Bounds; debuggerAttached: boolean };
+type PaneRecord = { id: string; view: WebContentsView; lastBounds?: Bounds; debuggerAttached: boolean; documentGeneration: number };
 
 export class PaneRegistry {
   readonly panes = new Map<string, PaneRecord>();
@@ -55,7 +55,7 @@ export class PaneRegistry {
     if (!this.window) throw new Error("pane registry has no window");
     const view = new WebContentsView({ webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, partition: "persist:hoolypane", preload: this.panePreloadPath() } });
     view.webContents.setBackgroundThrottling(false);
-    const record: PaneRecord = { id, view, debuggerAttached: false };
+    const record: PaneRecord = { id, view, debuggerAttached: false, documentGeneration: 0 };
     this.panes.set(id, record);
     this.window.contentView.addChildView(view);
     this.workspace = this.workspace.order.includes(id) ? this.workspace : addPane(this.workspace, { ...valid, id }, this.workspace.sharedUrl);
@@ -141,6 +141,13 @@ export class PaneRegistry {
 
   private bindPane(record: PaneRecord): void {
     const contents = record.view.webContents;
+    contents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+      if (!isMainFrame || isInPlace) return;
+      record.documentGeneration += 1;
+    });
+    contents.on("did-finish-load", () => {
+      contents.send(IPC_CHANNELS.paneGeneration, PaneGenerationSchema.parse({ documentGeneration: record.documentGeneration }));
+    });
     contents.on("did-start-loading", () => this.setPane(record.id, { loading: true, failure: null }));
     contents.on("did-stop-loading", () => this.setPane(record.id, { loading: false, canGoBack: contents.canGoBack(), canGoForward: contents.canGoForward() }));
     contents.on("did-navigate", (_event, url) => this.setPane(record.id, { url: normalizeUrl(url), canGoBack: contents.canGoBack(), canGoForward: contents.canGoForward() }));

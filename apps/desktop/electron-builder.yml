@@ -3,6 +3,7 @@ productName: Hoolypane
 copyright: Copyright © 2026 Hoolypane contributors
 electronVersion: 43.4.1
 directories:
+  buildResources: build
   output: ../../dist/desktop
 files:
   - dist/**
@@ -16,17 +17,20 @@ asarUnpack:
 npmRebuild: true
 artifactName: ${productName}-${version}-${os}-${arch}-unsigned.${ext}
 linux:
+  icon: build/icons
   category: Development
   target:
     - AppImage
     - deb
 win:
+  icon: build/icon.ico
   target:
     - nsis
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
 mac:
+  icon: build/icon.icns
   category: public.app-category.developer-tools
   hardenedRuntime: true
   gatekeeperAssess: false
