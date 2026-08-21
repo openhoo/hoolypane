@@ -114,4 +114,10 @@ jobs:
         run: npm publish ./release-artifacts/hoolypane-runner-*.tgz --provenance --access public --tag beta
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          files: release-artifacts/*
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            release-artifacts/*.AppImage
+            release-artifacts/*.deb
+            release-artifacts/*.dmg
+            release-artifacts/*.exe
+            release-artifacts/hoolypane-runner-*.tgz
