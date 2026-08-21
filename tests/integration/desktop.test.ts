@@ -102,6 +102,8 @@ async function selectSourceDark(): Promise<void> {
     if (!source) throw new Error("desktop source pane missing");
     await source.debugger.sendCommand("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "ArrowDown", code: "ArrowDown" });
     await source.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "ArrowDown", code: "ArrowDown" });
+    await source.debugger.sendCommand("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Enter", code: "Enter" });
+    await source.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter" });
   });
 }
 
