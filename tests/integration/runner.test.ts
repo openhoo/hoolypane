@@ -55,7 +55,8 @@ describe("real runner", () => {
     const manifest = JSON.parse(await readFile(join(output, "manifest.json"), "utf8")) as { contract: string; validationSuccess: boolean; durationFrames: number };
     expect(manifest).toMatchObject({ contract: "multi-viewport-cfr-v1", validationSuccess: true });
     expect(manifest.durationFrames).toBeGreaterThan(0);
-  }, 60_000);
+    // Full flow incl. six-figure fixture page, recording and ffmpeg encode; 60s was too tight on CI runners.
+  }, 120_000);
 
   it("reports every viewport affected by a failed barrier", async () => {
     const output = await outputDirectory("failure");
