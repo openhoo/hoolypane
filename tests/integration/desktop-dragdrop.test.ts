@@ -1,6 +1,7 @@
-import { rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, expect, it } from "vitest";
+import { join } from "node:path";
 import { launchDesktopApp, pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
 
 const FIXTURE_PORT = 4186;
@@ -84,6 +85,13 @@ it("drag and drop moves a pane and persists the position", async () => {
     await new Promise((resolveSleep) => setTimeout(resolveSleep, 40));
   }
   await chrome.mouse.up();
+
+  // Wait until the workspace store flushed the new position (graceful-close races the async write).
+  const workspaceFile = join(userDataDir, "user-data", "workspace.json");
+  await pollUntil(async () => {
+    const saved = await readFile(workspaceFile, "utf8").then(JSON.parse).catch(() => null);
+    return saved?.positions?.["desktop-1440"]?.x === undefined ? null : saved.positions["desktop-1440"];
+  }, 10_000);
 
   const moved = await pollUntil(async () => {
     const boxes = await cardBoxes(chrome);

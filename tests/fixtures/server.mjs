@@ -80,6 +80,25 @@ footer{border-top:1px solid var(--line);margin-top:48px;padding:26px 28px;displa
   <a class="btn btn-primary" href="#">Start free</a>
 </nav>
 
+<section class="console" id="demo">
+  <div class="panel">
+    <h2>Live demo console</h2>
+    <p class="lede">This panel is wired to a real backend — change the values and watch the status react.</p>
+    <div class="grid2">
+      <label class="field">Display name<input data-testid="name" value="" placeholder="Ada Lovelace"></label>
+      <label class="field">Interface theme<select data-testid="theme"><option value="light">Light</option><option value="dark">Dark</option></select></label>
+      <label class="check"><input data-testid="subscribe" type="checkbox"> Subscribe to the Nimbus changelog</label>
+      <label class="field">Quick command<input data-testid="command" placeholder="Type and press Enter"></label>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" data-testid="apply">Apply changes</button>
+      <output class="status-chip" data-testid="status">idle</output>
+    </div>
+    <div class="scroller" data-testid="scroller"><div class="space"></div></div>
+    <p class="hint">Scroll the stream above — Nimbus ingests events continuously.</p>
+  </div>
+</section>
+
 <header class="hero">
   <span class="pill">● New · Session Replay 2.0</span>
   <h1>Understand every session,<br><em>without drowning in dashboards</em></h1>
@@ -110,25 +129,6 @@ footer{border-top:1px solid var(--line);margin-top:48px;padding:26px 28px;displa
   </div>
 </section>
 
-<section class="console" id="demo">
-  <div class="panel">
-    <h2>Live demo console</h2>
-    <p class="lede">This panel is wired to a real backend — change the values and watch the status react.</p>
-    <div class="grid2">
-      <label class="field">Display name<input data-testid="name" value="" placeholder="Ada Lovelace"></label>
-      <label class="field">Interface theme<select data-testid="theme"><option value="light">Light</option><option value="dark">Dark</option></select></label>
-      <label class="check"><input data-testid="subscribe" type="checkbox"> Subscribe to the Nimbus changelog</label>
-      <label class="field">Quick command<input data-testid="command" placeholder="Type and press Enter"></label>
-    </div>
-    <div class="actions">
-      <button class="btn btn-primary" data-testid="apply">Apply changes</button>
-      <output class="status-chip" data-testid="status">idle</output>
-    </div>
-    <div class="scroller" data-testid="scroller"><div class="space"></div></div>
-    <p class="hint">Scroll the stream above — Nimbus ingests events continuously.</p>
-  </div>
-</section>
-
 <footer>
   <span>© 2026 Nimbus Labs, Inc.</span>
   <span>Privacy · Terms · Status · hello@nimbus.dev</span>
@@ -138,7 +138,6 @@ footer{border-top:1px solid var(--line);margin-top:48px;padding:26px 28px;displa
 const status=document.querySelector('[data-testid=status]');
 document.querySelector('[data-testid=apply]').addEventListener('click',()=>{status.textContent='applied';navigator.sendBeacon('/applied')});
 document.querySelector('[data-testid=command]').addEventListener('keydown',event=>{if(event.key==='Enter')status.textContent='entered'});
-document.querySelector('[data-testid=theme]').addEventListener('change',event=>{document.documentElement.style.colorScheme=event.target.value});
 </script>
 </body></html>`;
 
