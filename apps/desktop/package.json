@@ -31,6 +31,7 @@
     "@hoolypane/contracts": "workspace:*",
     "@hoolypane/flow": "workspace:*",
     "@preact/preset-vite": "2.10.2",
+    "@tailwindcss/vite": "4.3.3",
     "electron": "43.4.1",
     "electron-builder": "26.15.3",
     "electron-builder-squirrel-windows": "26.15.3",

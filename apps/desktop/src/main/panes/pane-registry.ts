@@ -65,6 +65,10 @@ export class PaneRegistry {
       if (!this.isLive(record)) return id;
       await this.configureViewport(record);
       if (!this.isLive(record)) return id;
+      // The chrome renderer measures pane cards once when they mount; if this record was
+      // created after that measurement, the snapshot skipped it and no renderer churn will
+      // re-emit. Replay this record's measured entry so late-created panes receive geometry.
+      this.applyBoundsIfCached(record);
       this.bindPane(record);
       const pane = this.getPaneState(id);
       // Content-load failures are reported per pane via did-fail-load; creation must not fail on network problems.
@@ -128,16 +132,31 @@ export class PaneRegistry {
   forward(paneId: string): void { this.panes.get(paneId)?.view.webContents.goForward(); }
   reload(paneId: string): void { this.panes.get(paneId)?.view.webContents.reload(); }
 
+  private lastBoundsSnapshot: BoundsSnapshot | undefined;
+
   applyBounds(snapshot: BoundsSnapshot): void {
     validateBoundsSnapshot(snapshot, this.workspace.order);
+    this.lastBoundsSnapshot = snapshot;
     for (const item of snapshot.panes) {
       const record = this.panes.get(item.paneId);
       if (!record || record.lastBounds && sameBounds(record.lastBounds, item.bounds)) continue;
-      const visible = item.bounds.width > 0 && item.bounds.height > 0;
-      record.view.setBounds(visible ? item.bounds : { x: 0, y: 0, width: 1, height: 1 });
-      record.lastBounds = item.bounds;
-      void this.configureViewport(record);
+      this.applyBoundsEntry(record, item, snapshot.windowWidth, snapshot.windowHeight);
     }
+  }
+
+  /** Re-applies the latest renderer-measured entry for a record created after that measurement. */
+  private applyBoundsIfCached(record: PaneRecord): void {
+    const snapshot = this.lastBoundsSnapshot;
+    const item = snapshot?.panes.find((entry) => entry.paneId === record.id);
+    if (snapshot && item) this.applyBoundsEntry(record, item, snapshot.windowWidth, snapshot.windowHeight);
+  }
+
+  private applyBoundsEntry(record: PaneRecord, item: BoundsSnapshot["panes"][number], windowWidth: number, windowHeight: number): void {
+    if (item.bounds.x + item.bounds.width > windowWidth || item.bounds.y + item.bounds.height > windowHeight) return;
+    const visible = item.bounds.width > 0 && item.bounds.height > 0;
+    record.view.setBounds(visible ? item.bounds : { x: 0, y: 0, width: 1, height: 1 });
+    record.lastBounds = item.bounds;
+    void this.configureViewport(record);
   }
 
   async destroy(): Promise<void> {

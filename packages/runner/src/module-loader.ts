@@ -1,5 +1,6 @@
 import { build } from "esbuild";
 import type { Plugin, PluginBuild } from "esbuild";
+import { createRequire } from "node:module";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
@@ -33,11 +34,12 @@ async function pruneStaleArtifacts(cacheDir: string): Promise<void> {
   }));
 }
 
-// User artifacts bundle bare "@hoolypane/*" and "playwright" specifiers so they load regardless of
-// installation location; recorded flows may live outside any node_modules tree, so resolution walks up
-// from the runner installation itself. Playwright stays external at an absolute file URL, so its own
-// dependencies (playwright-core) resolve from the playwright package's real location. Pure fs access only:
-// import.meta.resolve is unavailable under Vitest/Vite SSR transforms.
+// User artifacts bundle bare "@hoolypane/*" specifiers and keep "playwright" external at an absolute
+// file URL, so artifacts load regardless of installation location: "@hoolypane/*" resolution walks up
+// from the runner installation itself (pure fs access; import.meta.resolve is unavailable under
+// Vitest/Vite SSR transforms), while playwright resolves through Node's own resolver in the runner's
+// module context, keeping exports conditions authoritative. Playwright's own dependencies
+// (playwright-core) resolve from the playwright package's real location.
 function hoolypaneEntry(specifier: string): string {
   let dir = dirname(fileURLToPath(import.meta.url));
   for (;;) {
@@ -88,7 +90,7 @@ function playwrightResolution(): Plugin {
   return {
     name: "playwright-resolution",
     setup(pluginBuild: PluginBuild): void {
-      pluginBuild.onResolve({ filter: /^playwright$/ }, (args) => ({ path: pathToFileURL(hoolypaneEntry(args.path)).href }));
+      pluginBuild.onResolve({ filter: /^playwright$/ }, (args) => ({ path: pathToFileURL(createRequire(import.meta.url).resolve(args.path)).href }));
     },
   };
 }

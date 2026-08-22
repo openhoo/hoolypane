@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+/* Hoolypane devtool theme tokens — flat dark palette, no gradients. */
+@theme {
+  --color-canvas: #1e222a;
+  --color-panel: #262b35;
+  --color-elevated: #2d333f;
+  --color-field: #20242c;
+  --color-edge: #333a47;
+  --color-accent: #0eaa74;
+  --color-danger: #ef4444;
+  --color-warning: #f59e0b;
+  --color-ink: #e6e9ef;
+  --color-mute: #aab3c2;
+
+  /* Inter when locally installed, otherwise the system stack (no webfont download). */
+  --font-sans: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
