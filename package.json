@@ -7,12 +7,15 @@
     "node": ">=24"
   },
   "packageManager": "pnpm@10.15.0",
-  "repository": { "type": "git", "url": "https://github.com/openhoo/hoolypane.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openhoo/hoolypane.git"
+  },
   "scripts": {
     "typecheck": "tsc -b --pretty false",
     "test:unit": "vitest run packages apps",
     "test:runner": "pnpm build:runner && vitest run packages/runner/src tests/integration/runner.test.ts",
-    "test:desktop": "vitest run --no-file-parallelism tests/integration/desktop.test.ts tests/integration/desktop-artifacts.test.ts tests/integration/desktop-resilience.test.ts",
+    "test:desktop": "vitest run --no-file-parallelism tests/integration/desktop.test.ts tests/integration/desktop-artifacts.test.ts tests/integration/desktop-resilience.test.ts tests/integration/desktop-dragdrop.test.ts",
     "build:runner": "pnpm --filter @hoolypane/runner build",
     "prepare:electron": "node apps/desktop/node_modules/electron/install.js",
     "hoolypane": "node packages/runner/dist/cli.js",

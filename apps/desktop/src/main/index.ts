@@ -146,6 +146,7 @@ async function handleCommand(command: ChromeCommand): Promise<void> {
     case "forward": registry.forward(command.paneId); break;
     case "reload": registry.reload(command.paneId); break;
     case "set-layout": registry.setLayout(command.layout); break;
+    case "move-pane": registry.setPanePosition(command.paneId, command.x, command.y); break;
     case "set-sync": registry.setSync(command.enabled); break;
     case "record-start": {
       const firstPane = registry.getState().order[0];

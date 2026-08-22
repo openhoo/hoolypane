@@ -50,7 +50,11 @@ async function clickDesktopSource(): Promise<void> {
       if (await candidate.executeJavaScript("innerWidth") === 1440) { source = candidate; break; }
     }
     if (!source) throw new Error("desktop source pane missing");
-    const box = await source.executeJavaScript(`document.querySelector('[data-testid="apply"]').getBoundingClientRect().toJSON()`);
+    const box = await source.executeJavaScript(`(() => {
+      const element = document.querySelector('[data-testid="apply"]');
+      element.scrollIntoView({ block: "center", inline: "center" });
+      return element.getBoundingClientRect().toJSON();
+    })()`);
     const x = (box.x + box.width / 2) * input.scale;
     const y = (box.y + box.height / 2) * input.scale;
     await source.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });

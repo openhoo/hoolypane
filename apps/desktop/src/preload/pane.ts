@@ -3,15 +3,21 @@ import { IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, ReplayReq
 
 let documentGeneration = 0;
 const suppressed = new Map<number, number>(); // actionId → documentGeneration the action was resolved against
-// Set while replay-driven scrollIntoView moves scrollables: those trusted scrolls are our own doing,
-// not user intent, and must never be observed back (they would echo into every other pane).
-let autoScrollDepth = 0;
+// Scroll positions written by replay-driven scrolling (apply-dom scrollTo and scrollIntoView). A
+// trusted scroll event landing exactly on such a position is our own echo, never user intent, and
+// must never be observed back (it would re-broadcast into every other pane). Events arriving at a
+// diverging position consume the entry and are mirrored: the user has taken over. Keyed weakly, so
+// entries vanish with their elements and need no timers — unlike a frame-callback-based guard,
+// which starves under delayed frames and then swallows genuine user scrolls.
+const programmaticScrolls = new WeakMap<Element, { top: number; left: number }>();
+function recordProgrammaticScroll(container: Element): void {
+  programmaticScrolls.set(container, { top: container.scrollTop, left: container.scrollLeft });
+}
 function autoScrollCenter(element: Element): void {
-  autoScrollDepth += 1;
-  try {
-    element.scrollIntoView({ block: "center", inline: "center" });
-  } finally {
-    window.requestAnimationFrame(() => { autoScrollDepth -= 1; });
+  element.scrollIntoView({ block: "center", inline: "center" });
+  // scrollIntoView may move the element itself or any scrollable ancestor; remember each final position.
+  for (let node: Element | null = element; node; node = node.parentElement) {
+    if (node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth) recordProgrammaticScroll(node);
   }
 }
 let pendingFill: { element: HTMLInputElement | HTMLTextAreaElement; timer: number } | undefined;
@@ -170,11 +176,17 @@ document.addEventListener("keydown", (event) => {
   record(() => ({ kind: "press", locator: locatorFor(target), key: event.key }));
 }, true);
 document.addEventListener("scroll", (event) => {
-  if (!event.isTrusted || suppressed.size > 0 || scrollFrame || autoScrollDepth > 0) return;
+  if (!event.isTrusted || suppressed.size > 0 || scrollFrame) return;
   // Document-level scrolls are viewport management, and replay-driven auto-scrolls are our own
   // doing — recording either would mirror them back into all other panes as phantom user actions.
   if (!(event.target instanceof HTMLElement) || event.target === document.documentElement || event.target === document.body) return;
   const scrolled = event.target;
+  const programmed = programmaticScrolls.get(scrolled);
+  if (programmed) {
+    programmaticScrolls.delete(scrolled);
+    // An echo lands exactly where the replay scrolled; a diverging position means the user moved it.
+    if (Math.abs(scrolled.scrollTop - programmed.top) <= 1 && Math.abs(scrolled.scrollLeft - programmed.left) <= 1) return;
+  }
   scrollFrame = window.requestAnimationFrame(() => {
     scrollFrame = 0;
     const target = scrolled;
@@ -216,6 +228,7 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
           element.dispatchEvent(new Event("change", { bubbles: true }));
         } else if (request.action.kind === "scroll" && element instanceof HTMLElement) {
           element.scrollTo({ left: request.action.horizontalRatio * Math.max(0, element.scrollWidth - element.clientWidth), top: request.action.verticalRatio * Math.max(0, element.scrollHeight - element.clientHeight) });
+          recordProgrammaticScroll(element);
           element.dispatchEvent(new Event("scroll", { bubbles: true }));
         }
       }

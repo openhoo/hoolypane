@@ -39,6 +39,7 @@ export const ChromeCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("navigate"), url: z.string().min(1) }),
   z.strictObject({ kind: z.enum(["back", "forward", "reload"]), paneId }),
   z.strictObject({ kind: z.literal("set-layout"), layout: LayoutModeSchema }),
+  z.strictObject({ kind: z.literal("move-pane"), paneId, x: z.number().int().min(0), y: z.number().int().min(0) }),
   z.strictObject({ kind: z.literal("set-sync"), enabled: z.boolean() }),
   z.strictObject({ kind: z.enum(["capture-pane"]), paneId }),
   z.strictObject({ kind: z.enum(["capture-overview", "record-start", "record-stop"]) }),

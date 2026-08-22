@@ -5,7 +5,7 @@ export type { HoolypaneConfig, ResolvedHoolypaneConfig, ResolvedRecordingConfig 
 export { BoundsSnapshotSchema, ChromeCommandSchema, IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, ReplayRequestSchema, ReplayResultSchema } from "./ipc.js";
 export type { BoundsSnapshot, ChromeCommand, ReplayRequest, ReplayResult } from "./ipc.js";
 export { VIEWPORT_PRESETS } from "./presets.js";
-export { ChromeStateSchema, LayoutModeSchema, PaneStateSchema, WorkspaceStateSchema, defaultWorkspace } from "./state.js";
-export type { ChromeState, PaneState, WorkspaceState } from "./state.js";
+export { ChromeStateSchema, LayoutModeSchema, PanePositionSchema, WorkspaceStateSchema, defaultWorkspace } from "./state.js";
+export type { ChromeState, LayoutMode, PanePosition, PaneState, WorkspaceState } from "./state.js";
 export { encodedDimension, ViewportSpecSchema } from "./viewport.js";
 export type { ViewportSpec } from "./viewport.js";

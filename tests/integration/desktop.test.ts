@@ -126,8 +126,19 @@ describe("direct Electron surfaces", () => {
     await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.status === "applied"), "click");
     await pressSourceEnter();
     await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.status === "entered"), "press");
-    await scrollSource();
-    await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.scrollRatio > 0.95), "scroll");
+    // A pane renderer occasionally reloads mid-test (webContents identity change), which resets its
+    // scroll observation; retry the whole scroll action once before giving up.
+    await (async () => {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await scrollSource();
+        try {
+          await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.scrollRatio > 0.95), "scroll");
+          return;
+        } catch (error) {
+          if (attempt === 1) throw error;
+        }
+      }
+    })();
 
     await chrome.getByRole("button", { name: "Add custom" }).click();
     await pollUntil(async () => {

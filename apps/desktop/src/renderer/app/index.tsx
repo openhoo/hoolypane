@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from "preact/hooks";
 import { render } from "preact";
-import { ChromeStateSchema, type ChromeCommand } from "@hoolypane/contracts";
+import { ChromeStateSchema, type ChromeCommand, type PanePosition } from "@hoolypane/contracts";
 import { ErrorToast, PaneCard, Toolbar, type SendCommand } from "./components.js";
 import { installDevMock } from "./devMock.js";
 import { chromeReducer, initialChromeState, type ChromeState } from "./state.js";
@@ -46,6 +46,7 @@ function computePaneTiles(
   areaHeight: number,
   panes: readonly TileInput[],
   focusedPaneId: string | null,
+  positions: Readonly<Record<string, PanePosition>> = {},
 ): Map<string, PaneTile> {
   const tiles = new Map<string, PaneTile>();
   const innerWidth = areaWidth - LAYOUT_PADDING * 2;
@@ -113,7 +114,10 @@ function computePaneTiles(
       zoom: tile.zoom * fit,
     }));
   }
-  for (const tile of bestPlacement) tiles.set(tile.id, tile);
+  for (const tile of bestPlacement) {
+    const stored = positions[tile.id];
+    tiles.set(tile.id, stored ? { ...tile, x: stored.x, y: stored.y } : tile);
+  }
   return tiles;
 }
 
@@ -167,8 +171,68 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
     workspaceSize.height,
     orderedPanes.map((pane) => ({ id: pane.id, viewportWidth: pane.viewport.width, viewportHeight: pane.viewport.height })),
     state.focusedPaneId,
+    state.layout === "free" ? state.positions : {},
   );
   expectedSurfaceCount.current = orderedPanes.length;
+  const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [guides, setGuides] = useState<{ xs: number[]; ys: number[] }>({ xs: [], ys: [] });
+  const tilesRef = useRef(tiles);
+  tilesRef.current = tiles;
+  const startPaneDrag = (paneId: string, event: PointerEvent): void => {
+    const tile = tilesRef.current.get(paneId);
+    if (!tile || event.button !== 0) return;
+    const offsetX = event.clientX - tile.x;
+    const offsetY = event.clientY - tile.y;
+    const SNAP = 8;
+    const bounds = workspaceRef.current?.getBoundingClientRect();
+    const width = bounds?.width ?? workspaceSize.width;
+    const height = bounds?.height ?? workspaceSize.height;
+
+    const move = (moveEvent: PointerEvent): void => {
+      const currentTiles = tilesRef.current;
+      let x = Math.round(moveEvent.clientX - offsetX);
+      let y = Math.round(moveEvent.clientY - offsetY);
+      const dragged = currentTiles.get(paneId);
+      const cardWidth = dragged?.width ?? 0;
+      const cardHeight = dragged?.height ?? 0;
+      x = Math.max(0, Math.min(width - cardWidth, x));
+      y = Math.max(0, Math.min(height - cardHeight, y));
+      // Automatic alignment: snap the dragged card's edges to sibling edges within an 8px radius
+      // and surface the active alignment lines while dragging.
+      const snapXs: number[] = [LAYOUT_PADDING, width - LAYOUT_PADDING - cardWidth];
+      const snapYs: number[] = [LAYOUT_PADDING, height - LAYOUT_PADDING - cardHeight];
+      for (const sibling of currentTiles.values()) {
+        if (sibling.id === paneId) continue;
+        snapXs.push(sibling.x, sibling.x + sibling.width);
+        snapYs.push(sibling.y, sibling.y + sibling.height);
+      }
+      const activeXs: number[] = [];
+      const activeYs: number[] = [];
+      for (const candidate of snapXs) {
+        if (Math.abs(x - candidate) <= SNAP) { x = candidate; activeXs.push(candidate); }
+        else if (Math.abs(x + cardWidth - candidate) <= SNAP) { x = candidate - cardWidth; activeXs.push(candidate); }
+      }
+      for (const candidate of snapYs) {
+        if (Math.abs(y - candidate) <= SNAP) { y = candidate; activeYs.push(candidate); }
+        else if (Math.abs(y + cardHeight - candidate) <= SNAP) { y = candidate - cardHeight; activeYs.push(candidate); }
+      }
+      setGuides({ xs: [...new Set(activeXs)], ys: [...new Set(activeYs)] });
+      setDrag({ id: paneId, x, y });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      setDrag((current) => {
+        if (current && current.id === paneId) window.hoolypaneChrome.send({ kind: "move-pane", paneId, x: current.x, y: current.y });
+        return null;
+      });
+      setGuides({ xs: [], ys: [] });
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    setDrag({ id: paneId, x: tile.x, y: tile.y });
+  };
+
   const surfacesKey = `${state.order.join("\u0000")}|${state.layout}|${workspaceSize.width}×${workspaceSize.height}`;
   useEffect(() => {
     let frame = 0;
@@ -233,7 +297,8 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
         className="relative min-h-0 flex-1 overflow-auto p-2"
       >
         {orderedPanes.map((pane) => {
-          const tile = tiles.get(pane.id);
+          const baseTile = tiles.get(pane.id);
+          const tile = drag && drag.id === pane.id ? { ...(baseTile ?? { id: pane.id, zoom: 1, width: 0, height: 0 }), x: drag.x, y: drag.y } : baseTile;
           const focusHidden = state.layout === "focus" && state.focusedPaneId !== null && state.focusedPaneId !== pane.id;
           if (!tile && !focusHidden) return null;
           return (
@@ -242,12 +307,20 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
               pane={pane}
               focused={state.focusedPaneId === pane.id}
               closable={state.order.length > 1}
+              dragging={drag?.id === pane.id}
+              onHeaderPointerDown={(event) => startPaneDrag(pane.id, event)}
               {...(tile ? { placement: { x: tile.x, y: tile.y, width: tile.width, height: tile.height }, zoom: tile.zoom } : {})}
               hidden={!tile || focusHidden}
               send={send}
             />
           );
         })}
+        {guides.xs.map((x) => (
+          <div key={`gx${x}`} aria-hidden="true" class="pointer-events-none absolute inset-y-0 z-20 w-px bg-accent/70" style={{ left: x }} />
+        ))}
+        {guides.ys.map((y) => (
+          <div key={`gy${y}`} aria-hidden="true" class="pointer-events-none absolute inset-x-0 z-20 h-px bg-accent/70" style={{ top: y }} />
+        ))}
       </section>
       <footer class="flex h-6 shrink-0 items-center justify-between border-t border-edge bg-panel px-2 text-[10px] text-mute">
         <span>{state.order.length} panes · {state.layout}{state.recording ? " · recording" : ""}</span>

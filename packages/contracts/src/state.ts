@@ -3,11 +3,18 @@ import { ActionSchema, HttpUrlSchema, type Action } from "./action.js";
 import { VIEWPORT_PRESETS } from "./presets.js";
 import { ViewportSpecSchema, type ViewportSpec } from "./viewport.js";
 
-export const LayoutModeSchema = z.enum(["grid", "horizontal", "focus"]);
+export const LayoutModeSchema = z.enum(["free", "grid", "horizontal", "focus"]);
+export type LayoutMode = z.infer<typeof LayoutModeSchema>;
+
+export const PanePositionSchema = z.strictObject({
+  x: z.number().int().min(0),
+  y: z.number().int().min(0),
+});
+export type PanePosition = z.infer<typeof PanePositionSchema>;
 
 const ActionKinds = ActionSchema.options.map((option) => option.shape.kind.value) as [Action["kind"], ...Action["kind"][]];
 const ActionKindSchema = z.enum(ActionKinds);
-export const PaneStateSchema = z.strictObject({
+const PaneStateSchema = z.strictObject({
   id: z.string().min(1),
   name: z.string().min(1),
   viewport: ViewportSpecSchema,
@@ -29,6 +36,8 @@ export const WorkspaceStateSchema = z.strictObject({
   panes: z.array(PaneStateSchema).min(1),
   order: z.array(z.string().min(1)).min(1),
   layout: LayoutModeSchema,
+  /** Free-layout card positions in workspace coordinates; panes without an entry are auto-tiled. */
+  positions: z.record(z.string().min(1), PanePositionSchema).default({}),
   focusedPaneId: z.string().min(1).nullable(),
   syncEnabled: z.boolean(),
   sharedUrl: HttpUrlSchema,
@@ -58,5 +67,5 @@ function paneFromViewport(viewport: ViewportSpec, id: string, url: string): Pane
 export function defaultWorkspace(url = "https://example.com/"): WorkspaceState {
   const viewports = VIEWPORT_PRESETS;
   const panes = viewports.map((viewport) => paneFromViewport(viewport, viewport.id, url));
-  return { version: 1, panes, order: panes.map((pane) => pane.id), layout: "grid", focusedPaneId: null, syncEnabled: true, sharedUrl: url };
+  return { version: 1, panes, order: panes.map((pane) => pane.id), layout: "free", positions: {}, focusedPaneId: null, syncEnabled: true, sharedUrl: url };
 }

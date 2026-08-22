@@ -202,6 +202,8 @@ export function PaneCard({
   hidden,
   placement,
   zoom,
+  dragging,
+  onHeaderPointerDown,
   send,
 }: {
   pane: PaneState;
@@ -211,19 +213,22 @@ export function PaneCard({
   /** Absolute workspace position; absent before the first layout measurement. */
   placement?: { x: number; y: number; width: number; height: number };
   zoom?: number;
+  dragging?: boolean;
+  onHeaderPointerDown?: (event: PointerEvent) => void;
   send: SendCommand;
 }) {
   return (
     <article
+      data-drag-x={dragging ? placement?.x : undefined}
       style={placement ? { position: "absolute", left: placement.x, top: placement.y, width: placement.width, height: placement.height } : undefined}
-      class={`pane-card @container relative flex min-w-0 select-none flex-col overflow-hidden rounded-xl border shadow-xl shadow-black/30 ${
+      class={`pane-card @container relative flex min-w-0 select-none flex-col overflow-hidden rounded-xl border shadow-xl shadow-black/30 transition-shadow ${
         focused ? "focused ring-2 ring-accent ring-offset-0" : ""
-      } ${hidden ? "hidden" : "border-edge ring-1 ring-white/[0.04] hover:border-accent/40"}`}
+      } ${dragging ? "z-30 border-accent/60 opacity-90" : ""} ${hidden ? "hidden" : dragging ? "border-accent/60" : "border-edge ring-1 ring-white/[0.04] hover:border-accent/40"}`}
     >
       {pane.loading && (
         <div aria-hidden="true" class="absolute inset-x-0 top-0 z-10 h-0.5 animate-pulse bg-accent" />
       )}
-      <header class="flex h-7 shrink-0 items-center gap-0.5 border-b border-edge bg-elevated pl-1 pr-1">
+      <header onPointerDown={(event) => { const target = event.target as HTMLElement; if (target.closest("button, input, select")) return; event.preventDefault(); onHeaderPointerDown?.(event); }} class={`flex h-7 shrink-0 cursor-grab items-center gap-0.5 border-b border-edge bg-elevated pl-1 pr-1 active:cursor-grabbing ${dragging ? "bg-field" : ""}`}>
         <PaneName pane={pane} onRename={(name) => send({ kind: "rename", paneId: pane.id, name })} />
         {pane.failure && (
           <p role="alert" title={pane.failure} class="min-w-0 truncate rounded bg-danger/15 px-1.5 leading-4 text-[11px] text-danger">
