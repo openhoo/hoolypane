@@ -6,15 +6,115 @@ import { installDevMock } from "./devMock.js";
 import { chromeReducer, initialChromeState, type ChromeState } from "./state.js";
 import "../styles.css";
 
-function paneAreaClass(layout: ChromeState["layout"]): string {
-  switch (layout) {
-    case "grid":
-      return "grid flex-1 auto-rows-fr content-start gap-2 overflow-auto p-2 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]";
-    case "horizontal":
-      return "flex flex-1 items-stretch gap-2 overflow-x-auto overflow-y-hidden p-2 [&>.pane-card]:h-auto [&>.pane-card]:w-[360px] [&>.pane-card]:shrink-0";
-    case "focus":
-      return "flex flex-1 gap-2 overflow-hidden p-2 [&>.pane-card]:min-w-0 [&>.pane-card]:flex-1";
+const LAYOUT_PADDING = 8;
+const LAYOUT_GAP = 8;
+const PANE_HEADER_HEIGHT = 28;
+
+interface PaneTile {
+  readonly id: string;
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  /** Content scale the emulation will apply; shown as a zoom chip when below 100%. */
+  readonly zoom: number;
+}
+
+interface TileInput {
+  readonly id: string;
+  readonly viewportWidth: number;
+  readonly viewportHeight: number;
+}
+
+function tileFor(input: TileInput, cellWidth: number, cellHeight: number, x: number, y: number): PaneTile {
+  const zoom = Math.max(0, Math.min(1, cellWidth / input.viewportWidth, cellHeight / input.viewportHeight));
+  const width = Math.round(input.viewportWidth * zoom);
+  const height = Math.round(PANE_HEADER_HEIGHT + input.viewportHeight * zoom);
+  return { id: input.id, x: Math.round(x + (cellWidth - width) / 2), y: Math.round(y + (cellHeight - height) / 2), width, height, zoom };
+}
+
+/**
+ * Tiles panes proportionally to their viewport aspect ratios (Polypane-style): cards are sized to the
+ * scaled viewport instead of uniform grid cells, so a 1440×900 desktop site never shares cell
+ * dimensions with a 390×844 phone. The grid column count maximizes covered area, which also degrades
+ * gracefully in small tiled windows. Only visible panes receive tiles; focus-mode siblings are
+ * rendered hidden so their zero rects keep the bounds contract intact.
+ */
+function computePaneTiles(
+  layout: ChromeState["layout"],
+  areaWidth: number,
+  areaHeight: number,
+  panes: readonly TileInput[],
+  focusedPaneId: string | null,
+): Map<string, PaneTile> {
+  const tiles = new Map<string, PaneTile>();
+  const innerWidth = areaWidth - LAYOUT_PADDING * 2;
+  const innerHeight = areaHeight - LAYOUT_PADDING * 2;
+  if (innerWidth <= 0 || innerHeight <= 0 || panes.length === 0) return tiles;
+  if (layout === "focus") {
+    const visible = focusedPaneId === null ? panes[0] : panes.find((pane) => pane.id === focusedPaneId) ?? panes[0];
+    if (visible) tiles.set(visible.id, tileFor(visible, innerWidth, innerHeight - PANE_HEADER_HEIGHT, LAYOUT_PADDING, LAYOUT_PADDING));
+    return tiles;
   }
+  if (layout === "horizontal") {
+    const contentHeight = innerHeight - PANE_HEADER_HEIGHT;
+    let x = LAYOUT_PADDING;
+    for (const pane of panes) {
+      const zoom = Math.max(0, Math.min(1, contentHeight / pane.viewportHeight));
+      const width = Math.round(pane.viewportWidth * zoom);
+      tiles.set(pane.id, tileFor(pane, width, contentHeight, x, LAYOUT_PADDING));
+      x += width + LAYOUT_GAP;
+    }
+    return tiles;
+  }
+  // Column masonry (Polypane-style): cards keep their viewport aspect ratio at a shared column
+  // width, and each card is placed in the currently shortest column. This packs mixed landscape/
+  // portrait viewports without row-band dead space; the whole arrangement scales down only when it
+  // overshoots the workspace height.
+  let bestCoverage = -1;
+  let bestPlacement: PaneTile[] = [];
+  for (let columns = 1; columns <= panes.length; columns += 1) {
+    const cellWidth = (innerWidth - LAYOUT_GAP * (columns - 1)) / columns;
+    if (cellWidth <= 0) continue;
+    const widthZoom = (pane: TileInput): number => Math.min(1, cellWidth / pane.viewportWidth);
+    const columnHeights: number[] = Array.from({ length: columns }, () => LAYOUT_PADDING);
+    const placement: PaneTile[] = [];
+    for (const pane of panes) {
+      const zoom = widthZoom(pane);
+      const width = Math.round(pane.viewportWidth * zoom);
+      const height = Math.round(PANE_HEADER_HEIGHT + pane.viewportHeight * zoom);
+      let shortest = 0;
+      let shortestHeight = Number.POSITIVE_INFINITY;
+      for (const [index, current] of columnHeights.entries()) {
+        if (current < shortestHeight) {
+          shortest = index;
+          shortestHeight = current;
+        }
+      }
+      const columnX = LAYOUT_PADDING + shortest * (cellWidth + LAYOUT_GAP);
+      placement.push({ id: pane.id, x: Math.round(columnX + (cellWidth - width) / 2), y: Math.round(shortestHeight), width, height, zoom });
+      columnHeights[shortest] = shortestHeight + height + LAYOUT_GAP;
+    }
+    const totalHeight = columnHeights.reduce((tallest, current) => Math.max(tallest, current), 0) - LAYOUT_GAP;
+    const fit = Math.min(1, innerHeight / totalHeight);
+    const coverage = panes.reduce((sum, pane) => {
+      const zoom = widthZoom(pane) * fit;
+      return sum + pane.viewportWidth * zoom * pane.viewportHeight * zoom;
+    }, 0) / (innerWidth * innerHeight);
+    if (coverage <= bestCoverage) continue;
+    bestCoverage = coverage;
+    // Overshoot: scale the finished arrangement uniformly toward the padding origin.
+    bestPlacement = placement.map((tile) => ({
+      ...tile,
+      x: Math.round(LAYOUT_PADDING + (tile.x - LAYOUT_PADDING) * fit),
+      y: Math.round(LAYOUT_PADDING + (tile.y - LAYOUT_PADDING) * fit),
+      width: Math.round(tile.width * fit),
+      height: Math.round(tile.height * fit),
+      zoom: tile.zoom * fit,
+    }));
+  }
+  for (const tile of bestPlacement) tiles.set(tile.id, tile);
+  return tiles;
 }
 
 function rect(element: HTMLElement) {
@@ -35,6 +135,18 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
   const addressFocused = useRef(false);
   const addressDirty = useRef(false);
   const requestEmit = useRef<() => void>(() => {});
+  const expectedSurfaceCount = useRef(0);
+  const workspaceRef = useRef<HTMLElement | null>(null);
+  const [workspaceSize, setWorkspaceSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const section = workspaceRef.current;
+    if (!section) return;
+    const measure = () => setWorkspaceSize({ width: section.clientWidth, height: section.clientHeight });
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(section);
+    return () => observer.disconnect();
+  }, []);
   useEffect(() => window.hoolypaneChrome.subscribe((value) => {
     const parsed = ChromeStateSchema.safeParse(value);
     if (!parsed.success) { console.error("[hoolypane] rejected chrome state", parsed.error.message); return; }
@@ -46,13 +158,31 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
     if (!addressFocused.current && !addressDirty.current) setAddress(next.sharedUrl);
     if (firstSnapshot) requestEmit.current();
   }), []);
-  const surfacesKey = `${state.order.join("\u0000")}|${state.layout}`;
+  const orderedPanes = state.order
+    .map((paneId) => state.panes.find((candidate) => candidate.id === paneId))
+    .filter((pane) => pane !== undefined);
+  const tiles = computePaneTiles(
+    state.layout,
+    workspaceSize.width,
+    workspaceSize.height,
+    orderedPanes.map((pane) => ({ id: pane.id, viewportWidth: pane.viewport.width, viewportHeight: pane.viewport.height })),
+    state.focusedPaneId,
+  );
+  expectedSurfaceCount.current = orderedPanes.length;
+  const surfacesKey = `${state.order.join("\u0000")}|${state.layout}|${workspaceSize.width}×${workspaceSize.height}`;
   useEffect(() => {
     let frame = 0;
     const emit = () => {
       snapshotPending.current = false;
-      const panes = [...document.querySelectorAll<HTMLElement>("[data-pane-surface]")].map((element) => ({ paneId: element.dataset.paneSurface ?? "", bounds: rect(element) }));
-      window.hoolypaneChrome.sendBounds({ windowWidth: Math.max(1, window.innerWidth), windowHeight: Math.max(1, window.innerHeight), panes });
+      const surfaces = [...document.querySelectorAll<HTMLElement>("[data-pane-surface]")];
+      // A snapshot missing panes would fail the main-side validation; wait until every pane card
+      // exists (post-measurement) before emitting.
+      if (surfaces.length !== expectedSurfaceCount.current || surfaces.length === 0) return;
+      window.hoolypaneChrome.sendBounds({
+        windowWidth: Math.max(1, window.innerWidth),
+        windowHeight: Math.max(1, window.innerHeight),
+        panes: surfaces.map((element) => ({ paneId: element.dataset.paneSurface ?? "", bounds: rect(element) })),
+      });
     };
     const request = () => { if (!stateReceived.current || snapshotPending.current) return; snapshotPending.current = true; frame = requestAnimationFrame(emit); };
     requestEmit.current = request;
@@ -86,9 +216,6 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
       setAddress(latestSharedUrl.current);
     }, 0);
   };
-  const orderedPanes = state.order
-    .map((paneId) => state.panes.find((candidate) => candidate.id === paneId))
-    .filter((pane) => pane !== undefined);
   return (
     <main class="flex h-screen w-screen flex-col overflow-hidden bg-canvas font-sans text-[13px] text-ink">
       <Toolbar
@@ -100,20 +227,31 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
         onSubmitUrl={navigate}
         send={send}
       />
-      <section aria-label="Browser panes" className={`min-h-0 ${paneAreaClass(state.layout)}`}>
-        {orderedPanes.map((pane) => (
-          <PaneCard
-            key={pane.id}
-            pane={pane}
-            focused={state.focusedPaneId === pane.id}
-            closable={state.order.length > 1}
-            hidden={state.layout === "focus" && state.focusedPaneId !== null && state.focusedPaneId !== pane.id}
-            send={send}
-          />
-        ))}
+      <section
+        ref={workspaceRef}
+        aria-label="Browser panes"
+        className="relative min-h-0 flex-1 overflow-auto p-2"
+      >
+        {orderedPanes.map((pane) => {
+          const tile = tiles.get(pane.id);
+          const focusHidden = state.layout === "focus" && state.focusedPaneId !== null && state.focusedPaneId !== pane.id;
+          if (!tile && !focusHidden) return null;
+          return (
+            <PaneCard
+              key={pane.id}
+              pane={pane}
+              focused={state.focusedPaneId === pane.id}
+              closable={state.order.length > 1}
+              {...(tile ? { placement: { x: tile.x, y: tile.y, width: tile.width, height: tile.height }, zoom: tile.zoom } : {})}
+              hidden={!tile || focusHidden}
+              send={send}
+            />
+          );
+        })}
       </section>
-      <footer class="flex h-5 shrink-0 items-center justify-center bg-panel text-[10px] text-mute">
-        Hoolypane is AGPL-3.0-only software, provided without warranty. License and corresponding source accompany this application.
+      <footer class="flex h-6 shrink-0 items-center justify-between border-t border-edge bg-panel px-2 text-[10px] text-mute">
+        <span>{state.order.length} panes · {state.layout}{state.recording ? " · recording" : ""}</span>
+        <span>AGPL-3.0-only · source accompanies this application</span>
       </footer>
       {state.lastError && <ErrorToast message={state.lastError} />}
       {usingDevMock && (

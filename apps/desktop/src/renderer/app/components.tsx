@@ -25,6 +25,7 @@ function IconButton({
   disabled,
   danger,
   active,
+  narrow,
   children,
 }: {
   label: string;
@@ -32,6 +33,8 @@ function IconButton({
   disabled?: boolean;
   danger?: boolean;
   active?: boolean;
+  /** Hidden inside cards narrower than 200px to keep the pane name readable. */
+  narrow?: boolean;
   children: ComponentChildren;
 }) {
   return (
@@ -41,7 +44,7 @@ function IconButton({
       title={label}
       disabled={disabled}
       onClick={onClick}
-      class={`inline-flex size-6 shrink-0 items-center justify-center rounded focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent disabled:pointer-events-none disabled:opacity-45 ${
+      class={`${narrow ? "hidden @[200px]:inline-flex" : "inline-flex"} size-5 shrink-0 items-center justify-center rounded focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent disabled:pointer-events-none disabled:text-mute/60 disabled:bg-transparent ${
         danger
           ? "text-mute hover:bg-danger/15 hover:text-danger"
           : active
@@ -141,7 +144,7 @@ export function Toolbar({
         class={`flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-xs font-semibold focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent ${
           state.recording
             ? "border border-danger/60 bg-danger/15 text-danger hover:bg-danger/25"
-            : "border border-edge bg-field text-mute hover:border-accent/50 hover:text-ink"
+            : "border border-edge bg-field text-ink hover:border-accent/50 hover:bg-elevated"
         }`}
       >
         <span aria-hidden="true" class={`size-2 rounded-full ${state.recording ? "animate-pulse bg-danger" : "bg-mute"}`} />
@@ -170,7 +173,7 @@ function PaneName({ pane, onRename }: { pane: PaneState; onRename(name: string):
       <span
         title="Double-click to rename"
         onDblClick={() => setEditing(true)}
-        class="min-w-4 cursor-text truncate rounded px-0.5 text-xs font-semibold text-ink hover:bg-ink/5"
+        class="min-w-4 flex-1 cursor-text truncate rounded px-0.5 text-xs font-semibold text-ink hover:bg-ink/5"
       >
         {pane.name}
       </span>
@@ -197,19 +200,25 @@ export function PaneCard({
   focused,
   closable,
   hidden,
+  placement,
+  zoom,
   send,
 }: {
   pane: PaneState;
   focused: boolean;
   closable: boolean;
   hidden: boolean;
+  /** Absolute workspace position; absent before the first layout measurement. */
+  placement?: { x: number; y: number; width: number; height: number };
+  zoom?: number;
   send: SendCommand;
 }) {
   return (
     <article
-      class={`pane-card relative flex min-w-0 select-none flex-col overflow-hidden rounded-lg border bg-panel ${
+      style={placement ? { position: "absolute", left: placement.x, top: placement.y, width: placement.width, height: placement.height } : undefined}
+      class={`pane-card @container relative flex min-w-0 select-none flex-col overflow-hidden rounded-lg border shadow-lg shadow-black/25 ${
         focused ? "focused ring-2 ring-accent ring-offset-0" : ""
-      } ${hidden ? "hidden" : "border-edge"}`}
+      } ${hidden ? "hidden" : "border-edge hover:border-accent/40"}`}
     >
       {pane.loading && (
         <div aria-hidden="true" class="absolute inset-x-0 top-0 z-10 h-0.5 animate-pulse bg-accent" />
@@ -230,13 +239,16 @@ export function PaneCard({
             out of sync
           </span>
         )}
-        <span aria-hidden="true" class="ml-auto shrink-0 font-mono text-[10px] text-mute">
+        <span aria-hidden="true" class="ml-auto hidden shrink-0 items-center gap-1.5 font-mono text-[10px] text-mute @[240px]:flex">
           {pane.viewport.width}×{pane.viewport.height} @{pane.viewport.deviceScaleFactor}x
+          {zoom !== undefined && zoom < 0.995 && (
+            <span class="rounded bg-ink/10 px-1 leading-4">{Math.round(zoom * 100)}%</span>
+          )}
         </span>
-        <IconButton label="Back" disabled={!pane.canGoBack} onClick={() => send({ kind: "back", paneId: pane.id })}>
+        <IconButton narrow label="Back" disabled={!pane.canGoBack} onClick={() => send({ kind: "back", paneId: pane.id })}>
           <IconArrowLeft />
         </IconButton>
-        <IconButton label="Forward" disabled={!pane.canGoForward} onClick={() => send({ kind: "forward", paneId: pane.id })}>
+        <IconButton narrow label="Forward" disabled={!pane.canGoForward} onClick={() => send({ kind: "forward", paneId: pane.id })}>
           <IconArrowRight />
         </IconButton>
         <IconButton label="Reload" onClick={() => send({ kind: "reload", paneId: pane.id })}>
