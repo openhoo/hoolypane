@@ -2,7 +2,7 @@ import { ipcRenderer } from "electron";
 import { IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, ReplayRequestSchema, type Action, type LocatorSpec, type ReplayRequest, type ReplayResult } from "@hoolypane/contracts";
 
 let documentGeneration = 0;
-const suppressed = new Set<number>();
+const suppressed = new Map<number, number>(); // actionId → documentGeneration the action was resolved against
 let pendingFill: { element: HTMLInputElement | HTMLTextAreaElement; timer: number } | undefined;
 let scrollFrame = 0;
 
@@ -110,7 +110,11 @@ function flushFill(): void {
 }
 
 ipcRenderer.on(IPC_CHANNELS.paneGeneration, (_event, value: unknown) => {
-  try { documentGeneration = PaneGenerationSchema.parse(value).documentGeneration; } catch (error) { console.error("[hoolypane] invalid pane generation", error); }
+  try {
+    const nextGeneration = PaneGenerationSchema.parse(value).documentGeneration;
+    for (const [actionId, expectedGeneration] of suppressed) if (expectedGeneration !== nextGeneration) suppressed.delete(actionId);
+    documentGeneration = nextGeneration;
+  } catch (error) { console.error("[hoolypane] invalid pane generation", error); }
 });
 window.addEventListener("beforeunload", flushFill);
 ipcRenderer.on(IPC_CHANNELS.flush, flushFill);
@@ -131,9 +135,15 @@ document.addEventListener("change", (event) => {
 }, true);
 document.addEventListener("click", (event) => {
   if (!event.isTrusted) return;
-  const suppressedActionId = suppressed.values().next().value;
-  if (suppressedActionId !== undefined) {
-    ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId: suppressedActionId, phase: "confirm", ok: true } satisfies ReplayResult);
+  const suppressedEntry = suppressed.entries().next();
+  if (!suppressedEntry.done) {
+    const [suppressedActionId, expectedGeneration] = suppressedEntry.value;
+    suppressed.delete(suppressedActionId);
+    if (expectedGeneration === documentGeneration) {
+      ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId: suppressedActionId, phase: "confirm", ok: true } satisfies ReplayResult);
+    } else {
+      ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId: suppressedActionId, phase: "confirm", ok: false, reason: `stale document generation ${expectedGeneration}, current ${documentGeneration}` } satisfies ReplayResult);
+    }
     return;
   }
   const target = event.target instanceof Element ? event.target.closest("button,a,[role],input") : null;
@@ -179,7 +189,7 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
       const matches = elementsFor(request.action.locator);
       if (matches.length !== 1) throw new Error(`locator resolved ${matches.length} elements`);
       const element = matches[0]!;
-      suppressed.add(request.actionId);
+      suppressed.set(request.actionId, request.documentGeneration);
       if (request.phase === "resolve" && (request.action.kind === "fill" || request.action.kind === "press") && element instanceof HTMLElement) {
         element.focus({ preventScroll: true });
       }

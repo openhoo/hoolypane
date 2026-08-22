@@ -1,94 +1,71 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { _electron as electron, type ElectronApplication, type Page } from "playwright";
+import { spawnSync } from "node:child_process";
+import { rm } from "node:fs/promises";
+import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { IPC_CHANNELS } from "../../packages/contracts/src/index.js";
-import { electronExecutablePath } from "../electron-executable.js";
+import { launchDesktopApp, pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
 
-let fixture: ChildProcess;
+const FIXTURE_PORT = 4179;
+
+let fixture: FixtureServer | undefined;
 let application: ElectronApplication;
 let chrome: Page;
-let directory = "";
+let userDataDir = "";
 
 function sourcePage(path = "/"): Page {
-  const candidates = application.context().pages().filter((page) => page.url() === `http://127.0.0.1:4179${path}`);
+  const candidates = application.context().pages().filter((page) => page.url() === `http://127.0.0.1:${FIXTURE_PORT}${path}`);
   return candidates.find((page) => page.viewportSize()?.width === 1440) ?? candidates[0]!;
 }
 
 async function waitForRemotePages(path: string, expected = 5): Promise<Page[]> {
-  const target = `http://127.0.0.1:4179${path}`;
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
+  const target = `http://127.0.0.1:${FIXTURE_PORT}${path}`;
+  return pollUntil(async () => {
     const pages = application.context().pages().filter((page) => page.url() === target);
-    if (pages.length === expected) return pages;
-    const next = Promise.withResolvers<void>();
-    setTimeout(next.resolve, 20);
-    await next.promise;
-  }
-  throw new Error(`desktop did not reach ${expected} pages at ${target}`);
+    return pages.length === expected ? pages : null;
+  }, 10_000);
 }
 
 async function waitForMirroredName(value: string): Promise<void> {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    const pages = application.context().pages().filter((page) => page.url().startsWith("http://127.0.0.1:4179"));
+  await pollUntil(async () => {
+    const pages = application.context().pages().filter((page) => page.url().startsWith(`http://127.0.0.1:${FIXTURE_PORT}`));
     const values = await Promise.all(pages.map((page) => page.getByTestId("name").inputValue().catch(() => "")));
-    if (values.length === 5 && values.every((candidate) => candidate === value)) return;
-    const next = Promise.withResolvers<void>();
-    setTimeout(next.resolve, 20);
-    await next.promise;
-  }
-  throw new Error(`final mirrored value did not converge: ${value}`);
+    return values.length === 5 && values.every((candidate) => candidate === value);
+  }, 10_000);
 }
 
 async function waitForNoOutOfSync(): Promise<void> {
-  const deadline = Date.now() + 10_000;
   let clearSince = 0;
-  while (Date.now() < deadline) {
+  await pollUntil(async () => {
     if (await chrome.getByText(/Out of sync/).count() === 0) {
       if (clearSince === 0) clearSince = Date.now();
-      else if (Date.now() - clearSince >= 300) return;
+      else if (Date.now() - clearSince >= 300) return true;
     } else clearSince = 0;
-    const next = Promise.withResolvers<void>();
-    setTimeout(next.resolve, 20);
-    await next.promise;
-  }
-  throw new Error("out-of-sync state did not clear");
+    return null;
+  }, 10_000);
 }
 
 beforeAll(async () => {
-  fixture = spawn(process.execPath, [resolve("tests/fixtures/server.mjs")], { env: { ...process.env, PORT: "4179" }, stdio: ["ignore", "pipe", "inherit"] });
-  const ready = Promise.withResolvers<void>();
-  fixture.stdout?.on("data", (data: Buffer) => { if (data.toString().includes("fixture ready")) ready.resolve(); });
-  fixture.once("error", ready.reject);
-  fixture.once("exit", (code) => ready.reject(new Error(`fixture exited before readiness (code ${code})`)));
-  await ready.promise;
-  directory = await mkdtemp(join(tmpdir(), "hoolypane-resilience-"));
-  const environment = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
-  Object.assign(environment, { HOOLYPANE_TEST_MODE: "1", HOOLYPANE_TEST_REPLAY_DELAY_MS: "150" });
-  if (process.platform === "linux") {
-    environment.XDG_SESSION_TYPE = "x11";
-    delete environment.WAYLAND_DISPLAY;
-  }
-  const graphicsArguments = process.platform === "linux" ? ["--ozone-platform=x11", "--use-gl=angle", "--use-angle=swiftshader"] : [];
-  const electronExecutable = electronExecutablePath();
-  application = await electron.launch({ executablePath: electronExecutable, args: [...graphicsArguments, resolve("apps/desktop"), `--user-data-dir=${join(directory, "user-data")}`, "--url", "http://127.0.0.1:4179"], env: environment });
-  chrome = await application.firstWindow();
+  fixture = await startFixtureServer(FIXTURE_PORT);
+  const launch = await launchDesktopApp({
+    port: FIXTURE_PORT,
+    extraEnv: { HOOLYPANE_TEST_MODE: "1", HOOLYPANE_TEST_REPLAY_DELAY_MS: "150" },
+  });
+  application = launch.application;
+  chrome = launch.chrome;
+  userDataDir = launch.userDataDir;
   await waitForRemotePages("/");
 }, 30_000);
 
 afterAll(async () => {
   await application?.close().catch(() => undefined);
-  fixture?.kill("SIGTERM");
-  if (directory) await rm(directory, { recursive: true, force: true });
+  await fixture?.close();
+  if (userDataDir) await rm(userDataDir, { recursive: true, force: true });
 }, 30_000);
 
 describe("desktop replay and security resilience", () => {
   it("rejects stale generations and converges after navigation with pending replay", async () => {
     const stale = await application.evaluate(async ({ ipcMain, webContents }, channels) => {
-      const pane = webContents.getAllWebContents().find((contents) => contents.getURL() === "http://127.0.0.1:4179/");
+      const pane = webContents.getAllWebContents().find((contents) => contents.getURL() === `${channels.port}/`);
       if (!pane) throw new Error("pane missing for stale replay");
       const completion = Promise.withResolvers<unknown>();
       const timer = setTimeout(() => completion.reject(new Error("stale replay result timeout")), 5_000);
@@ -105,12 +82,12 @@ describe("desktop replay and security resilience", () => {
         clearTimeout(timer);
         ipcMain.removeListener(channels.replayResult, listener);
       }
-    }, { replay: IPC_CHANNELS.replay, replayResult: IPC_CHANNELS.replayResult }) as { ok: boolean; reason?: string };
+    }, { replay: IPC_CHANNELS.replay, replayResult: IPC_CHANNELS.replayResult, port: `http://127.0.0.1:${FIXTURE_PORT}` }) as { ok: boolean; reason?: string };
     expect(stale.ok).toBe(false);
     expect(stale.reason).toMatch(/stale document generation/);
 
     await sourcePage().getByTestId("name").fill("stale-before-navigation");
-    await chrome.locator("#address").fill("http://127.0.0.1:4179/next");
+    await chrome.locator("#address").fill(`http://127.0.0.1:${FIXTURE_PORT}/next`);
     await chrome.locator("#address").press("Enter");
     await waitForRemotePages("/next");
     await sourcePage("/next").getByTestId("name").fill("after-navigation");
@@ -125,8 +102,8 @@ describe("desktop replay and security resilience", () => {
     await page.evaluate(() => window.open("mailto:security@example.test"));
     expect(application.context().pages()).toHaveLength(pageCount);
 
-    const downloadState = await application.evaluate(async ({ webContents }) => {
-      const pane = webContents.getAllWebContents().find((contents) => contents.getURL() === "http://127.0.0.1:4179/next");
+    const downloadState = await application.evaluate(async ({ webContents }, port) => {
+      const pane = webContents.getAllWebContents().find((contents) => contents.getURL() === `http://127.0.0.1:${port}/next`);
       if (!pane) throw new Error("pane missing for download test");
       const completion = Promise.withResolvers<string>();
       const onDownload = (_event: Electron.Event, item: Electron.DownloadItem) => setImmediate(() => completion.resolve(item.getState()));
@@ -139,20 +116,20 @@ describe("desktop replay and security resilience", () => {
         clearTimeout(timer);
         pane.session.removeListener("will-download", onDownload);
       }
-    });
+    }, FIXTURE_PORT);
     expect(downloadState).toBe("cancelled");
 
-    await page.evaluate(() => window.open("http://127.0.0.1:4179/popup"));
+    await page.evaluate((url) => window.open(url), `http://127.0.0.1:${FIXTURE_PORT}/popup`);
     expect(application.context().pages()).toHaveLength(pageCount);
     await waitForRemotePages("/popup", 1);
   }, 20_000);
 
   it("keeps siblings alive when one renderer crashes", async () => {
-    const pid = await application.evaluate(({ webContents }) => {
-      const pane = webContents.getAllWebContents().find((contents) => contents.getURL().startsWith("http://127.0.0.1:4179"));
+    const pid = await application.evaluate(({ webContents }, port) => {
+      const pane = webContents.getAllWebContents().find((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`));
       if (!pane) throw new Error("pane missing for crash test");
       return pane.getOSProcessId();
-    });
+    }, FIXTURE_PORT);
     if (process.platform === "win32") {
       const result = spawnSync("taskkill.exe", ["/PID", String(pid), "/F", "/T"]);
       if (result.status !== 0) throw new Error(`taskkill failed: ${result.stderr.toString()}`);
@@ -160,7 +137,7 @@ describe("desktop replay and security resilience", () => {
       process.kill(pid, "SIGKILL");
     }
     await chrome.getByText(/render process gone/).first().waitFor({ state: "attached", timeout: 10_000 });
-    const healthy = await Promise.all(application.context().pages().filter((page) => page.url().startsWith("http://127.0.0.1:4179")).map((page) => page.title().catch(() => "crashed")));
+    const healthy = await Promise.all(application.context().pages().filter((page) => page.url().startsWith(`http://127.0.0.1:${FIXTURE_PORT}`)).map((page) => page.title().catch(() => "crashed")));
     expect(healthy.filter((title) => title === "Hoolypane fixture").length).toBeGreaterThanOrEqual(4);
   }, 20_000);
 });

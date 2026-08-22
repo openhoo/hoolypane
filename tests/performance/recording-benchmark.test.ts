@@ -40,11 +40,16 @@ describe("ten-second recording contract", () => {
       const alignment = alignFrames(spool.index.frames, 0, DURATION_FRAMES, FPS);
       return { id: specification.id, spool, mappings: alignment.mappings, geometry: { id: specification.id, encodedWidth: specification.width, encodedHeight: specification.height } };
     }));
+    const encodeStartedAtMs = performance.now();
     await encodeAligned(OUTPUT, tracks, FPS, DURATION_FRAMES, { compositeMaxSize: { width: 320, height: 320 }, compositeBackground: "#111318" });
-    const verification = await verifyArtifacts(OUTPUT, FPS, DURATION_FRAMES);
+    const encodeSeconds = Math.round((performance.now() - encodeStartedAtMs)) / 1000;
+    const verification = await verifyArtifacts(OUTPUT, FPS, DURATION_FRAMES, {
+      tracks: tracks.map((track) => track.geometry),
+      composite: { width: 320, height: 320 },
+    });
     expect(verification.success, verification.error).toBe(true);
     expect(verification.ptsVector).toHaveLength(DURATION_FRAMES);
     expect(process.memoryUsage().rss - baselineRss).toBeLessThan(256 * 1024 * 1024);
-    await writeFile(resolve(OUTPUT, "manifest.json"), `${JSON.stringify({ contract: CAPTURE_CONTRACT, validatorVersion: VALIDATOR_VERSION, validationSuccess: true, fps: FPS, durationFrames: DURATION_FRAMES, artifacts: verification.artifacts, sha256: verification.sha256 }, null, 2)}\n`);
+    await writeFile(resolve(OUTPUT, "manifest.json"), `${JSON.stringify({ contract: CAPTURE_CONTRACT, validatorVersion: VALIDATOR_VERSION, validationSuccess: true, fps: FPS, durationFrames: DURATION_FRAMES, encodeSeconds, artifacts: verification.artifacts, sha256: verification.sha256 }, null, 2)}\n`);
   }, 120_000);
 });

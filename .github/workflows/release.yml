@@ -22,7 +22,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm prepare:electron
       - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm architecture && pnpm exec knip && pnpm typecheck && pnpm test:unit && pnpm test:runner
+      - run: pnpm pins:check && pnpm architecture && pnpm exec knip && pnpm typecheck && pnpm test:unit && pnpm test:runner
       - run: pnpm benchmark:recording
       - run: pnpm build && pnpm pack:runner
       - name: Smoke packed runner in clean project

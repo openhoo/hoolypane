@@ -1,4 +1,4 @@
-import type { HoolypaneConfig, ResolvedHoolypaneConfig, ViewportSpec } from "@hoolypane/contracts";
+import type { HoolypaneConfig, ResolvedHoolypaneConfig, ViewportSpec, FlowEvent } from "@hoolypane/contracts";
 import { HoolypaneConfigSchema } from "@hoolypane/contracts";
 import type { Page } from "playwright";
 
@@ -17,12 +17,6 @@ export interface FlowContext {
 export interface FlowDefinition {
   readonly run: (context: FlowContext) => Promise<void>;
 }
-export interface FlowEvent {
-  readonly label: string;
-  readonly phase: "start" | "complete" | "failed";
-  readonly atUnixMs: number;
-}
-
 export function defineConfig(config: HoolypaneConfig): ResolvedHoolypaneConfig {
   return HoolypaneConfigSchema.parse(config);
 }

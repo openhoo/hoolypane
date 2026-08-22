@@ -1,16 +1,16 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { _electron as electron, type ElectronApplication, type Page } from "playwright";
+import { join } from "node:path";
+import type { ElectronApplication, Page } from "playwright";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runFlow } from "../../packages/runner/src/run-flow.js";
-
-import { electronExecutablePath } from "../electron-executable.js";
+import { launchDesktopApp, pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
 import { clickPaneSurface } from "./cdp-input.js";
 
-let fixture: ChildProcess;
+const FIXTURE_PORT = 4178;
+
+let fixture: FixtureServer | undefined;
 let application: ElectronApplication;
 let chrome: Page;
 let directory = "";
@@ -20,143 +20,142 @@ let errorOverviewPng = "";
 let flowPath = "";
 
 async function waitForFile(path: string): Promise<void> {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    try { await access(path); return; } catch { /* writer not finished */ }
-    const next = Promise.withResolvers<void>();
-    setTimeout(next.resolve, 20);
-    await next.promise;
-  }
-  throw new Error(`artifact was not written: ${path}`);
+  await pollUntil(async () => {
+    try {
+      await access(path);
+      return true;
+    } catch {
+      return null; // writer not finished
+    }
+  }, 10_000);
 }
 
-async function waitForPanes(expected: number): Promise<void> {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    const count = await application.evaluate(({ webContents }) => webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith("http://127.0.0.1:4178")).length);
-    if (count === expected) return;
-    const next = Promise.withResolvers<void>();
-    setTimeout(next.resolve, 20);
-    await next.promise;
-  }
-  throw new Error(`desktop did not reach ${expected} panes`);
+async function paneCount(): Promise<number> {
+  return application.evaluate(({ webContents }, port) =>
+    webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`)).length,
+  FIXTURE_PORT);
 }
 
-async function clickDesktopApply(): Promise<void> {
-  await clickPaneSurface(application, chrome, { port: 4178, testId: "apply", expectedStatus: "applied" });
+async function appliedCount(): Promise<number> {
+  return fetch(`http://127.0.0.1:${FIXTURE_PORT}/applied-count`)
+    .then((response) => response.json())
+    .then((value: { count: number }) => value.count);
 }
 
 async function waitForAppliedCount(expected: number): Promise<void> {
-  let latest = -1;
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    const count = await fetch("http://127.0.0.1:4178/applied-count").then((response) => response.json()).then((value) => value.count);
-    latest = count;
-    if (count === expected) return;
-    const next = Promise.withResolvers<void>();
-    setTimeout(next.resolve, 20);
-    await next.promise;
-  }
-  throw new Error(`fixture did not observe ${expected} applied actions; latest=${latest}`);
+  await pollUntil(async () => await appliedCount() === expected ? expected : null, 10_000);
+}
+
+async function clickDesktopApply(): Promise<void> {
+  await clickPaneSurface(application, chrome, { port: FIXTURE_PORT, testId: "apply", expectedStatus: "applied" });
+}
+
+async function startRecording(): Promise<void> {
+  await chrome.getByRole("button", { name: "Start Flow Recording" }).click();
+  // Recording readiness is observable through the enabled Stop control; no frame-timing sync needed.
+  await chrome.getByRole("button", { name: "Stop Flow Recording" }).waitFor({ state: "visible" });
+}
+
+async function stopRecording(): Promise<void> {
+  await chrome.getByRole("button", { name: "Stop Flow Recording" }).click();
+  await chrome.getByRole("button", { name: "Start Flow Recording" }).waitFor({ state: "visible" });
 }
 
 beforeAll(async () => {
-  fixture = spawn(process.execPath, [resolve("tests/fixtures/server.mjs")], { env: { ...process.env, PORT: "4178" }, stdio: ["ignore", "pipe", "inherit"] });
-  const ready = Promise.withResolvers<void>();
-  fixture.stdout?.on("data", (data: Buffer) => { if (data.toString().includes("fixture ready")) ready.resolve(); });
-  fixture.once("error", ready.reject);
-  fixture.once("exit", (code) => ready.reject(new Error(`fixture exited before readiness (code ${code})`)));
-  await ready.promise;
+  fixture = await startFixtureServer(FIXTURE_PORT);
   directory = await mkdtemp(join(tmpdir(), "hoolypane-artifacts-"));
   panePng = join(directory, "pane.png");
   overviewPng = join(directory, "overview.png");
   errorOverviewPng = join(directory, "overview-error.png");
   flowPath = join(directory, "recorded.flow.ts");
-  const environment = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
-  Object.assign(environment, {
-    HOOLYPANE_TEST_MODE: "1",
-    HOOLYPANE_TEST_PANE_PNG: panePng,
-    HOOLYPANE_TEST_OVERVIEW_PNG: overviewPng,
-    HOOLYPANE_TEST_FLOW_PATH: flowPath,
+  const launch = await launchDesktopApp({
+    port: FIXTURE_PORT,
+    userDataDir: directory,
+    extraEnv: {
+      HOOLYPANE_TEST_MODE: "1",
+      HOOLYPANE_TEST_PANE_PNG: panePng,
+      HOOLYPANE_TEST_OVERVIEW_PNG: overviewPng,
+      HOOLYPANE_TEST_FLOW_PATH: flowPath,
+    },
   });
-  if (process.platform === "linux") {
-    environment.XDG_SESSION_TYPE = "x11";
-    delete environment.WAYLAND_DISPLAY;
-  }
-  const graphicsArguments = process.platform === "linux" ? ["--ozone-platform=x11", "--use-gl=angle", "--use-angle=swiftshader"] : [];
-  const electronExecutable = electronExecutablePath();
-  application = await electron.launch({ executablePath: electronExecutable, args: [...graphicsArguments, resolve("apps/desktop"), `--user-data-dir=${join(directory, "user-data")}`, "--url", "http://127.0.0.1:4178"], env: environment });
-  chrome = await application.firstWindow();
-  await waitForPanes(5);
+  application = launch.application;
+  chrome = launch.chrome;
+  // Native child views expose no readiness event to Playwright; poll Electron's authoritative WebContents registry.
+  await pollUntil(async () => await paneCount() === 5 || null, 10_000);
 }, 30_000);
 
 afterAll(async () => {
   await application?.close().catch(() => undefined);
-  fixture?.kill("SIGTERM");
+  await fixture?.close();
   if (directory) await rm(directory, { recursive: true, force: true });
 }, 30_000);
 
 describe("desktop screenshots and recorded flows", () => {
-  it("exports stills, preserves good overview tiles, and runs the recorded flow", async () => {
+  it("exports a pane still", async () => {
     await chrome.getByRole("button", { name: "Save PNG" }).first().click();
     await waitForFile(panePng);
     expect(await sharp(panePng).metadata()).toMatchObject({ format: "png" });
+  }, 20_000);
 
+  it("exports an overview still of all panes", async () => {
     await chrome.getByRole("button", { name: "Save Overview PNG" }).click();
     await waitForFile(overviewPng);
-    const goodOverview = await readFile(overviewPng);
-    expect((await sharp(goodOverview).metadata()).width).toBeGreaterThan(500);
+    expect((await sharp(await readFile(overviewPng)).metadata()).width).toBeGreaterThan(500);
+  }, 20_000);
 
-    await chrome.getByRole("button", { name: "Start Flow Recording" }).click();
-    await chrome.getByRole("button", { name: "Stop Flow Recording" }).waitFor({ state: "visible" });
-    await chrome.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  it("records a flow and replays it through the runner", async () => {
+    const baseline = await appliedCount();
+    await startRecording();
     await clickDesktopApply();
-    await waitForAppliedCount(5);
-    await chrome.getByRole("button", { name: "Stop Flow Recording" }).click();
-    await chrome.getByRole("button", { name: "Start Flow Recording" }).waitFor({ state: "visible" });
+    await waitForAppliedCount(baseline + 5);
+    await stopRecording();
     await waitForFile(flowPath);
     const flowSource = await readFile(flowPath, "utf8");
     expect(flowSource).toContain('import { defineFlow } from "@hoolypane/runner";');
-    expect(flowSource).toContain("getByTestId(\"apply\").click()");
+    expect(flowSource).toContain('getByTestId("apply").click()');
 
-    await fetch("http://127.0.0.1:4178/reset");
+    await fetch(`http://127.0.0.1:${FIXTURE_PORT}/reset`);
     const configPath = join(directory, "hoolypane.config.ts");
-    await writeFile(configPath, `import { defineConfig } from "@hoolypane/runner"; export default defineConfig({ baseURL: "http://127.0.0.1:4178", viewports: [{ id: "one", name: "One", width: 320, height: 240, deviceScaleFactor: 1, isMobile: false, hasTouch: false }, { id: "two", name: "Two", width: 180, height: 320, deviceScaleFactor: 1, isMobile: true, hasTouch: true }], recording: { fps: 30, compositeMaxSize: { width: 640, height: 480 } } });`);
+    await writeFile(configPath, `import { defineConfig } from "@hoolypane/runner"; export default defineConfig({ baseURL: "http://127.0.0.1:${FIXTURE_PORT}", viewports: [{ id: "one", name: "One", width: 320, height: 240, deviceScaleFactor: 1, isMobile: false, hasTouch: false }, { id: "two", name: "Two", width: 180, height: 320, deviceScaleFactor: 1, isMobile: true, hasTouch: true }], recording: { fps: 30, compositeMaxSize: { width: 640, height: 480 } } });`);
     const runOutput = join(directory, "runner-output");
     const run = await runFlow({ command: "run", flowFile: flowPath, configFile: configPath, outputDir: runOutput, headed: false });
     expect(run.status).toBe("success");
     await waitForAppliedCount(2);
+  }, 90_000);
 
+  it("does not save an empty flow", async () => {
     const emptyPath = join(directory, "empty.flow.ts");
     await application.evaluate((_electron, path) => { process.env.HOOLYPANE_TEST_FLOW_PATH = path; delete process.env.HOOLYPANE_TEST_FLOW_SAVE_CANCEL; }, emptyPath);
-    await chrome.getByRole("button", { name: "Start Flow Recording" }).click();
-    await chrome.getByRole("button", { name: "Stop Flow Recording" }).waitFor({ state: "visible" });
-    await chrome.getByRole("button", { name: "Stop Flow Recording" }).click();
-    await chrome.getByRole("button", { name: "Start Flow Recording" }).waitFor({ state: "visible" });
+    await startRecording();
+    await stopRecording();
     await expect(access(emptyPath)).rejects.toBeDefined();
+  }, 20_000);
 
+  it("does not save a cancelled flow despite mirrored actions", async () => {
     const canceledPath = join(directory, "canceled.flow.ts");
     await application.evaluate((_electron, path) => { process.env.HOOLYPANE_TEST_FLOW_PATH = path; process.env.HOOLYPANE_TEST_FLOW_SAVE_CANCEL = "1"; }, canceledPath);
-    await chrome.getByRole("button", { name: "Start Flow Recording" }).click();
-    await chrome.getByRole("button", { name: "Stop Flow Recording" }).waitFor({ state: "visible" });
-    await chrome.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    const baseline = await appliedCount();
+    await startRecording();
     await clickDesktopApply();
-    await waitForAppliedCount(7);
-    await chrome.getByRole("button", { name: "Stop Flow Recording" }).click();
-    await chrome.getByRole("button", { name: "Start Flow Recording" }).waitFor({ state: "visible" });
+    await waitForAppliedCount(baseline + 5);
+    await stopRecording();
     await expect(access(canceledPath)).rejects.toBeDefined();
+  }, 30_000);
 
+  it("marks missing panes in the overview export", async () => {
     await application.evaluate((_electron, path) => { process.env.HOOLYPANE_TEST_OVERVIEW_PNG = path; delete process.env.HOOLYPANE_TEST_FLOW_SAVE_CANCEL; }, errorOverviewPng);
-    await application.evaluate(({ webContents }) => {
-      const pane = webContents.getAllWebContents().find((contents) => contents.getURL().startsWith("http://127.0.0.1:4178"));
-      pane?.close({ waitForBeforeUnload: false });
-    });
+    await application.evaluate(({ webContents }, port) => {
+      const pane = webContents.getAllWebContents().find((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`));
+      if (!pane) throw new Error("pane missing for error-overview test");
+      pane.close({ waitForBeforeUnload: false });
+    }, FIXTURE_PORT);
+    await pollUntil(async () => await paneCount() === 4 || null, 10_000);
     await chrome.getByRole("button", { name: "Save Overview PNG" }).click();
     await waitForFile(errorOverviewPng);
     const errorPixels = await sharp(errorOverviewPng).ensureAlpha().raw().toBuffer();
     let errorBackgroundPixels = 0;
     for (let offset = 0; offset < errorPixels.length; offset += 4) if (errorPixels[offset] === 58 && errorPixels[offset + 1] === 23 && errorPixels[offset + 2] === 27) errorBackgroundPixels += 1;
     expect(errorBackgroundPixels).toBeGreaterThan(1_000);
-    expect(await readFile(errorOverviewPng)).not.toEqual(goodOverview);
-  }, 90_000);
+    expect(await readFile(errorOverviewPng)).not.toEqual(await readFile(overviewPng));
+  }, 30_000);
 });

@@ -7,7 +7,7 @@ import ffprobeStatic from "ffprobe-static";
 import { compositeGeometry, type CompositeGeometry, type SlotMapping, type TrackGeometry } from "./capture-contract.js";
 import type { FrameSpool } from "./spool.js";
 
-export interface EncoderPaths { readonly ffmpeg: string; readonly ffprobe: string }
+interface EncoderPaths { readonly ffmpeg: string; readonly ffprobe: string }
 interface AlignedTrack { readonly id: string; readonly spool: FrameSpool; readonly mappings: readonly SlotMapping[]; readonly geometry: TrackGeometry }
 interface EncodingResult { readonly geometry: CompositeGeometry }
 

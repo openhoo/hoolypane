@@ -99,39 +99,35 @@ function failureFrom(error: unknown): RecorderFailure {
   return { message: String(error) };
 }
 
+
 export async function runFlow(args: RunArguments, dependencies: RunnerDependencies = defaultDependencies): Promise<RunResult> {
   const projectDir = dirname(resolve(args.flowFile));
   const flowPath = resolve(args.flowFile);
   if (!(await exists(flowPath))) throw new Error(`Flow file not found: ${flowPath}`);
   const configPath = resolve(args.configFile);
-  if (!(await exists(configPath))) throw new Error(`Config file not found: ${configPath}`);
   const cacheDir = resolve(projectDir, ".hoolypane/cache");
   const settledModules = await Promise.allSettled([compileModule(flowPath, cacheDir), compileModule(configPath, cacheDir)]);
-  const rejected = settledModules.find((settled): settled is PromiseRejectedResult => settled.status === "rejected");
-  if (rejected) {
-    await Promise.allSettled(settledModules.flatMap((settled) => (settled.status === "fulfilled" ? [settled.value.cleanup()] : [])));
-    throw rejected.reason;
+  const compiledModules: CompiledModule[] = [];
+  for (const settled of settledModules) {
+    if (settled.status === "rejected") {
+      await Promise.allSettled(compiledModules.map((module) => module.cleanup()));
+      throw settled.reason;
+    }
+    compiledModules.push(settled.value);
   }
-  const flowCompiled = (settledModules[0] as PromiseFulfilledResult<CompiledModule>).value;
-  const configCompiled = (settledModules[1] as PromiseFulfilledResult<CompiledModule>).value;
+  const flowCompiled = compiledModules[0]!;
+  const configCompiled = compiledModules[1]!;
   let browser: Browser | undefined;
   const contexts: BrowserContext[] = [];
   let interrupted = false;
-  let forced = false;
   let signalDeadline: ReturnType<typeof setTimeout> | undefined;
   const signal = Promise.withResolvers<void>();
   const onSignal = (): void => {
-    if (interrupted) {
-      forced = true;
-      process.exitCode = 130;
-      return;
-    }
+    // A second SIGINT/SIGTERM means "stop now": bypass graceful teardown like the force timer below.
+    if (interrupted) process.exit(130);
     interrupted = true;
     signal.resolve();
-    signalDeadline = setTimeout(() => {
-      forced = true;
-      process.exit(130);
-    }, 10_000);
+    signalDeadline = setTimeout(() => process.exit(130), 10_000);
   };
   const initialFramesAbort = new AbortController();
   process.on("SIGINT", onSignal);
@@ -211,7 +207,6 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
       for (const failure of await stopTraces()) process.stderr.write(`tracing.stop failed: ${failure.message}\n`);
       clearTimeout(signalDeadline);
     }
-    if (forced) process.exitCode = 130;
     return { outputDir, status: interrupted ? "interrupted" : flowFailed ? "failed" : "success" };
   } finally {
     process.removeListener("SIGINT", onSignal);

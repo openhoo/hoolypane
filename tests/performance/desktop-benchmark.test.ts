@@ -1,18 +1,17 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { once } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { _electron as electron, type ElectronApplication, type Page } from "playwright";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { electronExecutablePath } from "../electron-executable.js";
+import { launchDesktopApp, pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
 
+const FIXTURE_PORT = 4177;
 const OUTPUT = resolve(process.env.HOOLYPANE_DESKTOP_BENCHMARK_OUTPUT ?? ".tmp/desktop-benchmark-proof.json");
 const MIRROR_SAMPLES = 120;
 const FINAL_INPUT_UPDATES = 100;
-let fixture: ChildProcess;
+let fixture: FixtureServer | undefined;
 let application: ElectronApplication;
-let userData = "";
+let chrome: Page;
+let userDataDir = "";
 
 function percentile(values: readonly number[], quantile: number): number {
   if (values.length === 0) throw new Error("cannot compute percentile of empty measurements");
@@ -21,102 +20,93 @@ function percentile(values: readonly number[], quantile: number): number {
 }
 
 function remotePages(): Page[] {
-  return application.context().pages().filter((page) => page.url().startsWith("http://127.0.0.1:4177"));
+  return application.context().pages().filter((page) => page.url().startsWith(`http://127.0.0.1:${FIXTURE_PORT}`));
 }
 
 async function waitForPaneCount(expected: number): Promise<void> {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    const count = await application.evaluate(({ webContents }) => webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith("http://127.0.0.1:4177")).length);
-    if (count === expected && remotePages().length === expected) return;
-    const next = Promise.withResolvers<void>();
-    setTimeout(next.resolve, 20);
-    await next.promise;
-  }
-  throw new Error(`benchmark did not reach ${expected} panes`);
+  await pollUntil(async () => {
+    const count = await application.evaluate(({ webContents }, port) =>
+      webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`)).length,
+      FIXTURE_PORT);
+    return count === expected && remotePages().length === expected || null;
+  }, 10_000);
 }
 
 async function waitForMirrorCount(expected: number): Promise<void> {
-  const deadline = Date.now() + 5_000;
-  let latest: number[] = [];
-  while (Date.now() < deadline) {
+  await pollUntil(async () => {
     const counts = await Promise.all(remotePages().map((page) => page.evaluate(() => (globalThis as typeof globalThis & { __mirrorTimes?: number[] }).__mirrorTimes?.length ?? 0)));
-    latest = counts;
-    if (counts.length === 6 && counts.every((count) => count >= expected)) return;
-    const next = Promise.withResolvers<void>();
-    setTimeout(next.resolve, 5);
-    await next.promise;
-  }
-  throw new Error(`mirrored click ${expected} did not reach all panes: ${JSON.stringify(latest)}`);
+    return counts.length === 6 && counts.every((count) => count >= expected);
+  }, 5_000, 5);
 }
 
-async function clickDesktopSource(chrome: Page): Promise<void> {
+async function clickDesktopSource(): Promise<void> {
   const surface = await chrome.locator('[data-pane-surface="desktop-1440"]').boundingBox();
   if (!surface) throw new Error("desktop source surface missing");
   const scale = Math.min(1, surface.width / 1440, surface.height / 900);
-  await application.evaluate(async ({ webContents }, inputScale) => {
-    const candidates = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith("http://127.0.0.1:4177"));
+  await application.evaluate(async ({ webContents }, input) => {
+    const candidates = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${input.port}`));
     let source: (typeof candidates)[number] | undefined;
     for (const candidate of candidates) {
       if (await candidate.executeJavaScript("innerWidth") === 1440) { source = candidate; break; }
     }
     if (!source) throw new Error("desktop source pane missing");
     const box = await source.executeJavaScript(`document.querySelector('[data-testid="apply"]').getBoundingClientRect().toJSON()`);
-    const x = (box.x + box.width / 2) * inputScale;
-    const y = (box.y + box.height / 2) * inputScale;
+    const x = (box.x + box.width / 2) * input.scale;
+    const y = (box.y + box.height / 2) * input.scale;
     await source.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
     await source.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
-  }, scale);
+  }, { port: FIXTURE_PORT, scale });
 }
 
 async function waitForFinalInput(expected: string): Promise<boolean> {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    const values = await Promise.all(remotePages().map((page) => page.getByTestId("name").inputValue()));
-    if (values.length === 6 && values.every((value) => value === expected)) return true;
-    const next = Promise.withResolvers<void>();
-    setTimeout(next.resolve, 20);
-    await next.promise;
+  try {
+    return await pollUntil(async () => {
+      const values = await Promise.all(remotePages().map((page) => page.getByTestId("name").inputValue()));
+      return values.length === 6 && values.every((value) => value === expected);
+    }, 10_000);
+  } catch {
+    return false;
   }
-  return false;
+}
+
+/** Point sample of the main process only; kept in the proof artifact alongside the aggregate peak. */
+function mainProcessRssBytes(): Promise<number> {
+  return application.evaluate(() => process.memoryUsage().rss);
+}
+
+/**
+ * Kernel-tracked per-process high-water marks summed across ALL Electron processes
+ * (main, renderers, GPU, utility); main-process sampling alone never observes them.
+ */
+function aggregatePeakRssBytes(): Promise<number> {
+  return application.evaluate((electron) =>
+    electron.app.getAppMetrics().reduce((total, metric) => total + metric.memory.peakWorkingSetSize, 0) * 1024,
+  );
 }
 
 beforeAll(async () => {
-  fixture = spawn(process.execPath, [resolve("tests/fixtures/server.mjs")], { env: { ...process.env, PORT: "4177" }, stdio: ["ignore", "pipe", "inherit"] });
-  const ready = Promise.withResolvers<void>();
-  fixture.stdout?.on("data", (data: Buffer) => { if (data.toString().includes("fixture ready")) ready.resolve(); });
-  fixture.once("error", ready.reject);
-  fixture.once("exit", (code) => ready.reject(new Error(`fixture exited before readiness (code ${code})`)));
-  await ready.promise;
-  userData = await mkdtemp(join(tmpdir(), "hoolypane-benchmark-"));
-  const environment = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
-  if (process.platform === "linux") environment.XDG_SESSION_TYPE = "x11";
-  if (process.platform === "linux") delete environment.WAYLAND_DISPLAY;
-  const graphicsArguments = process.platform === "linux" ? ["--ozone-platform=x11", "--use-gl=angle", "--use-angle=swiftshader"] : [];
-  const electronExecutable = electronExecutablePath();
-  application = await electron.launch({ executablePath: electronExecutable, args: [...graphicsArguments, resolve("apps/desktop"), `--user-data-dir=${userData}`, "--url", "http://127.0.0.1:4177"], env: environment });
+  fixture = await startFixtureServer(FIXTURE_PORT);
+  const launch = await launchDesktopApp({ port: FIXTURE_PORT });
+  application = launch.application;
+  chrome = launch.chrome;
+  userDataDir = launch.userDataDir;
 }, 30_000);
 
 afterAll(async () => {
   await application?.close().catch(() => undefined);
-  if (fixture) {
-    fixture.kill("SIGTERM");
-    const elapsed = Promise.withResolvers<void>();
-    setTimeout(elapsed.resolve, 2_000);
-    await Promise.race([once(fixture, "exit"), elapsed.promise]);
-    if (fixture.exitCode === null && fixture.signalCode === null) fixture.kill("SIGKILL");
-  }
-  if (userData) await rm(userData, { recursive: true, force: true });
+  await fixture?.close();
+  if (userDataDir) await rm(userDataDir, { recursive: true, force: true });
 });
+
 describe("six-pane direct compositor", () => {
   it("meets animation, mirrored-action, final-state, long-task, and RSS gates", async () => {
-    const chrome = await application.firstWindow();
+    const startedAtMs = Date.now();
     await chrome.getByRole("button", { name: "Add custom" }).click();
     await waitForPaneCount(6);
     const pages = remotePages();
     await Promise.all(pages.map((page) => page.getByTestId("apply").waitFor({ state: "visible" })));
     const source = pages.find((page) => page.viewportSize()?.width === 1440) ?? pages[0]!;
-    const rssSamples: number[] = [await application.evaluate(() => process.memoryUsage().rss)];
+    const rssSamples: number[] = [await mainProcessRssBytes()];
 
     await Promise.all([chrome, ...pages].map((page) => page.evaluate(() => {
       const state = globalThis as typeof globalThis & { __longTasks?: number[]; __mirrorTimes?: number[] };
@@ -133,7 +123,7 @@ describe("six-pane direct compositor", () => {
     });
 
     for (let sample = 1; sample <= MIRROR_SAMPLES; sample += 1) {
-      await clickDesktopSource(chrome);
+      await clickDesktopSource();
       await waitForMirrorCount(sample);
     }
     const clickTimes = await Promise.all(pages.map((page) => page.evaluate(() => (globalThis as typeof globalThis & { __mirrorTimes: number[] }).__mirrorTimes)));
@@ -141,14 +131,15 @@ describe("six-pane direct compositor", () => {
     const sourceTimes = clickTimes[sourceIndex]!;
     const mirrorLatencies = clickTimes.flatMap((times, pageIndex) => pageIndex === sourceIndex ? [] : times.map((time, sample) => time - sourceTimes[sample]!));
     const mirrorP95Ms = percentile(mirrorLatencies, 0.95);
-    rssSamples.push(await application.evaluate(() => process.memoryUsage().rss));
+    rssSamples.push(await mainProcessRssBytes());
 
     for (let update = 0; update < FINAL_INPUT_UPDATES; update += 1) await source.getByTestId("name").fill(`final-${update}`);
     const expectedFinalValue = `final-${FINAL_INPUT_UPDATES - 1}`;
     const finalStatePreserved = await waitForFinalInput(expectedFinalValue);
-    rssSamples.push(await application.evaluate(() => process.memoryUsage().rss));
+    rssSamples.push(await mainProcessRssBytes());
 
-    const displayCadenceP95Ms = await chrome.evaluate(() => new Promise<number>((resolveCadence) => {
+    const displayCadenceP95Ms = await chrome.evaluate(() => {
+      const { promise, resolve } = Promise.withResolvers<number>();
       const intervals: number[] = [];
       let previous = performance.now();
       const sample = (now: number): void => {
@@ -157,18 +148,19 @@ describe("six-pane direct compositor", () => {
         if (intervals.length < 180) requestAnimationFrame(sample);
         else {
           intervals.sort((left, right) => left - right);
-          resolveCadence(intervals[Math.floor(intervals.length * 0.95)]!);
+          resolve(intervals[Math.floor(intervals.length * 0.95)]!);
         }
       };
       requestAnimationFrame(sample);
-    }));
+      return promise;
+    });
     const rafP95LimitMs = Math.max(20, displayCadenceP95Ms * 1.05);
-    const rafP95ByPane = await application.evaluate(async ({ webContents }) => {
-      const panes = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith("http://127.0.0.1:4177"));
+    const rafP95ByPane = await application.evaluate(async ({ webContents }, port) => {
+      const panes = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`));
       const values = await Promise.all(panes.map((contents) => contents.executeJavaScript(`new Promise(resolve => { const values=[]; let previous=performance.now(); const frame=now=>{ values.push(now-previous); previous=now; if(values.length===1800){values.sort((a,b)=>a-b); resolve({id:innerWidth+'x'+innerHeight,p95:values[Math.floor(values.length*0.95)]});}else requestAnimationFrame(frame)}; requestAnimationFrame(frame); })`)));
       return Object.fromEntries(values.map((value: { id: string; p95: number }) => [value.id, value.p95]));
-    });
-    rssSamples.push(await application.evaluate(() => process.memoryUsage().rss));
+    }, FIXTURE_PORT);
+    rssSamples.push(await mainProcessRssBytes());
 
     const rendererLongTasks = await Promise.all([chrome, ...pages].map((page) => page.evaluate(() => (globalThis as typeof globalThis & { __longTasks?: number[] }).__longTasks ?? [])));
     const rendererLongTaskMaxMs = Math.max(0, ...rendererLongTasks.flat());
@@ -179,11 +171,11 @@ describe("six-pane direct compositor", () => {
       delay.disable();
       return { maxMs: delay.max / 1_000_000, p99Ms: delay.percentile(99) / 1_000_000 };
     });
-    const rssPeakBytes = Math.max(...rssSamples);
+    const rssPeakBytes = await aggregatePeakRssBytes();
     const proof = {
       contract: "hoolypane-desktop-performance-v1",
       platform: process.platform,
-      durationSeconds: 30,
+      durationSeconds: Math.round((Date.now() - startedAtMs) / 100) / 10,
       paneCount: 6,
       rafP95ByPane,
       displayCadenceP95Ms,

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ViewportListSchema } from "./viewport.js";
 
-export const DEFAULT_RECORDING = {
+const DEFAULT_RECORDING = {
   fps: 60 as const,
   jpegQuality: 85,
   layout: "grid" as const,

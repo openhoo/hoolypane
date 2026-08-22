@@ -16,7 +16,9 @@ if (target === "mac") {
   args.push(`--config.dmg.sign=${signed}`);
 }
 const environment = { ...process.env };
-if (!hasCertificate) {
+if (!signed) {
+  // Gate on the effective signing decision: a mac build with a certificate but missing
+  // notarization credentials must not sign either, or the "unsigned" artifact lies.
   delete environment.CSC_LINK;
   delete environment.CSC_KEY_PASSWORD;
   environment.CSC_IDENTITY_AUTO_DISCOVERY = "false";

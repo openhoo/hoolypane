@@ -42,7 +42,7 @@ export class FrameSpool {
   async open(): Promise<void> {
     await fs.mkdir(this.directory, { recursive: true });
     const stream = createWriteStream(join(this.directory, `${this.viewportId}.jpeg.bin`), { flags: "w" });
-    stream.on("error", () => undefined);
+    stream.on("error", (error) => { this.failure ??= error instanceof Error ? error : new Error(String(error)); });
     this.stream = stream;
   }
 
@@ -104,6 +104,15 @@ export class FrameSpool {
     if (this.failure) throw this.failure;
   }
 
+  async dispose(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    await this.writeChain.catch(() => undefined);
+    const stream = this.stream;
+    this.stream = undefined;
+    stream?.destroy();
+  }
+
   async read(frame: SourceFrame): Promise<Buffer> {
     const handle = await fs.open(join(this.directory, `${this.viewportId}.jpeg.bin`), "r");
     try {
@@ -131,14 +140,16 @@ export class CaptureSpool {
         opened.push(spool);
       }
     } catch (error) {
-      await Promise.allSettled(opened.map((spool) => spool.close()));
+      await Promise.allSettled(opened.map((spool) => spool.dispose()));
       for (const spool of opened) this.spools.delete(spool.viewportId);
       throw error;
     }
   }
 
   async close(): Promise<void> {
-    await Promise.all([...this.spools.values()].map((spool) => spool.close()));
+    const settled = await Promise.allSettled([...this.spools.values()].map((spool) => spool.close()));
+    const failure = settled.find((entry): entry is PromiseRejectedResult => entry.status === "rejected")?.reason;
+    if (failure !== undefined) throw failure instanceof Error ? failure : new Error(String(failure));
   }
 }
 

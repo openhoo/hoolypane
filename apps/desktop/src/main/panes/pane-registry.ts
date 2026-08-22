@@ -3,7 +3,7 @@ import { BrowserWindow, session, type Session, type WebContents, WebContentsView
 import { IPC_CHANNELS, PaneGenerationSchema, ViewportSpecSchema, type Action, type BoundsSnapshot, type ViewportSpec } from "@hoolypane/contracts";
 import { displayScale, validateBoundsSnapshot, type Bounds } from "./layout.js";
 import { isAllowedProtocol, normalizeUrl } from "./url.js";
-import { addPane, closePane, defaultWorkspace, duplicatePane, reorderPane, rotatePane, updatePane, type PaneState, type WorkspaceState } from "./workspace.js";
+import { addPane, closePane, defaultWorkspace, duplicatePane, removePane, reorderPane, rotatePane, uniquePaneId, updatePane, type PaneState, type WorkspaceState } from "./workspace.js";
 
 type PaneFailure = { paneId: string; message: string };
 type PaneRecord = { id: string; view: WebContentsView; lastBounds?: Bounds; debuggerAttached: boolean; documentGeneration: number };
@@ -50,7 +50,7 @@ export class PaneRegistry {
 
   async create(viewport: ViewportSpec, paneId?: string): Promise<string> {
     const valid = ViewportSpecSchema.parse(viewport);
-    const id = paneId ?? this.nextPaneId(valid.id);
+    const id = paneId ?? uniquePaneId(new Set([...this.workspace.order, ...this.panes.keys()]), valid.id);
     if (this.panes.has(id)) throw new Error(`pane already exists: ${id}`);
     if (!this.window) throw new Error("pane registry has no window");
     const view = new WebContentsView({ webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, partition: "persist:hoolypane", preload: this.panePreloadPath() } });
@@ -183,7 +183,7 @@ export class PaneRegistry {
       const scale = displayScale(availableWidth, availableHeight, pane.viewport.width, pane.viewport.height);
       await contents.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width: pane.viewport.width, height: pane.viewport.height, deviceScaleFactor: pane.viewport.deviceScaleFactor, mobile: pane.viewport.isMobile, scale });
       await contents.debugger.sendCommand("Emulation.setTouchEmulationEnabled", { enabled: pane.viewport.hasTouch, configuration: pane.viewport.hasTouch ? "mobile" : "desktop" });
-    } catch (error) { this.reportFailure(record.id, `viewport emulation failed: ${error instanceof Error ? error.message : String(error)}`); }
+    } catch (error) { if (!this.isLive(record)) return; this.reportFailure(record.id, `viewport emulation failed: ${error instanceof Error ? error.message : String(error)}`); }
   }
 
   private installSessionSecurity(): void {
@@ -202,13 +202,6 @@ export class PaneRegistry {
   private setPane(paneId: string, patch: Partial<PaneState>): void { this.workspace = updatePane(this.workspace, paneId, (pane) => ({ ...pane, ...patch })); this.emitChange(); }
   private reportFailure(paneId: string, message: string): void { this.setPane(paneId, { failure: message, loading: false }); this.onFailure?.({ paneId, message }); }
   private emitChange(): void { this.onChange?.(this.workspace); }
-  private nextPaneId(seed: string): string {
-    const used = new Set([...this.workspace.order, ...this.panes.keys()]);
-    if (!used.has(seed)) return seed;
-    let suffix = 2;
-    while (used.has(`${seed}-${suffix}`)) suffix += 1;
-    return `${seed}-${suffix}`;
-  }
 
   private isLive(record: PaneRecord): boolean { return this.panes.get(record.id) === record && !record.view.webContents.isDestroyed(); }
 
@@ -219,7 +212,7 @@ export class PaneRegistry {
 
   private async rollbackCreate(record: PaneRecord): Promise<void> {
     this.panes.delete(record.id);
-    this.workspace = closePane(this.workspace, record.id);
+    this.workspace = removePane(this.workspace, record.id);
     await this.destroyRecord(record).catch(() => undefined);
     this.emitChange();
   }

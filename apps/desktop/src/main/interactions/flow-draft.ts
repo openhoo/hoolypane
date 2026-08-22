@@ -1,6 +1,7 @@
 import { ActionEnvelopeSchema, type ActionEnvelope } from "@hoolypane/contracts";
 import { serializeFlow } from "@hoolypane/flow";
 
+type FlowStopResult = { kind: "saved"; source: string } | { kind: "empty" } | { kind: "blocked"; reasons: string[] };
 export class FlowDraft {
   private envelopes: ActionEnvelope[] = [];
   private blocking = new Map<number, string[]>();
@@ -24,17 +25,26 @@ export class FlowDraft {
     this.blocking.set(actionId, reasons);
   }
 
-  stop(): string | null {
-    if (!this.active) return null;
+  unblock(actionId: number): void {
+    this.blocking.delete(actionId);
+  }
+
+  /** Computes the export outcome without mutating the draft; callers commit only after a successful save. */
+  stop(): FlowStopResult {
+    if (!this.active) return { kind: "empty" };
     if (this.blocking.size > 0) {
       const reasons = [...this.blocking.entries()].flatMap(([actionId, values]) => values.map((value) => `action ${actionId}: ${value}`));
-      throw new Error(`Flow cannot be exported:\n${reasons.join("\n")}`);
+      return { kind: "blocked", reasons };
     }
-    const source = this.envelopes.length <= 1 ? null : serializeFlow(this.envelopes, "@hoolypane/runner");
+    if (this.envelopes.length <= 1) return { kind: "empty" };
+    return { kind: "saved", source: serializeFlow(this.envelopes, "@hoolypane/runner") };
+  }
+
+  /** Discards the recording. Only call once persistence succeeded (or the user abandoned the save). */
+  commit(): void {
     this.active = false;
     this.envelopes = [];
     this.blocking.clear();
-    return source;
   }
 
   cancel(): void {

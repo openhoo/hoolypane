@@ -1,7 +1,8 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
+import { durationFrameCount } from "./capture-contract.js";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ViewportSpec } from "@hoolypane/contracts";
 import { RecordingSession, type RecordingTarget } from "./session.js";
@@ -33,6 +34,10 @@ describe("recording session", () => {
     await session.start([new FakeTarget()]);
     const result = await session.finalize({ status: "failed", failures: [{ message: "before initial frame" }] });
     expect(result.kind).toBe("diagnostics");
+    if (result.kind === "diagnostics") {
+      const payload = JSON.parse(await readFile(result.diagnosticsPath, "utf8")) as unknown;
+      expect(payload).toEqual({ contract: null, status: "failed", failures: [{ message: "before initial frame" }] });
+    }
   });
 
   it("encodes and validates a post-T0 partial run", async () => {
@@ -49,7 +54,7 @@ describe("recording session", () => {
     expect(result.kind).toBe("manifest");
     if (result.kind === "manifest") {
       expect(result.manifest).toMatchObject({ contract: "multi-viewport-cfr-v1", validationSuccess: true, status: "interrupted" });
-      expect(result.manifest.durationFrames).toBeGreaterThan(0);
+      expect(result.manifest.durationFrames).toBe(durationFrameCount(result.manifest.t0UnixUs, result.manifest.t1UnixUs, result.manifest.fps));
     }
   }, 30_000);
 });

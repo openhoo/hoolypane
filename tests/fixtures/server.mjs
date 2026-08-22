@@ -53,4 +53,8 @@ server.on("error", (error) => {
   process.exit(1);
 });
 server.listen(port, "127.0.0.1", () => console.log(`fixture ready http://127.0.0.1:${port}`));
-for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => server.close(() => process.exit(0)));
+for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => {
+  // Chromium panes hold keep-alive sockets open; force-close all connections so close() completes promptly.
+  server.closeAllConnections?.();
+  server.close(() => process.exit(0));
+});

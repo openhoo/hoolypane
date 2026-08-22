@@ -1,12 +1,13 @@
 import { z } from "zod";
 
 const nonEmpty = z.string().min(1);
-export const TestIdLocatorSchema = z.strictObject({ kind: z.literal("testId"), value: nonEmpty });
-export const RoleLocatorSchema = z.strictObject({ kind: z.literal("role"), role: nonEmpty, name: nonEmpty });
-export const LabelLocatorSchema = z.strictObject({ kind: z.literal("label"), value: nonEmpty });
-export const PlaceholderLocatorSchema = z.strictObject({ kind: z.literal("placeholder"), value: nonEmpty });
-export const TextLocatorSchema = z.strictObject({ kind: z.literal("text"), value: nonEmpty });
-export const CssLocatorSchema = z.strictObject({ kind: z.literal("css"), value: nonEmpty });
+export const HttpUrlSchema = z.url({ protocol: /^https?$/ });
+const TestIdLocatorSchema = z.strictObject({ kind: z.literal("testId"), value: nonEmpty });
+const RoleLocatorSchema = z.strictObject({ kind: z.literal("role"), role: nonEmpty, name: nonEmpty });
+const LabelLocatorSchema = z.strictObject({ kind: z.literal("label"), value: nonEmpty });
+const PlaceholderLocatorSchema = z.strictObject({ kind: z.literal("placeholder"), value: nonEmpty });
+const TextLocatorSchema = z.strictObject({ kind: z.literal("text"), value: nonEmpty });
+const CssLocatorSchema = z.strictObject({ kind: z.literal("css"), value: nonEmpty });
 
 export const LocatorSpecSchema = z.discriminatedUnion("kind", [
   TestIdLocatorSchema,
@@ -22,10 +23,7 @@ const target = { locator: LocatorSpecSchema };
 export const ActionSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("navigate"),
-    url: z.string().url().refine((url) => {
-      const protocol = new URL(url).protocol;
-      return protocol === "http:" || protocol === "https:";
-    }, "navigate URL must use http or https"),
+    url: HttpUrlSchema,
   }),
   z.strictObject({ kind: z.literal("click"), ...target }),
   z.strictObject({ kind: z.literal("fill"), ...target, value: z.string() }),
@@ -49,3 +47,9 @@ export const ActionEnvelopeSchema = z.strictObject({
   recordedAtUnixMs: z.number().int().nonnegative(),
 });
 export type ActionEnvelope = z.infer<typeof ActionEnvelopeSchema>;
+
+export interface FlowEvent {
+  label: string;
+  phase: "start" | "complete" | "failed";
+  atUnixMs: number;
+}

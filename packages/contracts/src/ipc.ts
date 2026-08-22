@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ActionSchema } from "./action.js";
+import { LayoutModeSchema } from "./state.js";
 import { ViewportSpecSchema } from "./viewport.js";
 
 export const IPC_CHANNELS = {
@@ -11,11 +12,10 @@ export const IPC_CHANNELS = {
   replayResult: "hoolypane:replay-result",
   flush: "hoolypane:flush",
   state: "hoolypane:state",
-  paneEvent: "hoolypane:pane-event",
 } as const;
 
 const paneId = z.string().min(1);
-export const IntegerBoundsSchema = z.strictObject({
+const IntegerBoundsSchema = z.strictObject({
   x: z.number().int().nonnegative(),
   y: z.number().int().nonnegative(),
   width: z.number().int().nonnegative(),
@@ -38,7 +38,7 @@ export const ChromeCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("focus"), paneId: paneId.nullable() }),
   z.strictObject({ kind: z.literal("navigate"), url: z.string().min(1) }),
   z.strictObject({ kind: z.enum(["back", "forward", "reload"]), paneId }),
-  z.strictObject({ kind: z.literal("set-layout"), layout: z.enum(["grid", "horizontal", "focus"]) }),
+  z.strictObject({ kind: z.literal("set-layout"), layout: LayoutModeSchema }),
   z.strictObject({ kind: z.literal("set-sync"), enabled: z.boolean() }),
   z.strictObject({ kind: z.enum(["capture-pane"]), paneId }),
   z.strictObject({ kind: z.enum(["capture-overview", "record-start", "record-stop"]) }),
@@ -72,4 +72,3 @@ export type BoundsSnapshot = z.infer<typeof BoundsSnapshotSchema>;
 export type ChromeCommand = z.infer<typeof ChromeCommandSchema>;
 export type ReplayRequest = z.infer<typeof ReplayRequestSchema>;
 export type ReplayResult = z.infer<typeof ReplayResultSchema>;
-export type PaneObservedAction = z.infer<typeof PaneObservedActionSchema>;

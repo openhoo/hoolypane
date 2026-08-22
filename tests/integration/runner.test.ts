@@ -1,24 +1,22 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runFlow } from "../../packages/runner/src/run-flow.js";
+import { pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
 
-let fixture: ChildProcess;
+const FIXTURE_PORT = 4174;
+
+let fixture: FixtureServer | undefined;
 const outputs: string[] = [];
 
 beforeAll(async () => {
-  fixture = spawn(process.execPath, [resolve("tests/fixtures/server.mjs")], { env: { ...process.env, PORT: "4174" }, stdio: ["ignore", "pipe", "inherit"] });
-  const ready = Promise.withResolvers<void>();
-  fixture.stdout?.on("data", (data: Buffer) => { if (data.toString().includes("fixture ready")) ready.resolve(); });
-  fixture.once("error", ready.reject);
-  fixture.once("exit", (code) => ready.reject(new Error(`fixture exited before readiness (code ${code})`)));
-  await ready.promise;
+  fixture = await startFixtureServer(FIXTURE_PORT);
 }, 10_000);
 
 afterAll(async () => {
-  fixture.kill("SIGTERM");
+  await fixture?.close();
   await Promise.all(outputs.map((output) => rm(output, { recursive: true, force: true })));
 });
 
@@ -29,26 +27,24 @@ async function outputDirectory(name: string): Promise<string> {
 }
 
 async function results(): Promise<unknown[]> {
-  return fetch("http://127.0.0.1:4174/results").then((response) => response.json()) as Promise<unknown[]>;
+  return fetch(`http://127.0.0.1:${FIXTURE_PORT}/results`).then((response) => response.json()) as Promise<unknown[]>;
 }
+
 async function waitForRecorderState(output: string, expected: string): Promise<void> {
   // External child process exposes readiness only through its atomically written state file.
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
+  await pollUntil(async () => {
     try {
       const state = JSON.parse(await readFile(join(output, "run-state.json"), "utf8")) as { state?: string };
-      if (state.state === expected) return;
-    } catch { /* recorder has not created state yet */ }
-    const next = Promise.withResolvers<void>();
-    setTimeout(next.resolve, 10);
-    await next.promise;
-  }
-  throw new Error(`recorder did not reach ${expected}`);
+      return state.state === expected;
+    } catch {
+      return null; // recorder has not created state yet
+    }
+  }, 10_000, 10);
 }
 
 describe("real runner", () => {
   it("executes every action in isolated responsive contexts and records aligned artifacts", async () => {
-    await fetch("http://127.0.0.1:4174/reset");
+    await fetch(`http://127.0.0.1:${FIXTURE_PORT}/reset`);
     const output = await outputDirectory("success");
     const result = await runFlow({ command: "run", flowFile: resolve("tests/fixtures/responsive.flow.ts"), configFile: resolve("tests/fixtures/hoolypane.config.ts"), outputDir: output, headed: false });
     expect(result.status).toBe("success");
@@ -87,8 +83,11 @@ describe("real runner", () => {
     child.once("exit", (code) => exited.resolve(code));
     try {
       await waitForRecorderState(output, "recording");
+      // Windows terminates SIGINT-signalled children unconditionally with exit code 1; only POSIX honours 130.
       child.kill("SIGINT");
-      expect(await exited.promise).toBe(130);
+      const exitCode = await exited.promise;
+      if (process.platform === "win32") expect(exitCode).toBe(1);
+      else expect(exitCode).toBe(130);
     } finally {
       if (child.exitCode === null && !child.killed) child.kill("SIGKILL");
       await exited.promise.catch(() => undefined);

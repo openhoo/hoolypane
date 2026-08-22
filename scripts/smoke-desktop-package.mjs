@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
@@ -8,13 +9,31 @@ const artifactDir = resolve(directoryArgument ?? "dist/desktop");
 const files = await fs.readdir(artifactDir);
 const temporary = await fs.mkdtemp(join(tmpdir(), "hoolypane-package-smoke-"));
 const fixturePort = 4188;
-const debuggingPort = 9333;
 let mountedDmg;
 let installedDirectory;
 let app;
 let fixture;
 let appExit;
 let logs = "";
+let fixtureLogs = "";
+
+// Binds an OS-assigned port so concurrent runs and leaked predecessors cannot satisfy the probe.
+const debuggingPort = await new Promise((resolvePort, rejectPort) => {
+  const probe = createServer();
+  probe.once("error", rejectPort);
+  probe.listen(0, "127.0.0.1", () => {
+    const { port } = probe.address();
+    probe.close(() => resolvePort(port));
+  });
+});
+
+function soleArtifact(extension) {
+  const matches = files.filter((file) => file.endsWith(extension));
+  if (matches.length !== 1) {
+    throw new Error(`expected exactly one ${extension} artifact in ${artifactDir}, found ${matches.length}: ${matches.join(", ") || "(none)"}`);
+  }
+  return matches[0];
+}
 
 function run(command, args, options = {}) {
   return new Promise((resolvePromise, reject) => {
@@ -43,10 +62,13 @@ async function stopChild(child) {
 async function waitForFixture() {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
+    if (fixture.exitCode !== null || fixture.signalCode !== null) {
+      throw new Error(`fixture server exited before readiness (code ${fixture.exitCode ?? fixture.signalCode}): ${fixtureLogs.trim()}`);
+    }
     try { if ((await fetch(`http://127.0.0.1:${fixturePort}/`)).ok) return; } catch { /* not ready */ }
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
   }
-  throw new Error("fixture server did not become ready");
+  throw new Error(`fixture server did not become ready: ${fixtureLogs.trim()}`);
 }
 async function waitForDesktop() {
   const deadline = Date.now() + 20_000;
@@ -63,30 +85,30 @@ async function waitForDesktop() {
 }
 
 try {
-  fixture = spawn(process.execPath, [resolve("tests/fixtures/server.mjs")], { env: { ...process.env, PORT: String(fixturePort) }, stdio: "ignore" });
+  // Fixture stdout/stderr are piped so startup failures (e.g. EADDRINUSE) surface in error messages.
+  fixture = spawn(process.execPath, [resolve("tests/fixtures/server.mjs")], { env: { ...process.env, PORT: String(fixturePort) }, stdio: ["ignore", "pipe", "pipe"] });
+  fixture.stdout?.on("data", (data) => { fixtureLogs += data; });
+  fixture.stderr?.on("data", (data) => { fixtureLogs += data; });
   await waitForFixture();
   let executable;
   let launchArgs = [`--remote-debugging-port=${debuggingPort}`, "--url", `http://127.0.0.1:${fixturePort}`];
   let environment = { ...process.env };
 
   if (process.platform === "linux") {
-    const artifact = files.find((file) => file.endsWith(".AppImage"));
-    if (!artifact) throw new Error("Linux AppImage artifact missing");
+    const artifact = soleArtifact(".AppImage");
     executable = join(artifactDir, artifact);
     await fs.chmod(executable, 0o755);
     environment = { ...environment, LIBGL_ALWAYS_SOFTWARE: environment.LIBGL_ALWAYS_SOFTWARE ?? "1" };
     // Extraction mode cannot preserve the AppImage's setuid sandbox ownership; this flag is smoke-only.
     launchArgs = ["--appimage-extract-and-run", "--no-sandbox", "--ozone-platform=x11", "--use-gl=angle", "--use-angle=swiftshader", ...launchArgs];
   } else if (process.platform === "win32") {
-    const installer = files.find((file) => file.endsWith(".exe"));
-    if (!installer) throw new Error("Windows NSIS artifact missing");
+    const installer = soleArtifact(".exe");
     installedDirectory = join(temporary, "installed");
     await run(join(artifactDir, installer), ["/S", `/D=${installedDirectory}`]);
     executable = join(installedDirectory, "Hoolypane.exe");
     await fs.access(executable);
   } else if (process.platform === "darwin") {
-    const dmg = files.find((file) => file.endsWith(".dmg"));
-    if (!dmg) throw new Error("macOS DMG artifact missing");
+    const dmg = soleArtifact(".dmg");
     mountedDmg = join(temporary, "mounted");
     await fs.mkdir(mountedDmg);
     await run("hdiutil", ["attach", join(artifactDir, dmg), "-nobrowse", "-readonly", "-mountpoint", mountedDmg]);
@@ -110,5 +132,9 @@ try {
     const uninstaller = join(installedDirectory, "Uninstall Hoolypane.exe");
     try { await run(uninstaller, ["/S"]); } catch { /* temporary directory removal remains authoritative */ }
   }
-  await fs.rm(temporary, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  try {
+    await fs.rm(temporary, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  } catch {
+    // Best-effort: cleanup must never mask the primary failure.
+  }
 }

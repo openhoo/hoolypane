@@ -35,6 +35,42 @@ describe("interaction coordinator", () => {
     await Promise.all([first, second]);
     expect(events).toEqual(["first-start", "first-end", "second"]);
   });
+
+  it("cancels a queued replay when its pane closes, while the running one settles normally", async () => {
+    const coordinator = new InteractionCoordinator();
+    const gate = Promise.withResolvers<void>();
+    let started = false;
+    const first = coordinator.dispatch(envelope, ["one"], async () => { started = true; await gate.promise; });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(started).toBe(true);
+    const second = coordinator.dispatch({ ...envelope, actionId: 2 }, ["one"], async () => undefined);
+    coordinator.cancelPane("one");
+    gate.resolve();
+    expect(await second).toEqual([{ paneId: "one", ok: false, reason: expect.stringMatching(/replay cancelled/) }]);
+    expect(await first).toEqual([{ paneId: "one", ok: true }]);
+  });
+
+  it("maps a rejecting replay to a failed outcome, including non-Error throws", async () => {
+    const coordinator = new InteractionCoordinator();
+    const outcomes = await coordinator.dispatch(envelope, ["one"], async () => {
+      throw "locator exploded"; // eslint-disable-line no-throw-literal
+    });
+    expect(outcomes).toEqual([{ paneId: "one", ok: false, reason: "locator exploded" }]);
+  });
+
+  it("still executes work dispatched after a cancelled predecessor on the same pane", async () => {
+    const coordinator = new InteractionCoordinator();
+    const gate = Promise.withResolvers<void>();
+    const first = coordinator.dispatch(envelope, ["one"], () => gate.promise);
+    coordinator.cancelPane("one");
+    gate.resolve();
+    await expect(first).resolves.toEqual([{ paneId: "one", ok: false, reason: expect.stringMatching(/replay cancelled/) }]);
+    let ran = false;
+    const next = await coordinator.dispatch({ ...envelope, actionId: 3 }, ["one"], async () => { ran = true; });
+    expect(next).toEqual([{ paneId: "one", ok: true }]);
+    expect(ran).toBe(true);
+  });
 });
 
 describe("flow draft", () => {
@@ -42,11 +78,64 @@ describe("flow draft", () => {
     const draft = new FlowDraft();
     draft.start("https://example.test", "source", 1, 1);
     draft.append({ ...envelope, actionId: 2 });
-    expect(draft.stop()).toContain('import { defineFlow } from "@hoolypane/runner";');
+    expect(draft.stop()).toEqual({ kind: "saved", source: expect.stringContaining('import { defineFlow } from "@hoolypane/runner";') });
 
     draft.start("https://example.test", "source", 3, 3);
     draft.append({ ...envelope, actionId: 4 });
     draft.block(4, "phone: locator resolved 0 elements");
-    expect(() => draft.stop()).toThrow(/phone/);
+    expect(draft.stop()).toEqual({ kind: "blocked", reasons: ["action 4: phone: locator resolved 0 elements"] });
+  });
+
+  it("drops appends while inactive and reports empty stops", () => {
+    const draft = new FlowDraft();
+    draft.append({ ...envelope, actionId: 9 });
+    expect(draft.stop()).toEqual({ kind: "empty" });
+    expect(draft.isActive).toBe(false);
+
+    draft.start("https://example.test", "source", 1, 1);
+    expect(draft.stop()).toEqual({ kind: "empty" });
+    expect(draft.isActive).toBe(true); // empty stop leaves the recording armed until commit
+  });
+
+  it("stays active on a blocked stop so recovery can clear it", () => {
+    const draft = new FlowDraft();
+    draft.start("https://example.test", "source", 1, 1);
+    draft.append({ ...envelope, actionId: 2 });
+    draft.block(2, "phone: navigation raced the replay");
+    expect(draft.stop()).toEqual({ kind: "blocked", reasons: ["action 2: phone: navigation raced the replay"] });
+    expect(draft.isActive).toBe(true);
+  });
+
+  it("unblock removes recovered reasons so a later stop exports", () => {
+    const draft = new FlowDraft();
+    draft.start("https://example.test", "source", 1, 1);
+    draft.append({ ...envelope, actionId: 2 });
+    draft.block(2, "phone: replay timed out");
+    draft.block(2, "phone: replay timed out again");
+    draft.unblock(2);
+    const stopped = draft.stop();
+    expect(stopped).toEqual({ kind: "saved", source: expect.any(String) });
+    draft.commit();
+    expect(draft.isActive).toBe(false);
+    expect(draft.stop()).toEqual({ kind: "empty" });
+  });
+
+  it("start resets blocking from a previous recording", () => {
+    const draft = new FlowDraft();
+    draft.start("https://example.test", "source", 1, 1);
+    draft.append({ ...envelope, actionId: 2 });
+    draft.block(2, "stale");
+    draft.start("https://example.test", "source", 5, 5);
+    draft.append({ ...envelope, actionId: 6 });
+    expect(draft.stop()).toEqual({ kind: "saved", source: expect.any(String) });
+  });
+
+  it("cancel discards envelopes and deactivates", () => {
+    const draft = new FlowDraft();
+    draft.start("https://example.test", "source", 1, 1);
+    draft.append({ ...envelope, actionId: 2 });
+    draft.cancel();
+    expect(draft.isActive).toBe(false);
+    expect(draft.stop()).toEqual({ kind: "empty" });
   });
 });

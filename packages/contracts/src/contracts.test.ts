@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ActionEnvelopeSchema, ActionSchema, HoolypaneConfigSchema, VIEWPORT_PRESETS } from "./index.js";
+import { ActionEnvelopeSchema, ActionSchema, ChromeStateSchema, HoolypaneConfigSchema, VIEWPORT_PRESETS, WorkspaceStateSchema, defaultWorkspace } from "./index.js";
 
 describe("configuration", () => {
   it("applies all recording defaults", () => {
@@ -58,5 +58,28 @@ describe("action language edge cases", () => {
     expect(ActionSchema.safeParse({ kind: "navigate", url: "https://example.test" }).success).toBe(true);
     expect(ActionSchema.safeParse({ kind: "navigate", url: "file:///etc/passwd" }).success).toBe(false);
     expect(ActionSchema.safeParse({ kind: "navigate", url: "javascript:alert(1)" }).success).toBe(false);
+  });
+});
+
+describe("workspace state", () => {
+  it("round-trips the default workspace and requires chrome extensions", () => {
+    const workspace = defaultWorkspace();
+    expect(WorkspaceStateSchema.parse(workspace)).toEqual(workspace);
+    const chrome = { ...workspace, recording: false, lastError: null };
+    expect(ChromeStateSchema.parse(chrome)).toEqual(chrome);
+    expect(ChromeStateSchema.safeParse(workspace).success).toBe(false);
+  });
+
+  it("keeps workspace invariants on the extended chrome schema", () => {
+    const chrome = { ...defaultWorkspace(), recording: true, lastError: null };
+    expect(ChromeStateSchema.safeParse({ ...chrome, focusedPaneId: "missing-pane" }).success).toBe(false);
+    expect(ChromeStateSchema.safeParse({ ...chrome, order: [...chrome.order].reverse().slice(1) }).success).toBe(false);
+    expect(ChromeStateSchema.safeParse({ ...chrome, sharedUrl: "file:///etc/passwd" }).success).toBe(false);
+  });
+
+  it("restricts recorded action kinds to the action language", () => {
+    const chrome = { ...defaultWorkspace(), recording: true, lastError: null };
+    const pane = { ...chrome.panes[0]!, outOfSync: { actionId: 1, actionKind: "hover", reason: "unsupported" } };
+    expect(ChromeStateSchema.safeParse({ ...chrome, panes: [pane], order: [pane.id] }).success).toBe(false);
   });
 });

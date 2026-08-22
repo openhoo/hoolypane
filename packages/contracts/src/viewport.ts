@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-export const MAX_ENCODED_DIMENSION = 16_384;
-export const MAX_ENCODED_AREA = 67_108_864;
+const MAX_ENCODED_DIMENSION = 16_384;
+const MAX_ENCODED_AREA = 67_108_864;
 const slug = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export function encodedDimension(cssDimension: number, deviceScaleFactor: number): number {

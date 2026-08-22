@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join, relative } from "node:path";
 import { hrtime } from "node:process";
-import type { ResolvedRecordingConfig, ViewportSpec } from "@hoolypane/contracts";
+import type { ResolvedRecordingConfig, ViewportSpec, FlowEvent } from "@hoolypane/contracts";
 import { encodedDimension } from "@hoolypane/contracts";
 import {
   alignFrames,
@@ -21,9 +21,8 @@ import { CaptureSpool, decodeScreencastData, frameMetadata, type CaptureTarget, 
 import { verifyArtifacts } from "./verifier.js";
 
 export interface RecorderFailure { readonly message: string; readonly viewportId?: string; readonly stepId?: string; readonly stack?: string }
-export interface RecorderFlowEvent { readonly label: string; readonly phase: "start" | "complete" | "failed"; readonly atUnixMs: number }
 export type RecordingTarget = CaptureTarget;
-export type RecordingFinalizeResult = { readonly kind: "manifest"; readonly manifestPath: string; readonly manifest: RecordingManifest } | { readonly kind: "diagnostics"; readonly diagnosticsPath: string };
+type RecordingFinalizeResult = { readonly kind: "manifest"; readonly manifestPath: string; readonly manifest: RecordingManifest } | { readonly kind: "diagnostics"; readonly diagnosticsPath: string };
 
 export interface RecordingManifest {
   readonly contract: typeof CAPTURE_CONTRACT;
@@ -50,7 +49,7 @@ export interface RecordingManifest {
   }[];
   readonly mappings: Readonly<Record<string, readonly SlotMapping[]>>;
   readonly failures: readonly RecorderFailure[];
-  readonly flowEvents: readonly RecorderFlowEvent[];
+  readonly flowEvents: readonly FlowEvent[];
   readonly artifacts: Readonly<Record<string, string>>;
   readonly sha256: Readonly<Record<string, string>>;
 }
@@ -79,14 +78,30 @@ async function atomicJson(path: string, value: unknown): Promise<void> {
   const handle = await fs.open(temporary, "wx");
   try {
     await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`);
+    await handle.sync();
+    await fs.rename(temporary, path);
+  } catch (error) {
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
   } finally {
     await handle.close();
   }
-  await fs.rename(temporary, path);
 }
 
 async function sha256(path: string): Promise<string> {
-  return createHash("sha256").update(await fs.readFile(path)).digest("hex");
+  const handle = await fs.open(path, "r");
+  try {
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(4 * 1024 * 1024);
+    for (;;) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      hash.update(bytesRead === buffer.length ? buffer : buffer.subarray(0, bytesRead));
+    }
+    return hash.digest("hex");
+  } finally {
+    await handle.close();
+  }
 }
 async function collectDirectoryArtifacts(outputDir: string, directoryName: string, artifacts: Record<string, string>, hashes: Record<string, string>): Promise<void> {
   const directory = join(outputDir, directoryName);
@@ -98,8 +113,8 @@ async function collectDirectoryArtifacts(outputDir: string, directoryName: strin
       const metadata = await fs.stat(path);
       if (!metadata.isFile()) continue;
       const key = relative(outputDir, path);
-      artifacts[key] = key;
       hashes[key] = await sha256(path);
+      artifacts[key] = key;
     } catch { continue; }
   }
 }
@@ -117,8 +132,6 @@ export class RecordingSession {
 
   constructor(private readonly options: { readonly recording: Omit<ResolvedRecordingConfig, "outputDir">; readonly timeoutMs: number; readonly outputDir: string }) {}
 
-  get currentState(): RecordingState { return this.state; }
-  get t0(): number | undefined { return this.t0Us; }
 
   private async transition(next: RecordingState): Promise<void> {
     assertStateTransition(this.state, next);
@@ -213,7 +226,7 @@ export class RecordingSession {
     await this.spools.close();
   }
 
-  async finalize(input: { readonly status: "success" | "failed" | "interrupted"; readonly failures: readonly RecorderFailure[]; readonly events?: readonly RecorderFlowEvent[] }): Promise<RecordingFinalizeResult> {
+  async finalize(input: { readonly status: "success" | "failed" | "interrupted"; readonly failures: readonly RecorderFailure[]; readonly events?: readonly FlowEvent[] }): Promise<RecordingFinalizeResult> {
     if (this.finalized) throw new Error("recording session already finalized");
     this.finalized = true;
     try {
@@ -252,7 +265,10 @@ export class RecordingSession {
           this.options.recording,
         );
         await this.transition("validating");
-        const verification = await verifyArtifacts(this.options.outputDir, this.options.recording.fps, durationFrames);
+        const verification = await verifyArtifacts(this.options.outputDir, this.options.recording.fps, durationFrames, {
+          tracks: aligned.map(({ context, geometry }) => ({ id: context.target.id, encodedWidth: geometry.encodedWidth, encodedHeight: geometry.encodedHeight })),
+          composite: { width: encoding.geometry.outputWidth, height: encoding.geometry.outputHeight },
+        });
         if (!verification.success) {
           await this.transition("failed");
           throw new Error(`artifact validation failed: ${verification.error ?? "unknown error"}`);

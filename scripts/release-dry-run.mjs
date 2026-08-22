@@ -9,6 +9,7 @@ function run(command, args, environment = process.env) {
   });
 }
 
+await run(pnpm, ["pins:check"]);
 await run(pnpm, ["architecture"]);
 await run(pnpm, ["exec", "knip"]);
 await run(pnpm, ["typecheck"]);
