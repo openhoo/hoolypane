@@ -3,6 +3,17 @@ import { IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, ReplayReq
 
 let documentGeneration = 0;
 const suppressed = new Map<number, number>(); // actionId → documentGeneration the action was resolved against
+// Set while replay-driven scrollIntoView moves scrollables: those trusted scrolls are our own doing,
+// not user intent, and must never be observed back (they would echo into every other pane).
+let autoScrollDepth = 0;
+function autoScrollCenter(element: Element): void {
+  autoScrollDepth += 1;
+  try {
+    element.scrollIntoView({ block: "center", inline: "center" });
+  } finally {
+    window.requestAnimationFrame(() => { autoScrollDepth -= 1; });
+  }
+}
 let pendingFill: { element: HTMLInputElement | HTMLTextAreaElement; timer: number } | undefined;
 let scrollFrame = 0;
 
@@ -159,10 +170,14 @@ document.addEventListener("keydown", (event) => {
   record(() => ({ kind: "press", locator: locatorFor(target), key: event.key }));
 }, true);
 document.addEventListener("scroll", (event) => {
-  if (!event.isTrusted || suppressed.size > 0 || scrollFrame) return;
+  if (!event.isTrusted || suppressed.size > 0 || scrollFrame || autoScrollDepth > 0) return;
+  // Document-level scrolls are viewport management, and replay-driven auto-scrolls are our own
+  // doing — recording either would mirror them back into all other panes as phantom user actions.
+  if (!(event.target instanceof HTMLElement) || event.target === document.documentElement || event.target === document.body) return;
+  const scrolled = event.target;
   scrollFrame = window.requestAnimationFrame(() => {
     scrollFrame = 0;
-    const target = event.target instanceof HTMLElement ? event.target : document.documentElement;
+    const target = scrolled;
     const horizontalRatio = target.scrollWidth === target.clientWidth ? 0 : Math.min(1, Math.max(0, target.scrollLeft / (target.scrollWidth - target.clientWidth)));
     const verticalRatio = target.scrollHeight === target.clientHeight ? 0 : Math.min(1, Math.max(0, target.scrollTop / (target.scrollHeight - target.clientHeight)));
     record(() => ({ kind: "scroll", locator: locatorFor(target), horizontalRatio, verticalRatio }));
@@ -204,6 +219,9 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
           element.dispatchEvent(new Event("scroll", { bubbles: true }));
         }
       }
+      // Mirrored native input is routed at viewport coordinates: bring the target into view first,
+      // exactly like a real user (or Playwright's auto-scroll) would, before measuring its box.
+      autoScrollCenter(element);
       const box = element.getBoundingClientRect();
       result = { ...result, box: { x: box.x, y: box.y, width: box.width, height: box.height }, ...(element instanceof HTMLInputElement ? { checked: element.checked } : {}) };
     }

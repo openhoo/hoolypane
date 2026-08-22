@@ -138,6 +138,6 @@ describe("desktop replay and security resilience", () => {
     }
     await chrome.getByText(/render process gone/).first().waitFor({ state: "attached", timeout: 10_000 });
     const healthy = await Promise.all(application.context().pages().filter((page) => page.url().startsWith(`http://127.0.0.1:${FIXTURE_PORT}`)).map((page) => page.title().catch(() => "crashed")));
-    expect(healthy.filter((title) => title === "Hoolypane fixture").length).toBeGreaterThanOrEqual(4);
+    expect(healthy.filter((title) => title.startsWith("Nimbus Analytics")).length).toBeGreaterThanOrEqual(4);
   }, 20_000);
 });

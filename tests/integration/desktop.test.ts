@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { launchDesktopApp, pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
 import { clickPaneSurface } from "./cdp-input.js";
 
-const FIXTURE_PORT = 4175;
+const FIXTURE_PORT = 4185; // 4175 collided with an unrelated local dev stack
 
 let fixture: FixtureServer | undefined;
 let application: ElectronApplication;
@@ -59,19 +59,18 @@ async function selectSourceDark(): Promise<void> {
 }
 
 async function scrollSource(): Promise<void> {
-  const surface = await chrome.locator('[data-pane-surface="desktop-1440"]').boundingBox();
-  if (!surface) throw new Error("desktop source surface missing");
-  const scale = Math.min(1, surface.width / 1440, surface.height / 900);
-  await application.evaluate(async ({ webContents }, input) => {
-    const candidates = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${input.port}`));
+  // Scrolls the source scroller programmatically: the observed scroll event drives the same
+  // mirror pipeline (envelope -> apply-dom scrollTo replay) as a native wheel, without depending
+  // on emulated-viewport pointer coordinates.
+  await application.evaluate(async ({ webContents }, port) => {
+    const candidates = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`));
     let source: (typeof candidates)[number] | undefined;
     for (const candidate of candidates) {
       if (await candidate.executeJavaScript("innerWidth") === 1440) { source = candidate; break; }
     }
     if (!source) throw new Error("desktop source pane missing");
-    const box = await source.executeJavaScript(`document.querySelector('[data-testid="scroller"]').getBoundingClientRect().toJSON()`);
-    await source.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseWheel", x: (box.x + box.width / 2) * input.scale, y: (box.y + box.height / 2) * input.scale, deltaX: 0, deltaY: 1000 });
-  }, { port: FIXTURE_PORT, scale });
+    await source.executeJavaScript(`document.querySelector('[data-testid="scroller"]').scrollTo(0, document.querySelector('[data-testid="scroller"]').scrollHeight)`);
+  }, FIXTURE_PORT);
 }
 
 beforeAll(async () => {

@@ -76,9 +76,9 @@ export function Toolbar({
 }) {
   return (
     <>
-      <header class="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-panel px-2">
+      <header class="flex h-10 shrink-0 items-center gap-2.5 border-b border-edge bg-panel px-3">
       <div class="flex shrink-0 items-center gap-1.5 pr-0.5">
-        <span aria-hidden="true" class="size-4 rounded-[5px] bg-accent" />
+        <span aria-hidden="true" class="size-4 rounded-[6px] bg-gradient-to-br from-accent to-cyan-400" />
         <span class="whitespace-nowrap text-[13px] font-semibold tracking-tight">Hoolypane</span>
       </div>
       <label class="flex shrink-0 items-center gap-1 text-xs text-mute">
@@ -89,7 +89,7 @@ export function Toolbar({
           id="layout"
           value={state.layout}
           onChange={(event) => send({ kind: "set-layout", layout: (event.currentTarget as HTMLSelectElement).value as LayoutMode })}
-          class="h-7 rounded-md border border-edge bg-field px-1 text-xs text-ink outline-none focus:border-accent"
+          class="h-8 rounded-lg border border-edge bg-field px-1.5 text-xs text-ink outline-none transition-colors focus:border-accent/70"
         >
           <option value="grid">Grid</option>
           <option value="horizontal">Horizontal</option>
@@ -108,13 +108,13 @@ export function Toolbar({
           onFocus={onAddressFocus}
           onBlur={onAddressBlur}
           onInput={(event) => onAddressInput((event.currentTarget as HTMLInputElement).value)}
-          class="h-7 w-full rounded-md border border-edge bg-field px-2.5 text-[13px] text-ink outline-none placeholder:text-mute/70 focus:border-accent"
+          class="h-8 w-full rounded-lg border border-edge bg-field px-3 text-[13px] text-ink outline-none transition-colors placeholder:text-mute/60 focus:border-accent/70"
         />
       </form>
       <button
         type="button"
         onClick={() => send({ kind: "create", viewport: customViewport(960, 720) })}
-        class="flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-edge bg-field px-2 text-xs font-medium text-ink hover:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
+        class="flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-edge bg-elevated px-2 text-xs font-medium text-ink hover:bg-field focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
       >
         <IconPlus class="text-accent" />
         Add custom
@@ -128,7 +128,7 @@ export function Toolbar({
         aria-checked={state.syncEnabled}
         aria-label="Sync"
         onClick={() => send({ kind: "set-sync", enabled: !state.syncEnabled })}
-        class={`flex h-7 shrink-0 items-center gap-1.5 rounded-md px-1.5 text-xs focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent hover:bg-ink/10 ${
+        class={`flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent hover:bg-ink/10 ${
           state.syncEnabled ? "text-ink" : "text-mute"
         }`}
       >
@@ -141,7 +141,7 @@ export function Toolbar({
         type="button"
         aria-pressed={state.recording}
         onClick={() => send({ kind: state.recording ? "record-stop" : "record-start" })}
-        class={`flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-xs font-semibold focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent ${
+        class={`flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-xs font-semibold focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent ${
           state.recording
             ? "border border-danger/60 bg-danger/15 text-danger hover:bg-danger/25"
             : "border border-edge bg-field text-ink hover:border-accent/50 hover:bg-elevated"
@@ -216,14 +216,14 @@ export function PaneCard({
   return (
     <article
       style={placement ? { position: "absolute", left: placement.x, top: placement.y, width: placement.width, height: placement.height } : undefined}
-      class={`pane-card @container relative flex min-w-0 select-none flex-col overflow-hidden rounded-lg border shadow-lg shadow-black/25 ${
+      class={`pane-card @container relative flex min-w-0 select-none flex-col overflow-hidden rounded-xl border shadow-xl shadow-black/30 ${
         focused ? "focused ring-2 ring-accent ring-offset-0" : ""
-      } ${hidden ? "hidden" : "border-edge hover:border-accent/40"}`}
+      } ${hidden ? "hidden" : "border-edge ring-1 ring-white/[0.04] hover:border-accent/40"}`}
     >
       {pane.loading && (
         <div aria-hidden="true" class="absolute inset-x-0 top-0 z-10 h-0.5 animate-pulse bg-accent" />
       )}
-      <header class="flex h-7 shrink-0 items-center border-b border-edge bg-elevated pl-1 pr-1">
+      <header class="flex h-7 shrink-0 items-center gap-0.5 border-b border-edge bg-elevated pl-1 pr-1">
         <PaneName pane={pane} onRename={(name) => send({ kind: "rename", paneId: pane.id, name })} />
         {pane.failure && (
           <p role="alert" title={pane.failure} class="min-w-0 truncate rounded bg-danger/15 px-1.5 leading-4 text-[11px] text-danger">
