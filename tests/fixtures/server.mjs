@@ -14,7 +14,7 @@ const page = `<!doctype html>
 *{box-sizing:border-box}
 body{font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;margin:0;background:var(--bg);color:var(--ink)}
 a{color:inherit;text-decoration:none}
-nav{position:sticky;top:0;display:flex;align-items:center;gap:20px;padding:12px 28px;background:rgba(255,255,255,.85);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+nav{position:sticky;top:0;display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px;padding:12px 28px;background:#ffffff;border-bottom:1px solid var(--line)}
 .brand{display:flex;align-items:center;gap:9px;font-weight:700;font-size:16px;letter-spacing:-.01em}
 .mark{width:24px;height:24px;border-radius:7px;background:linear-gradient(135deg,#6366f1,#22d3ee)}
 nav .links{display:flex;gap:18px;color:var(--muted);font-size:14px}
@@ -55,7 +55,9 @@ h2{font-size:clamp(22px,3vw,30px);letter-spacing:-.02em;margin:0 0 6px}
 .panel .lede{color:#a7adcf}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media(max-width:640px){.grid2{grid-template-columns:1fr}}
-@media(max-width:760px){nav{position:static;padding:12px 18px}nav .links{display:none}}
+@media(max-width:760px){nav{padding:12px 18px}nav .links{display:none}}
+@media(max-width:480px){nav .btn-ghost{display:none}.hero{padding:40px 16px 24px}section.features,.console{padding-left:16px;padding-right:16px}}
+@media(max-width:220px){.brand span:last-of-type{font-size:13px}nav{gap:8px}}
 @media(max-width:720px){.dash{grid-template-columns:1fr}.kpi b{font-size:18px}}
 .field{display:grid;gap:5px;font-size:12px;color:#a7adcf}
 .panel [data-testid]{scroll-margin-top:80px}
