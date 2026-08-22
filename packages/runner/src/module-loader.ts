@@ -133,10 +133,18 @@ function playwrightResolution(artifactPath: string): Plugin {
   return {
     name: "playwright-resolution",
     setup(pluginBuild: PluginBuild): void {
-      pluginBuild.onResolve({ filter: /^playwright$/ }, () => ({
-        path: relative(dirname(artifactPath), playwrightEntry()).split(sep).join("/"),
-        external: true,
-      }));
+      pluginBuild.onResolve({ filter: /^playwright$/ }, () => {
+        const specifier = relative(dirname(artifactPath), playwrightEntry()).split(sep).join("/");
+        // Degenerate result of cross-drive inputs (artifact on C:, playwright on D:) is an
+        // absolute path, not a specifier; Node would fail the artifact with ERR_UNSUPPORTED_ESM_URL_SCHEME.
+        if (!specifier.startsWith(".")) {
+          throw new Error(
+            `cannot express the playwright ESM entry (${specifier}) as a module-relative specifier from ${artifactPath}: ` +
+            "cross-drive absolute paths are unsupported; keep playwright on the same drive as the runner cache",
+          );
+        }
+        return { path: specifier, external: true };
+      });
     },
   };
 }

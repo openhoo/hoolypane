@@ -7,8 +7,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runFlow } from "../../packages/runner/src/run-flow.js";
 import { launchDesktopApp, pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
 import { clickPaneSurface } from "./cdp-input.js";
+import { FIXTURE_PORTS } from "../fixtures/ports.js";
 
-const FIXTURE_PORT = 4178;
+const FIXTURE_PORT = FIXTURE_PORTS.artifacts;
 
 let fixture: FixtureServer | undefined;
 let application: ElectronApplication;

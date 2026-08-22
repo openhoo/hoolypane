@@ -3,12 +3,14 @@ import { promises as fs } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
+// Node 24 strips types natively; plain-node scripts need the exact .ts specifier (no .js remap).
+import { FIXTURE_PORTS } from "../tests/fixtures/ports.ts";
 
 const directoryArgument = process.argv[2] === "--" ? process.argv[3] : process.argv[2];
 const artifactDir = resolve(directoryArgument ?? "dist/desktop");
 const files = await fs.readdir(artifactDir);
 const temporary = await fs.mkdtemp(join(tmpdir(), "hoolypane-package-smoke-"));
-const fixturePort = 4188;
+const fixturePort = FIXTURE_PORTS.packageSmoke;
 let mountedDmg;
 let installedDirectory;
 let app;

@@ -117,6 +117,7 @@ export class PaneRegistry {
   setLayout(layout: WorkspaceState["layout"]): void { this.workspace = { ...this.workspace, layout }; this.emitChange(); }
 
   setPanePosition(paneId: string, x: number, y: number): void {
+    if (!this.panes.has(paneId)) throw new Error(`unknown pane: ${paneId}`);
     this.workspace = { ...this.workspace, positions: { ...this.workspace.positions, [paneId]: { x, y } } };
     this.emitChange();
   }

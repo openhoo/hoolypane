@@ -5,8 +5,9 @@ import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runFlow } from "../../packages/runner/src/run-flow.js";
 import { pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
+import { FIXTURE_PORTS } from "../fixtures/ports.js";
 
-const FIXTURE_PORT = 4174;
+const FIXTURE_PORT = FIXTURE_PORTS.runner;
 
 let fixture: FixtureServer | undefined;
 const outputs: string[] = [];

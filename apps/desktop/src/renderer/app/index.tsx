@@ -116,7 +116,13 @@ function computePaneTiles(
   }
   for (const tile of bestPlacement) {
     const stored = positions[tile.id];
-    tiles.set(tile.id, stored ? { ...tile, x: stored.x, y: stored.y } : tile);
+    if (!stored) { tiles.set(tile.id, tile); continue; }
+    // Restored free positions must be clamped onto the CURRENT workspace extent, otherwise a
+    // stale saved position after a window resize pushes panes outside and the native view
+    // collapses to 1×1.
+    const x = Math.max(LAYOUT_PADDING, Math.min(stored.x, LAYOUT_PADDING + innerWidth - tile.width));
+    const y = Math.max(LAYOUT_PADDING, Math.min(stored.y, LAYOUT_PADDING + innerHeight - tile.height));
+    tiles.set(tile.id, { ...tile, x, y });
   }
   return tiles;
 }
@@ -139,7 +145,6 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
   const addressFocused = useRef(false);
   const addressDirty = useRef(false);
   const requestEmit = useRef<() => void>(() => {});
-  const emitNowRef = useRef<() => void>(() => {});
   const expectedSurfaceCount = useRef(0);
   const workspaceRef = useRef<HTMLElement | null>(null);
   const [workspaceSize, setWorkspaceSize] = useState({ width: 0, height: 0 });
@@ -179,18 +184,29 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
   const [guides, setGuides] = useState<{ xs: number[]; ys: number[] }>({ xs: [], ys: [] });
   const tilesRef = useRef(tiles);
   tilesRef.current = tiles;
+  // Shared teardown so an unmount mid-drag cannot strand window listeners or guides.
+  const endDragRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => endDragRef.current?.(), []);
   const startPaneDrag = (paneId: string, event: PointerEvent): void => {
+    // Dragging rearranges stored free positions; in generated layouts a header gesture must
+    // neither move panes nor persist a move-pane command.
+    if (state.layout !== "free") return;
     const tile = tilesRef.current.get(paneId);
     if (!tile || event.button !== 0) return;
     const offsetX = event.clientX - tile.x;
     const offsetY = event.clientY - tile.y;
     const SNAP = 8;
-    const bounds = workspaceRef.current?.getBoundingClientRect();
-    const width = bounds?.width ?? workspaceSize.width;
-    const height = bounds?.height ?? workspaceSize.height;
+    // Only a real pointer movement turns the gesture into a move-pane; a bare header click
+    // must not persist anything or it would freeze the masonry seed in place.
+    let moved = false;
 
     const move = (moveEvent: PointerEvent): void => {
+      moved = true;
       const currentTiles = tilesRef.current;
+      // The workspace extent is re-read every frame so resizes mid-drag are honored;
+      // clientWidth/clientHeight is the single metric source (no border-box mix).
+      const width = workspaceRef.current?.clientWidth ?? workspaceSize.width;
+      const height = workspaceRef.current?.clientHeight ?? workspaceSize.height;
       let x = Math.round(moveEvent.clientX - offsetX);
       let y = Math.round(moveEvent.clientY - offsetY);
       const dragged = currentTiles.get(paneId);
@@ -219,22 +235,27 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
       }
       setGuides({ xs: [...new Set(activeXs)], ys: [...new Set(activeYs)] });
       setDrag({ id: paneId, x, y });
-      // The native WebContentsView follows the card only when main receives fresh bounds —
-      // coalesce one emit per frame while dragging.
-      window.requestAnimationFrame(() => emitNowRef.current());
+      // The native WebContentsView follows the card only when main receives fresh bounds.
+      // requestEmit coalesces via snapshotPending: at most one IPC per animation frame.
     };
-    const up = () => {
+    // Shared end path for pointerup AND pointercancel so an interrupted gesture can never
+    // strand listeners or guides; unmount reuses it via endDragRef.
+    const end = (): void => {
       window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      endDragRef.current = null;
       setDrag((current) => {
-        if (current && current.id === paneId) window.hoolypaneChrome.send({ kind: "move-pane", paneId, x: current.x, y: current.y });
+        if (moved && current && current.id === paneId) window.hoolypaneChrome.send({ kind: "move-pane", paneId, x: current.x, y: current.y });
         return null;
       });
       setGuides({ xs: [], ys: [] });
-      window.requestAnimationFrame(() => emitNowRef.current());
+      if (moved) requestEmit.current();
     };
     window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    endDragRef.current = end;
     setDrag({ id: paneId, x: tile.x, y: tile.y });
   };
 
@@ -255,7 +276,6 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
     };
     const request = () => { if (!stateReceived.current || snapshotPending.current) return; snapshotPending.current = true; frame = requestAnimationFrame(emit); };
     requestEmit.current = request;
-    emitNowRef.current = emit;
     const observer = new ResizeObserver(request);
     document.querySelectorAll<HTMLElement>("[data-pane-surface]").forEach((element) => observer.observe(element));
     window.addEventListener("resize", request);

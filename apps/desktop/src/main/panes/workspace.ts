@@ -15,7 +15,11 @@ export function removePane(workspace: WorkspaceState, paneId: string): Workspace
   if (!workspace.order.includes(paneId)) return workspace;
   const focusedPaneId = workspace.focusedPaneId === paneId ? null : workspace.focusedPaneId;
   const layout = workspace.focusedPaneId === paneId && workspace.layout === "focus" ? "grid" : workspace.layout;
-  return { ...workspace, panes: workspace.panes.filter((pane) => pane.id !== paneId), order: workspace.order.filter((id) => id !== paneId), focusedPaneId, layout };
+  // Positions have no lifecycle of their own: dropping the pane must drop its saved position,
+  // otherwise restart-persistent orphans leak and a reused preset id inherits a stale position.
+  const positions = { ...workspace.positions };
+  delete positions[paneId];
+  return { ...workspace, panes: workspace.panes.filter((pane) => pane.id !== paneId), order: workspace.order.filter((id) => id !== paneId), focusedPaneId, layout, positions };
 }
 
 export function addPane(workspace: WorkspaceState, viewport: ViewportSpec, url = workspace.sharedUrl, id: string = uniquePaneId(new Set(workspace.order), viewport.id)): WorkspaceState {

@@ -52,7 +52,7 @@ section.features{max-width:1060px;margin:0 auto;padding:34px 28px 10px;text-alig
 section.features .cards{text-align:left}
 h2{font-size:clamp(22px,3vw,30px);letter-spacing:-.02em;margin:0 0 6px}
 .lede{color:var(--muted);margin:0 0 24px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:14px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:18px;transition:transform 120ms ease,box-shadow 120ms ease,border-color 120ms ease}
 .card:hover{transform:translateY(-2px);border-color:#c7cdfc;box-shadow:0 12px 28px -18px rgba(23,25,60,.35)}
 .card .ico{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;background:var(--accent-soft);margin-bottom:11px}
@@ -60,7 +60,7 @@ h2{font-size:clamp(22px,3vw,30px);letter-spacing:-.02em;margin:0 0 6px}
 .card p{margin:0;color:var(--muted);font-size:13.5px}
 .console{max-width:780px;margin:44px auto;padding:0 28px}
 .panel{background:#14162b;color:#e8eaf6;border:1px solid #262a4d;border-radius:15px;padding:20px;box-shadow:0 24px 60px -32px rgba(23,25,60,.5)}
-.panel h2,.panel .lede{color:#fff}
+.panel h2{color:#fff}
 .panel .lede{color:#a7adcf}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media(max-width:640px){.grid2{grid-template-columns:1fr}}
@@ -82,7 +82,7 @@ footer{border-top:1px solid var(--line);margin-top:48px;padding:26px 28px;displa
 </style></head>
 <body>
 <nav>
-  <span class="brand"><span class="mark"></span>Nimbus</span>
+  <span class="brand"><span class="mark"></span><span>Nimbus</span></span>
   <span class="links"><a href="#">Product</a><a href="#">Docs</a><a href="#">Pricing</a><a href="#">Changelog</a></span>
   <span class="spacer"></span>
   <a class="btn btn-ghost" href="#">Sign in</a>

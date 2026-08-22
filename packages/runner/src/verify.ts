@@ -18,15 +18,21 @@ export async function verifyDirectory(path: string): Promise<number> {
   // No runtime schema for RecordingManifest exists yet (@hoolypane/recorder exports the type only); these checks mirror the fps 30|60 and durationFrames >= 1 contract by hand.
   // Geometry expectations are optional: directories recorded before the geometry contract lack the fields and still verify on the timeline contract alone.
   const manifestRecord = value as Record<string, unknown>; // JSON boundary; object shape checked above.
-  const tracks = Array.isArray(manifestRecord.viewports)
-    ? manifestRecord.viewports.flatMap((viewport: unknown) => {
-        if (!viewport || typeof viewport !== "object") return [];
-        const entry = viewport as Record<string, unknown>; // per-viewport shape validated field-wise below.
-        return typeof entry.id === "string" && typeof entry.encodedWidth === "number" && typeof entry.encodedHeight === "number"
-          ? [{ id: entry.id, encodedWidth: entry.encodedWidth, encodedHeight: entry.encodedHeight }]
-          : [];
-      })
-    : [];
+  let tracks: Array<{ id: string; encodedWidth: number; encodedHeight: number }> = [];
+  if (manifestRecord.viewports !== undefined) {
+    if (!Array.isArray(manifestRecord.viewports)) throw new Error(`${manifestPath} has a malformed viewports field: expected an array`);
+    // A present-but-malformed entry must fail loudly: silently dropping it would degrade
+    // geometry verification to timeline-only while claiming success.
+    for (const [index, viewport] of manifestRecord.viewports.entries()) {
+      const valid = typeof viewport === "object" && viewport !== null
+        && typeof (viewport as Record<string, unknown>).id === "string"
+        && typeof (viewport as Record<string, unknown>).encodedWidth === "number"
+        && typeof (viewport as Record<string, unknown>).encodedHeight === "number";
+      if (!valid) throw new Error(`${manifestPath} has a malformed viewports[${index}] entry: { id: string, encodedWidth: number, encodedHeight: number } is required`);
+      const entry = viewport as Record<string, unknown>;
+      tracks.push({ id: entry.id as string, encodedWidth: entry.encodedWidth as number, encodedHeight: entry.encodedHeight as number });
+    }
+  }
   const geometry = manifestRecord.geometry && typeof manifestRecord.geometry === "object" ? manifestRecord.geometry as Record<string, unknown> : undefined;
   const expectedGeometry = tracks.length > 0 && geometry && typeof geometry.outputWidth === "number" && typeof geometry.outputHeight === "number"
     ? { tracks, composite: { width: geometry.outputWidth, height: geometry.outputHeight } }

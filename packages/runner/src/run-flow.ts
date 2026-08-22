@@ -134,6 +134,7 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
   process.on("SIGTERM", onSignal);
   let recorder: RecordingSession | undefined;
   let recorderFinalized = false;
+  let manifestFailed = false;
   try {
     // The specifiers are only known at runtime: freshly compiled cache artifacts with a cache-busting query.
     const configModule = (await import(`${pathToFileURL(configCompiled.path).href}?run=${Date.now()}`)) as Record<string, unknown>;
@@ -201,13 +202,16 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
       const failures: RecorderFailure[] = [...traceFailures];
       if (flowFailed) failures.push(failureFrom(flowError));
       if (interrupted) failures.push({ message: "Interrupted by SIGINT or SIGTERM" });
-      await recorder.finalize({ status: interrupted ? "interrupted" : flowFailed ? "failed" : "success", failures, events: flowEvents });
+      const finalizeResult = await recorder.finalize({ status: interrupted ? "interrupted" : flowFailed ? "failed" : "success", failures, events: flowEvents });
       recorderFinalized = true;
+      // captureFailures (a pane's screencast ending early) flip the manifest to "failed" even when the flow
+      // itself succeeded; the CLI must not exit 0 while the written manifest reports a failed recording.
+      manifestFailed = finalizeResult.kind === "manifest" && finalizeResult.manifest.status === "failed";
     } finally {
       for (const failure of await stopTraces()) process.stderr.write(`tracing.stop failed: ${failure.message}\n`);
       clearTimeout(signalDeadline);
     }
-    return { outputDir, status: interrupted ? "interrupted" : flowFailed ? "failed" : "success" };
+    return { outputDir, status: manifestFailed ? "failed" : interrupted ? "interrupted" : flowFailed ? "failed" : "success" };
   } finally {
     process.removeListener("SIGINT", onSignal);
     process.removeListener("SIGTERM", onSignal);

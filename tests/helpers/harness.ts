@@ -80,9 +80,9 @@ interface DesktopLaunch {
 interface LaunchDesktopAppOptions {
   /** Port of an already-running tests/fixtures/server.mjs instance. */
   port: number;
-  /** Extra environment variables merged over the filtered parent environment. */
   /** App-profile base directory; a fresh temporary one is created when omitted. */
   userDataDir?: string;
+  /** Extra environment variables merged over the filtered parent environment. */
   extraEnv?: Readonly<Record<string, string>>;
 }
 

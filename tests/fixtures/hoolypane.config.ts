@@ -1,7 +1,8 @@
 import { defineConfig } from "@hoolypane/runner";
+import { FIXTURE_BASE_URL } from "./ports.js";
 
 export default defineConfig({
-  baseURL: "http://127.0.0.1:4174",
+  baseURL: FIXTURE_BASE_URL,
   timeoutMs: 10_000,
   viewports: [
     { id: "desktop", name: "Desktop", width: 320, height: 240, deviceScaleFactor: 1, isMobile: false, hasTouch: false },

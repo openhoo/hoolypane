@@ -3,6 +3,9 @@ import { z } from "zod";
 const MAX_ENCODED_DIMENSION = 16_384;
 const MAX_ENCODED_AREA = 67_108_864;
 const slug = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+// The encoder emits the grid video as videos/composite.webm next to videos/<id>.webm;
+// a viewport literally named "composite" would overwrite it.
+const RESERVED_COMPOSITE_ID = "composite";
 
 export function encodedDimension(cssDimension: number, deviceScaleFactor: number): number {
   const raw = cssDimension * deviceScaleFactor;
@@ -38,6 +41,9 @@ export const ViewportListSchema = z.array(ViewportSpecSchema).min(1).superRefine
   for (const [index, viewport] of viewports.entries()) {
     if (ids.has(viewport.id)) {
       context.addIssue({ code: "custom", path: [index, "id"], message: `duplicate viewport id: ${viewport.id}` });
+    }
+    if (viewport.id === RESERVED_COMPOSITE_ID) {
+      context.addIssue({ code: "custom", path: [index, "id"], message: `reserved viewport id: "${RESERVED_COMPOSITE_ID}" collides with the encoded composite.webm artifact` });
     }
     ids.add(viewport.id);
   }

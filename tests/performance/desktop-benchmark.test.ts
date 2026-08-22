@@ -3,8 +3,9 @@ import { dirname, resolve } from "node:path";
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { launchDesktopApp, pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
+import { FIXTURE_PORTS } from "../fixtures/ports.js";
 
-const FIXTURE_PORT = 4177;
+const FIXTURE_PORT = FIXTURE_PORTS.benchmark;
 const OUTPUT = resolve(process.env.HOOLYPANE_DESKTOP_BENCHMARK_OUTPUT ?? ".tmp/desktop-benchmark-proof.json");
 const MIRROR_SAMPLES = 120;
 const FINAL_INPUT_UPDATES = 100;

@@ -2,7 +2,8 @@ import { ipcRenderer } from "electron";
 import { IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, ReplayRequestSchema, type Action, type LocatorSpec, type ReplayRequest, type ReplayResult } from "@hoolypane/contracts";
 
 let documentGeneration = 0;
-const suppressed = new Map<number, number>(); // actionId → documentGeneration the action was resolved against
+type SuppressionEntry = { generation: number; kind: Action["kind"]; box?: { x: number; y: number; width: number; height: number } };
+const suppressed = new Map<number, SuppressionEntry>(); // actionId → replay context awaiting its trusted-input echo
 // Scroll positions written by replay-driven scrolling (apply-dom scrollTo and scrollIntoView). A
 // trusted scroll event landing exactly on such a position is our own echo, never user intent, and
 // must never be observed back (it would re-broadcast into every other pane). Events arriving at a
@@ -118,19 +119,29 @@ function record(action: () => Action): void {
 }
 
 function flushFill(): void {
-  if (!pendingFill) return;
-  window.clearTimeout(pendingFill.timer);
-  const element = pendingFill.element;
+  const pending = pendingFill;
+  if (!pending) return;
+  // Under active replay suppression emit() would silently discard the fill; keep it pending and
+  // flush once the last suppression entry drains (mirrors main's deferredActions design).
+  if (suppressed.size > 0) return;
+  window.clearTimeout(pending.timer);
+  const element = pending.element;
   pendingFill = undefined;
   if (!element.isConnected) return;
   record(() => ({ kind: "fill", locator: locatorFor(element), value: element.value }));
 }
 
+/** Flushes a fill that active suppression had deferred, as soon as the last entry is gone. */
+function drainDeferredFill(): void {
+  if (suppressed.size === 0) flushFill();
+}
+
 ipcRenderer.on(IPC_CHANNELS.paneGeneration, (_event, value: unknown) => {
   try {
     const nextGeneration = PaneGenerationSchema.parse(value).documentGeneration;
-    for (const [actionId, expectedGeneration] of suppressed) if (expectedGeneration !== nextGeneration) suppressed.delete(actionId);
+    for (const [actionId, entry] of suppressed) if (entry.generation !== nextGeneration) suppressed.delete(actionId);
     documentGeneration = nextGeneration;
+    drainDeferredFill();
   } catch (error) { console.error("[hoolypane] invalid pane generation", error); }
 });
 window.addEventListener("beforeunload", flushFill);
@@ -152,15 +163,30 @@ document.addEventListener("change", (event) => {
 }, true);
 document.addEventListener("click", (event) => {
   if (!event.isTrusted) return;
-  const suppressedEntry = suppressed.entries().next();
-  if (!suppressedEntry.done) {
-    const [suppressedActionId, expectedGeneration] = suppressedEntry.value;
-    suppressed.delete(suppressedActionId);
-    if (expectedGeneration === documentGeneration) {
-      ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId: suppressedActionId, phase: "confirm", ok: true } satisfies ReplayResult);
-    } else {
-      ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId: suppressedActionId, phase: "confirm", ok: false, reason: `stale document generation ${expectedGeneration}, current ${documentGeneration}` } satisfies ReplayResult);
+  // A trusted click inside the confirm window may only acknowledge the replay whose resolved
+  // box contains the click coordinates; anything else is a human click. On a miss every entry
+  // is kept and no confirm is sent, so a stray click can never ack the wrong actionId while the
+  // real CDP click would fall through unconfirmed as a phantom.
+  if (suppressed.size > 0) {
+    let matchedActionId: number | undefined;
+    let matchedEntry: SuppressionEntry | undefined;
+    for (const [actionId, entry] of suppressed) {
+      const box = entry.box;
+      if (!box || entry.kind !== "click") continue;
+      if (event.clientX >= box.x - 2 && event.clientX <= box.x + box.width + 2 && event.clientY >= box.y - 2 && event.clientY <= box.y + box.height + 2) {
+        matchedActionId = actionId;
+        matchedEntry = entry;
+        break;
+      }
     }
+    if (!matchedActionId || !matchedEntry) return; // human click during the confirm window: keep entries, send no confirm
+    suppressed.delete(matchedActionId);
+    if (matchedEntry.generation === documentGeneration) {
+      ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId: matchedActionId, phase: "confirm", ok: true } satisfies ReplayResult);
+    } else {
+      ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId: matchedActionId, phase: "confirm", ok: false, reason: `stale document generation ${matchedEntry.generation}, current ${documentGeneration}` } satisfies ReplayResult);
+    }
+    drainDeferredFill();
     return;
   }
   const target = event.target instanceof Element ? event.target.closest("button,a,[role],input") : null;
@@ -176,20 +202,32 @@ document.addEventListener("keydown", (event) => {
   record(() => ({ kind: "press", locator: locatorFor(target), key: event.key }));
 }, true);
 document.addEventListener("scroll", (event) => {
-  if (!event.isTrusted || suppressed.size > 0 || scrollFrame) return;
+  if (!event.isTrusted) return;
+  const target = event.target;
+  // Echo reconciliation must run before every other guard: an entry left unconsumed here would
+  // linger past the suppression window and later swallow a genuine user scroll landing exactly
+  // on the recorded position.
+  if (target instanceof Element) {
+    const programmed = programmaticScrolls.get(target);
+    if (programmed) {
+      programmaticScrolls.delete(target);
+      // An echo lands exactly where the replay scrolled; a diverging position means the user moved it.
+      if (Math.abs(target.scrollTop - programmed.top) <= 1 && Math.abs(target.scrollLeft - programmed.left) <= 1) return;
+    }
+  }
+  if (suppressed.size > 0 || scrollFrame) return;
   // Document-level scrolls are viewport management, and replay-driven auto-scrolls are our own
   // doing — recording either would mirror them back into all other panes as phantom user actions.
-  if (!(event.target instanceof HTMLElement) || event.target === document.documentElement || event.target === document.body) return;
-  const scrolled = event.target;
-  const programmed = programmaticScrolls.get(scrolled);
-  if (programmed) {
-    programmaticScrolls.delete(scrolled);
-    // An echo lands exactly where the replay scrolled; a diverging position means the user moved it.
-    if (Math.abs(scrolled.scrollTop - programmed.top) <= 1 && Math.abs(scrolled.scrollLeft - programmed.left) <= 1) return;
-  }
+  if (!(target instanceof HTMLElement) || target === document.documentElement || target === document.body) return;
   scrollFrame = window.requestAnimationFrame(() => {
     scrollFrame = 0;
-    const target = scrolled;
+    // The end position wins over the gesture that scheduled this frame: a programmatic scroll
+    // landing between event and callback is our own echo and must never be mirrored.
+    const endProgrammed = programmaticScrolls.get(target);
+    if (endProgrammed) {
+      programmaticScrolls.delete(target);
+      if (Math.abs(target.scrollTop - endProgrammed.top) <= 1 && Math.abs(target.scrollLeft - endProgrammed.left) <= 1) return;
+    }
     const horizontalRatio = target.scrollWidth === target.clientWidth ? 0 : Math.min(1, Math.max(0, target.scrollLeft / (target.scrollWidth - target.clientWidth)));
     const verticalRatio = target.scrollHeight === target.clientHeight ? 0 : Math.min(1, Math.max(0, target.scrollTop / (target.scrollHeight - target.clientHeight)));
     record(() => ({ kind: "scroll", locator: locatorFor(target), horizontalRatio, verticalRatio }));
@@ -207,7 +245,7 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
     ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId, phase, ok: false, reason: (error instanceof Error ? error.message : String(error)).slice(0, 512) } satisfies ReplayResult);
     return;
   }
-  if (request.phase === "end") suppressed.delete(request.actionId);
+  if (request.phase === "end") { suppressed.delete(request.actionId); drainDeferredFill(); }
   let result: ReplayResult = { actionId: request.actionId, phase: request.phase, ok: true };
   try {
     if (request.documentGeneration !== documentGeneration) throw new Error(`stale document generation ${request.documentGeneration}, current ${documentGeneration}`);
@@ -216,7 +254,7 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
       const matches = elementsFor(request.action.locator);
       if (matches.length !== 1) throw new Error(`locator resolved ${matches.length} elements`);
       const element = matches[0]!;
-      suppressed.set(request.actionId, request.documentGeneration);
+      suppressed.set(request.actionId, { generation: request.documentGeneration, kind: request.action.kind });
       if (request.phase === "resolve" && (request.action.kind === "fill" || request.action.kind === "press") && element instanceof HTMLElement) {
         element.focus({ preventScroll: true });
       }
@@ -236,6 +274,8 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
       // exactly like a real user (or Playwright's auto-scroll) would, before measuring its box.
       autoScrollCenter(element);
       const box = element.getBoundingClientRect();
+      const entry = suppressed.get(request.actionId);
+      if (entry) entry.box = { x: box.x, y: box.y, width: box.width, height: box.height };
       result = { ...result, box: { x: box.x, y: box.y, width: box.width, height: box.height }, ...(element instanceof HTMLInputElement ? { checked: element.checked } : {}) };
     }
   } catch (error) {

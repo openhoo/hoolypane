@@ -3,8 +3,10 @@ import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { launchDesktopApp, pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
 import { clickPaneSurface } from "./cdp-input.js";
+import { FIXTURE_PORTS } from "../fixtures/ports.js";
 
-const FIXTURE_PORT = 4185; // 4175 collided with an unrelated local dev stack
+// 4175 collided with an unrelated local dev stack; port assignment lives centrally now.
+const FIXTURE_PORT = FIXTURE_PORTS.desktop;
 
 let fixture: FixtureServer | undefined;
 let application: ElectronApplication;
@@ -110,11 +112,18 @@ describe("direct Electron surfaces", () => {
     const waitForPaneState = async (predicate: (snapshots: readonly PaneSnapshot[]) => boolean, label: string): Promise<void> => {
       try {
         await pollUntil(async () => {
-          const ready = (await paneSnapshots()).filter((snapshot): snapshot is PaneSnapshot => snapshot !== null);
+          let snapshots: Array<PaneSnapshot | null>;
+          try {
+            snapshots = await paneSnapshots();
+          } catch {
+            // A transient renderer reload invalidates execution contexts mid-poll; retry instead of aborting.
+            return null;
+          }
+          const ready = snapshots.filter((snapshot): snapshot is PaneSnapshot => snapshot !== null);
           return ready.length === 5 && predicate(ready) ? ready : null;
         }, 10_000);
       } catch (error) {
-        throw new Error(`desktop panes did not converge after ${label}: ${JSON.stringify(await paneSnapshots())}`, { cause: error });
+        throw new Error(`desktop panes did not converge after ${label}: ${JSON.stringify(await paneSnapshots().catch(() => []))}`, { cause: error });
       }
     };
     await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.name === "Mirrored value"), "fill");
@@ -122,7 +131,7 @@ describe("direct Electron surfaces", () => {
     await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.checked), "check");
     await selectSourceDark();
     await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.theme === "dark"), "select");
-    await clickPaneSurface(application, chrome, { port: FIXTURE_PORT, testId: "apply" });
+    await clickPaneSurface(application, chrome, { port: FIXTURE_PORT, testId: "apply", expectedStatus: "applied" });
     await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.status === "applied"), "click");
     await pressSourceEnter();
     await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.status === "entered"), "press");

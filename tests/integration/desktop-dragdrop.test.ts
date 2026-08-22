@@ -1,10 +1,13 @@
-import { readFile, rm } from "node:fs/promises";
+import { cpSync } from "node:fs";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, expect, it } from "vitest";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { launchDesktopApp, pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
+import { FIXTURE_PORTS } from "../fixtures/ports.js";
 
-const FIXTURE_PORT = 4186;
+const FIXTURE_PORT = FIXTURE_PORTS.dragdrop;
 
 let fixture: FixtureServer | undefined;
 let application: ElectronApplication | undefined;
@@ -109,15 +112,11 @@ it("drag and drop moves a pane and persists the position", async () => {
   const persisted = (await cardBoxes(relaunched.chrome)).get("desktop-1440");
   if (!persisted) throw new Error("persisted card missing");
   const fileOnDisk = await readFile(workspaceFile, "utf8").catch(() => "MISSING");
-  const quarantined = await readFile(join(userDataDir, "user-data")).catch(() => null);
-  void quarantined;
   if (Math.abs(persisted.x - moved.x) > 3) {
-    // Keep the evidence: afterAll would wipe userDataDir.
-    const { cpSync, rmSync } = await import("node:fs");
-    rmSync("/tmp/dnd-fail-dump", { recursive: true, force: true });
-    cpSync(join(userDataDir, "user-data"), "/tmp/dnd-fail-dump", { recursive: true, force: true });
-    console.log("DND FAIL DUMP copied; workspace.json:", fileOnDisk.slice(0, 600));
-    console.log("DND FAIL user-data listing:", await chrome.evaluate(() => "n/a").catch(() => ""));
+    // Keep the evidence: afterAll would wipe userDataDir. A fresh mkdtemp target needs no rmSync.
+    const dumpDir = await mkdtemp(join(tmpdir(), "dnd-fail-dump-"));
+    cpSync(join(userDataDir, "user-data"), dumpDir, { recursive: true });
+    console.log(`DND FAIL DUMP copied to ${dumpDir}; workspace.json:`, fileOnDisk.slice(0, 600));
   }
   expect(Math.abs(persisted.x - moved.x), `persisted=${JSON.stringify(persisted)} moved=${JSON.stringify(moved)} file=${fileOnDisk.slice(0, 400)}`).toBeLessThanOrEqual(3);
   expect(Math.abs(persisted.y - moved.y)).toBeLessThanOrEqual(3);

@@ -281,8 +281,15 @@ export function PaneCard({
 }
 
 export function ErrorToast({ message }: { message: string }) {
-  const [dismissed, setDismissed] = useState<string | null>(null);
-  if (dismissed === message) return null;
+  const [dismissedMessage, setDismissedMessage] = useState<string | null>(null);
+  const [lastMessage, setLastMessage] = useState(message);
+  if (message !== lastMessage) {
+    // A different error arrived: forget the dismissal so the new toast shows even when an
+    // identical earlier message was already dismissed within this mount streak.
+    setLastMessage(message);
+    setDismissedMessage(null);
+  }
+  if (dismissedMessage === message) return null;
   return (
     <div
       role="alert"
@@ -290,7 +297,7 @@ export function ErrorToast({ message }: { message: string }) {
     >
       <IconAlertTriangle class="mt-0.5 text-danger" />
       <p class="min-w-0 break-words text-xs text-ink">{message}</p>
-      <IconButton label="Dismiss error" danger onClick={() => setDismissed(message)}>
+      <IconButton label="Dismiss error" danger onClick={() => setDismissedMessage(message)}>
         <IconClose />
       </IconButton>
     </div>

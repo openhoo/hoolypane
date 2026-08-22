@@ -121,6 +121,9 @@ function apply(command: ChromeCommand): void {
       patch({ order });
       break;
     }
+    case "move-pane":
+      patch({ positions: { ...mockState.positions, [command.paneId]: { x: command.x, y: command.y } } });
+      break;
     case "resize": {
       const pane = mockState.panes.find((candidate) => candidate.id === command.paneId);
       if (!pane) break;

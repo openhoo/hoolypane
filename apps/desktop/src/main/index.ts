@@ -18,7 +18,7 @@ import { FlowDraft } from "./interactions/flow-draft.js";
 import { InteractionCoordinator } from "./interactions/interaction-coordinator.js";
 import { PaneRegistry } from "./panes/pane-registry.js";
 import { normalizeUrl } from "./panes/url.js";
-import { loadWorkspace, saveWorkspace, sweepStaleTemporaries } from "./persistence/workspace-store.js";
+import { flushWorkspaceSaves, loadWorkspace, saveWorkspace, sweepStaleTemporaries } from "./persistence/workspace-store.js";
 import { captureOverview, capturePane } from "./screenshots/screenshot-service.js";
 
 let chromeWindow: BrowserWindow | undefined;
@@ -347,6 +347,23 @@ if (!hasSingleInstanceLock) {
   void app.whenReady().then(launchChrome).catch((error: unknown) => { console.error(error); app.quit(); });
 }
 app.on("activate", () => { void launchChrome().catch((error: unknown) => { console.error(error); }); });
+
+// Flush-on-quit: a workspace mutation racing app shutdown must still reach disk. Hold quit once,
+// drain queued commands plus every in-flight save tail, then re-issue quit (single guarded pass).
+let quitFlushStarted = false;
+app.on("before-quit", (event) => {
+  if (quitFlushStarted) return;
+  quitFlushStarted = true;
+  event.preventDefault();
+  void (async () => {
+    try { await commandQueue; } catch { /* command failures already reported */ }
+    try {
+      if (workspacePersistable && registry && workspacePath) await saveWorkspace(workspacePath, registry.getState());
+    } catch (error) { report("", error instanceof Error ? error.message : String(error)); }
+    try { await flushWorkspaceSaves(); } catch { /* save tails never reject */ }
+    app.quit();
+  })();
+});
 
 async function launchChrome(): Promise<void> {
   if (chromeWindow !== undefined || chromeStarting) return;
