@@ -19,7 +19,8 @@ SSH=(ssh -p "$VM_PORT" -i "$VM_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecki
 cd "$(dirname "$0")/.."
 
 echo "== sync working tree → VM"
-rsync -az --delete \
+RSYNC_SSH="ssh -p $VM_PORT -i $VM_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+rsync -az --delete -e "$RSYNC_SSH" \
   --exclude .git --exclude node_modules --exclude dist --exclude build \
   --exclude ".tmp" --exclude "*.log" --exclude ".ui-shots" \
   ./ "$VM_SSH:$VM_DIR/"
@@ -27,6 +28,10 @@ rsync -az --delete \
 echo "== install + build in VM"
 "${SSH[@]}" "set -e; cd ~/$VM_DIR;
   pnpm install --prefer-offline >/dev/null;
+  # rsync-preserved mtimes can make tsc -b treat stale workspace dists as fresh — wipe dists
+  # AND incremental state, then let typecheck re-emit every workspace package.
+  rm -rf apps/desktop/dist packages/*/dist;
+  find . -name "*.tsbuildinfo" -not -path "*/node_modules/*" -delete;
   pnpm typecheck >/dev/null && echo 'typecheck OK';
   pnpm --filter @hoolypane/desktop build >/dev/null && echo 'desktop build OK';
   pnpm build:runner >/dev/null && echo 'runner build OK'"
