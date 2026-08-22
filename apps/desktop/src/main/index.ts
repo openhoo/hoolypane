@@ -23,6 +23,7 @@ import { captureOverview, capturePane } from "./screenshots/screenshot-service.j
 
 let chromeWindow: BrowserWindow | undefined;
 let registry: PaneRegistry | undefined;
+let quittingRegistry: PaneRegistry | undefined;
 let workspacePath = "";
 let nextActionId = 1;
 const coordinator = new InteractionCoordinator();
@@ -320,8 +321,9 @@ async function createChrome(): Promise<void> {
     show: false,
     webPreferences: { preload: fileURLToPath(new URL("../preload/chrome.js", import.meta.url)), nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false },
   });
-  chromeWindow.on("closed", () => { flowDraft.cancel(); void registry?.destroy(); chromeWindow = undefined; registry = undefined; });
+  chromeWindow.on("closed", () => { flowDraft.cancel(); quittingRegistry = registry; void registry?.destroy(); chromeWindow = undefined; registry = undefined; });
   registry = new PaneRegistry({ workspace, onChange: publishState, onFailure: (failure) => report(failure.paneId, failure.message) });
+  quittingRegistry = undefined;
   registry.attachWindow(chromeWindow);
   chromeWindow.once("ready-to-show", () => chromeWindow?.show());
   await chromeWindow.loadFile(join(dirname(fileURLToPath(import.meta.url)), "renderer/index.html"));
@@ -357,8 +359,9 @@ app.on("before-quit", (event) => {
   event.preventDefault();
   void (async () => {
     try { await commandQueue; } catch { /* command failures already reported */ }
+    const activeRegistry = registry ?? quittingRegistry;
     try {
-      if (workspacePersistable && registry && workspacePath) await saveWorkspace(workspacePath, registry.getState());
+      if (workspacePersistable && activeRegistry && workspacePath) await saveWorkspace(workspacePath, activeRegistry.getState());
     } catch (error) { report("", error instanceof Error ? error.message : String(error)); }
     try { await flushWorkspaceSaves(); } catch { /* save tails never reject */ }
     app.quit();

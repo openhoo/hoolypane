@@ -15,7 +15,7 @@ pnpm build
 pnpm --filter @hoolypane/desktop start
 ```
 
-The desktop provides one address bar, preset/custom panes, grid/horizontal/focus layouts, synchronized click/form/key/ratio-scroll interactions, pane and overview PNG export, and Playwright flow recording. Remote panes share the persistent `persist:hoolypane` session. Permissions, downloads, external protocols, Node integration, and pop-up windows are denied.
+The desktop provides one address bar, preset/custom panes, free (default, drag-and-drop), grid, horizontal, focus layouts, synchronized click/form/key/ratio-scroll interactions, pane and overview PNG export, and Playwright flow recording. Remote panes share the persistent `persist:hoolypane` session. Permissions, downloads, external protocols, Node integration, and pop-up windows are denied.
 
 ## Configuration and flows
 

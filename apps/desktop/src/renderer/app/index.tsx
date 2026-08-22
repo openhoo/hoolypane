@@ -189,8 +189,9 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
   useEffect(() => () => endDragRef.current?.(), []);
   const startPaneDrag = (paneId: string, event: PointerEvent): void => {
     // Dragging rearranges stored free positions; in generated layouts a header gesture must
-    // neither move panes nor persist a move-pane command.
-    if (state.layout !== "free") return;
+    // neither move panes nor persist a move-pane command. A live drag is detected via
+    // endDragRef, which flips synchronously at listener install — drag state is async-batched.
+    if (endDragRef.current || state.layout !== "free") return;
     const tile = tilesRef.current.get(paneId);
     if (!tile || event.button !== 0) return;
     const offsetX = event.clientX - tile.x;
@@ -237,6 +238,7 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
       setDrag({ id: paneId, x, y });
       // The native WebContentsView follows the card only when main receives fresh bounds.
       // requestEmit coalesces via snapshotPending: at most one IPC per animation frame.
+      requestEmit.current();
     };
     // Shared end path for pointerup AND pointercancel so an interrupted gesture can never
     // strand listeners or guides; unmount reuses it via endDragRef.

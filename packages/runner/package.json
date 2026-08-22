@@ -1,14 +1,21 @@
 {
   "name": "@hoolypane/runner",
   "version": "0.1.0-beta.1",
+  "description": "Headless Playwright runner that replays one flow across synchronized Chromium viewports and encodes aligned composite video.",
   "private": false,
   "type": "module",
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openhoo/hoolypane.git",
+    "directory": "packages/runner"
+  },
   "engines": {
     "node": ">=24"
   },
   "files": [
     "dist",
+    "README.md",
     "LICENSE",
     "LICENSE-FFMPEG.txt"
   ],

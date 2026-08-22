@@ -15,7 +15,7 @@ function recordProgrammaticScroll(container: Element): void {
   programmaticScrolls.set(container, { top: container.scrollTop, left: container.scrollLeft });
 }
 function autoScrollCenter(element: Element): void {
-  element.scrollIntoView({ block: "center", inline: "center" });
+  element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" }); // instant beats CSS scroll-behavior:smooth — an animated scroll registers its pre-animation position below, and trusted animation events then diverge from it
   // scrollIntoView may move the element itself or any scrollable ancestor; remember each final position.
   for (let node: Element | null = element; node; node = node.parentElement) {
     if (node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth) recordProgrammaticScroll(node);
@@ -109,26 +109,29 @@ function locatorFor(element: Element): LocatorSpec {
   throw new Error("interaction target has no unique supported locator");
 }
 
-function emit(action: Action): void {
-  if (suppressed.size > 0 || window.top !== window) return;
+function emit(action: Action, force = false): void {
+  // Forced emits (unload-time fill flush) bypass suppression on purpose: losing a user-typed value
+  // at teardown is worse than racing a replay echo. Iframe panes stay silent either way.
+  if ((!force && suppressed.size > 0) || window.top !== window) return;
   ipcRenderer.send(IPC_CHANNELS.paneAction, PaneObservedActionSchema.parse({ documentGeneration, action }));
 }
 
-function record(action: () => Action): void {
-  try { emit(action()); } catch (error) { console.error("[hoolypane] failed to record action", error); }
+function record(action: () => Action, force = false): void {
+  try { emit(action(), force); } catch (error) { console.error("[hoolypane] failed to record action", error); }
 }
 
-function flushFill(): void {
+function flushFill(force = false): void {
   const pending = pendingFill;
   if (!pending) return;
   // Under active replay suppression emit() would silently discard the fill; keep it pending and
-  // flush once the last suppression entry drains (mirrors main's deferredActions design).
-  if (suppressed.size > 0) return;
+  // flush once the last suppression entry drains (mirrors main's deferredActions design). Only the
+  // unload path forces past this guard — a deferred fill must never die with the document.
+  if (!force && suppressed.size > 0) return;
   window.clearTimeout(pending.timer);
   const element = pending.element;
   pendingFill = undefined;
   if (!element.isConnected) return;
-  record(() => ({ kind: "fill", locator: locatorFor(element), value: element.value }));
+  record(() => ({ kind: "fill", locator: locatorFor(element), value: element.value }), force);
 }
 
 /** Flushes a fill that active suppression had deferred, as soon as the last entry is gone. */
@@ -144,8 +147,9 @@ ipcRenderer.on(IPC_CHANNELS.paneGeneration, (_event, value: unknown) => {
     drainDeferredFill();
   } catch (error) { console.error("[hoolypane] invalid pane generation", error); }
 });
-window.addEventListener("beforeunload", flushFill);
-ipcRenderer.on(IPC_CHANNELS.flush, flushFill);
+window.addEventListener("beforeunload", () => flushFill(true));
+// Wrapped so the IPC event object never leaks into flushFill's force parameter.
+ipcRenderer.on(IPC_CHANNELS.flush, () => flushFill());
 
 document.addEventListener("input", (event) => {
   if (!event.isTrusted || suppressed.size > 0) return;
@@ -265,7 +269,7 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
           element.dispatchEvent(new Event("input", { bubbles: true }));
           element.dispatchEvent(new Event("change", { bubbles: true }));
         } else if (request.action.kind === "scroll" && element instanceof HTMLElement) {
-          element.scrollTo({ left: request.action.horizontalRatio * Math.max(0, element.scrollWidth - element.clientWidth), top: request.action.verticalRatio * Math.max(0, element.scrollHeight - element.clientHeight) });
+          element.scrollTo({ left: request.action.horizontalRatio * Math.max(0, element.scrollWidth - element.clientWidth), top: request.action.verticalRatio * Math.max(0, element.scrollHeight - element.clientHeight), behavior: "instant" });
           recordProgrammaticScroll(element);
           element.dispatchEvent(new Event("scroll", { bubbles: true }));
         }

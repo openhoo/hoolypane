@@ -33,10 +33,20 @@ export async function verifyDirectory(path: string): Promise<number> {
       tracks.push({ id: entry.id as string, encodedWidth: entry.encodedWidth as number, encodedHeight: entry.encodedHeight as number });
     }
   }
-  const geometry = manifestRecord.geometry && typeof manifestRecord.geometry === "object" ? manifestRecord.geometry as Record<string, unknown> : undefined;
-  const expectedGeometry = tracks.length > 0 && geometry && typeof geometry.outputWidth === "number" && typeof geometry.outputHeight === "number"
-    ? { tracks, composite: { width: geometry.outputWidth, height: geometry.outputHeight } }
-    : undefined;
+  let expectedGeometry: { tracks: Array<{ id: string; encodedWidth: number; encodedHeight: number }>; composite: { width: number; height: number } } | undefined;
+  if (manifestRecord.geometry !== undefined) {
+    // A present-but-malformed geometry must fail loudly: silently treating it as absent
+    // would degrade geometry verification to timeline-only while claiming success.
+    const geometry = manifestRecord.geometry;
+    const valid = typeof geometry === "object" && geometry !== null
+      && typeof (geometry as Record<string, unknown>).outputWidth === "number"
+      && typeof (geometry as Record<string, unknown>).outputHeight === "number";
+    if (!valid) throw new Error(`${manifestPath} has a malformed geometry field: { outputWidth: number, outputHeight: number } is required`);
+    if (tracks.length > 0) {
+      const record = geometry as Record<string, unknown>;
+      expectedGeometry = { tracks, composite: { width: record.outputWidth as number, height: record.outputHeight as number } };
+    }
+  }
   const result = await verifyArtifacts(outputDir, fps, durationFrames, expectedGeometry);
   if (!result.success) throw new Error(result.error ?? "artifact verification failed");
   process.stdout.write(`Verified ${durationFrames} aligned frames in ${outputDir}\n`);

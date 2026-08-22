@@ -25,7 +25,7 @@ nav .spacer{flex:1}
 .btn-ghost{border-color:var(--line);background:var(--surface);color:var(--ink)}
 header.hero{max-width:1060px;margin:0 auto;padding:64px 28px 40px;text-align:center}
 .pill{display:inline-flex;align-items:center;gap:7px;background:var(--accent-soft);color:var(--accent);font-size:12.5px;font-weight:600;border-radius:999px;padding:5px 13px}
-h1{font-size:clamp(30px,5vw,52px);line-height:1.06;letter-spacing:-.03em;margin:18px 0 14px}
+h1{font-size:clamp(30px,5vw,52px);line-height:1.06;letter-spacing:-.03em;margin:18px 0 14px;overflow-wrap:anywhere}
 h1 em{font-style:normal;background:linear-gradient(100deg,#6366f1,#06b6d4);-webkit-background-clip:text;background-clip:text;color:transparent}
 .sub{color:var(--muted);font-size:17px;max-width:560px;margin:0 auto 26px}
 .cta-row{display:flex;gap:11px;justify-content:center;flex-wrap:wrap}
@@ -58,14 +58,14 @@ h2{font-size:clamp(22px,3vw,30px);letter-spacing:-.02em;margin:0 0 6px}
 .card .ico{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;background:var(--accent-soft);margin-bottom:11px}
 .card h3{margin:0 0 5px;font-size:15.5px}
 .card p{margin:0;color:var(--muted);font-size:13.5px}
-.console{max-width:780px;margin:44px auto;padding:0 28px}
+.console{max-width:780px;margin:44px auto;padding:0 28px;scroll-margin-top:70px}
 .panel{background:#14162b;color:#e8eaf6;border:1px solid #262a4d;border-radius:15px;padding:20px;box-shadow:0 24px 60px -32px rgba(23,25,60,.5)}
 .panel h2{color:#fff}
 .panel .lede{color:#a7adcf}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media(max-width:640px){.grid2{grid-template-columns:1fr}}
 @media(max-width:760px){nav{padding:12px 18px}nav .links{display:none}}
-@media(max-width:480px){nav .btn-ghost{display:none}.hero{padding:40px 16px 24px}section.features,.console{padding-left:16px;padding-right:16px}}
+@media(max-width:480px){nav .btn-ghost{display:none}.hero{padding:40px 16px 24px}section.features,.console{padding-left:16px;padding-right:16px}h1{font-size:clamp(22px,8vw,52px)}.console{scroll-margin-top:104px}}
 @media(max-width:220px){.brand span:last-of-type{font-size:13px}nav{gap:8px}}
 @media(max-width:720px){.dash{grid-template-columns:1fr}.kpi b{font-size:18px}}
 .field{display:grid;gap:5px;font-size:12px;color:#a7adcf}

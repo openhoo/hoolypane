@@ -11,8 +11,13 @@ interface EncoderPaths { readonly ffmpeg: string; readonly ffprobe: string }
 interface AlignedTrack { readonly id: string; readonly spool: FrameSpool; readonly mappings: readonly SlotMapping[]; readonly geometry: TrackGeometry }
 interface EncodingResult { readonly geometry: CompositeGeometry }
 
-async function executable(path: string): Promise<string> {
-  await access(path, constants.X_OK);
+async function executable(path: string, envVariable?: string): Promise<string> {
+  try {
+    await access(path, constants.X_OK);
+  } catch (error) {
+    if (!envVariable) throw error;
+    throw new Error(`${envVariable}="${path}" is not an accessible executable: ${error instanceof Error ? error.message : String(error)}`);
+  }
   return path;
 }
 
@@ -20,7 +25,7 @@ export async function resolveEncoders(): Promise<EncoderPaths> {
   const ffmpeg = process.env.HOOLYPANE_FFMPEG_PATH;
   const ffprobe = process.env.HOOLYPANE_FFPROBE_PATH;
   if (Boolean(ffmpeg) !== Boolean(ffprobe)) throw new Error("HOOLYPANE_FFMPEG_PATH and HOOLYPANE_FFPROBE_PATH must be supplied together");
-  if (ffmpeg && ffprobe) return { ffmpeg: await executable(ffmpeg), ffprobe: await executable(ffprobe) };
+  if (ffmpeg && ffprobe) return { ffmpeg: await executable(ffmpeg, "HOOLYPANE_FFMPEG_PATH"), ffprobe: await executable(ffprobe, "HOOLYPANE_FFPROBE_PATH") };
   try {
     const candidate: unknown = ffmpegStaticPath;
     if (typeof candidate !== "string" || !ffprobeStatic.path) throw new Error("static encoder paths unavailable");

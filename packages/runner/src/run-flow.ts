@@ -135,6 +135,7 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
   let recorder: RecordingSession | undefined;
   let recorderFinalized = false;
   let manifestFailed = false;
+  let traceFailed = false;
   try {
     // The specifiers are only known at runtime: freshly compiled cache artifacts with a cache-busting query.
     const configModule = (await import(`${pathToFileURL(configCompiled.path).href}?run=${Date.now()}`)) as Record<string, unknown>;
@@ -199,10 +200,13 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
       }
       initialFramesAbort.abort();
       const traceFailures = await stopTraces();
+      // tracing.stop failures (lost Playwright traces) must fail loudly like captureFailures do:
+      // they land in manifest.failures AND flip the manifest status and the runner exit code.
+      traceFailed = traceFailures.length > 0;
       const failures: RecorderFailure[] = [...traceFailures];
       if (flowFailed) failures.push(failureFrom(flowError));
       if (interrupted) failures.push({ message: "Interrupted by SIGINT or SIGTERM" });
-      const finalizeResult = await recorder.finalize({ status: interrupted ? "interrupted" : flowFailed ? "failed" : "success", failures, events: flowEvents });
+      const finalizeResult = await recorder.finalize({ status: traceFailed ? "failed" : interrupted ? "interrupted" : flowFailed ? "failed" : "success", failures, events: flowEvents });
       recorderFinalized = true;
       // captureFailures (a pane's screencast ending early) flip the manifest to "failed" even when the flow
       // itself succeeded; the CLI must not exit 0 while the written manifest reports a failed recording.
@@ -211,7 +215,7 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
       for (const failure of await stopTraces()) process.stderr.write(`tracing.stop failed: ${failure.message}\n`);
       clearTimeout(signalDeadline);
     }
-    return { outputDir, status: manifestFailed ? "failed" : interrupted ? "interrupted" : flowFailed ? "failed" : "success" };
+    return { outputDir, status: manifestFailed || traceFailed ? "failed" : interrupted ? "interrupted" : flowFailed ? "failed" : "success" };
   } finally {
     process.removeListener("SIGINT", onSignal);
     process.removeListener("SIGTERM", onSignal);

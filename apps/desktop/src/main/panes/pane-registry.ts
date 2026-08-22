@@ -113,11 +113,11 @@ export class PaneRegistry {
     this.emitChange();
   }
   rotate(paneId: string): void { this.workspace = rotatePane(this.workspace, paneId); const record = this.panes.get(paneId); if (record) void this.configureViewport(record); this.emitChange(); }
-  focus(paneId: string | null): void { if (paneId !== null && !this.panes.has(paneId)) throw new Error(`unknown pane: ${paneId}`); this.workspace = { ...this.workspace, focusedPaneId: paneId }; this.emitChange(); }
+  focus(paneId: string | null): void { if (paneId !== null && !this.workspace.order.includes(paneId)) throw new Error(`unknown pane: ${paneId}`); this.workspace = { ...this.workspace, focusedPaneId: paneId }; this.emitChange(); }
   setLayout(layout: WorkspaceState["layout"]): void { this.workspace = { ...this.workspace, layout }; this.emitChange(); }
 
   setPanePosition(paneId: string, x: number, y: number): void {
-    if (!this.panes.has(paneId)) throw new Error(`unknown pane: ${paneId}`);
+    if (!this.workspace.order.includes(paneId)) throw new Error(`unknown pane: ${paneId}`);
     this.workspace = { ...this.workspace, positions: { ...this.workspace.positions, [paneId]: { x, y } } };
     this.emitChange();
   }
