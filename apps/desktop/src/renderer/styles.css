@@ -24,3 +24,23 @@ body,
 #app {
   height: 100%;
 }
+
+::selection {
+  background: rgb(99 102 241 / 0.35);
+}
+
+/* Error toast entrance */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.toast-enter {
+  animation: toast-in 160ms ease-out;
+}

@@ -108,7 +108,18 @@ it("drag and drop moves a pane and persists the position", async () => {
   await pollUntil(async () => (await cardBoxes(relaunched.chrome)).size === 5 || null, 15_000);
   const persisted = (await cardBoxes(relaunched.chrome)).get("desktop-1440");
   if (!persisted) throw new Error("persisted card missing");
-  expect(Math.abs(persisted.x - moved.x)).toBeLessThanOrEqual(3);
+  const fileOnDisk = await readFile(workspaceFile, "utf8").catch(() => "MISSING");
+  const quarantined = await readFile(join(userDataDir, "user-data")).catch(() => null);
+  void quarantined;
+  if (Math.abs(persisted.x - moved.x) > 3) {
+    // Keep the evidence: afterAll would wipe userDataDir.
+    const { cpSync, rmSync } = await import("node:fs");
+    rmSync("/tmp/dnd-fail-dump", { recursive: true, force: true });
+    cpSync(join(userDataDir, "user-data"), "/tmp/dnd-fail-dump", { recursive: true, force: true });
+    console.log("DND FAIL DUMP copied; workspace.json:", fileOnDisk.slice(0, 600));
+    console.log("DND FAIL user-data listing:", await chrome.evaluate(() => "n/a").catch(() => ""));
+  }
+  expect(Math.abs(persisted.x - moved.x), `persisted=${JSON.stringify(persisted)} moved=${JSON.stringify(moved)} file=${fileOnDisk.slice(0, 400)}`).toBeLessThanOrEqual(3);
   expect(Math.abs(persisted.y - moved.y)).toBeLessThanOrEqual(3);
   console.log("DND persisted", persisted.x, persisted.y);
 }, 60_000);

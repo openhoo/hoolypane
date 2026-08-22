@@ -12,6 +12,7 @@ export const IPC_CHANNELS = {
   replayResult: "hoolypane:replay-result",
   flush: "hoolypane:flush",
   state: "hoolypane:state",
+  stateRequest: "hoolypane:state-request",
 } as const;
 
 const paneId = z.string().min(1);

@@ -374,6 +374,7 @@ async function launchChrome(): Promise<void> {
         });
     } catch (error) { report("", error instanceof Error ? error.message : String(error)); }
   });
+  ipcMain.on(IPC_CHANNELS.stateRequest, () => { if (chromeWindow && registry) publishState(); });
   ipcMain.on(IPC_CHANNELS.paneAction, (event, value: unknown) => {
     const paneId = sourcePane(event);
     if (!paneId) return;

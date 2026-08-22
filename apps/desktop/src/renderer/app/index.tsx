@@ -139,6 +139,7 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
   const addressFocused = useRef(false);
   const addressDirty = useRef(false);
   const requestEmit = useRef<() => void>(() => {});
+  const emitNowRef = useRef<() => void>(() => {});
   const expectedSurfaceCount = useRef(0);
   const workspaceRef = useRef<HTMLElement | null>(null);
   const [workspaceSize, setWorkspaceSize] = useState({ width: 0, height: 0 });
@@ -218,6 +219,9 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
       }
       setGuides({ xs: [...new Set(activeXs)], ys: [...new Set(activeYs)] });
       setDrag({ id: paneId, x, y });
+      // The native WebContentsView follows the card only when main receives fresh bounds —
+      // coalesce one emit per frame while dragging.
+      window.requestAnimationFrame(() => emitNowRef.current());
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
@@ -227,6 +231,7 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
         return null;
       });
       setGuides({ xs: [], ys: [] });
+      window.requestAnimationFrame(() => emitNowRef.current());
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -250,6 +255,7 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
     };
     const request = () => { if (!stateReceived.current || snapshotPending.current) return; snapshotPending.current = true; frame = requestAnimationFrame(emit); };
     requestEmit.current = request;
+    emitNowRef.current = emit;
     const observer = new ResizeObserver(request);
     document.querySelectorAll<HTMLElement>("[data-pane-surface]").forEach((element) => observer.observe(element));
     window.addEventListener("resize", request);

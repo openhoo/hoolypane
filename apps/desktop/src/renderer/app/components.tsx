@@ -44,7 +44,7 @@ function IconButton({
       title={label}
       disabled={disabled}
       onClick={onClick}
-      class={`${narrow ? "hidden @[200px]:inline-flex" : "inline-flex"} size-5 shrink-0 items-center justify-center rounded focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent disabled:pointer-events-none disabled:text-mute/60 disabled:bg-transparent ${
+      class={`${narrow ? "hidden @[200px]:inline-flex" : "inline-flex"} size-5 shrink-0 items-center justify-center rounded transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent disabled:pointer-events-none disabled:text-mute/60 disabled:bg-transparent ${
         danger
           ? "text-mute hover:bg-danger/15 hover:text-danger"
           : active
@@ -91,6 +91,7 @@ export function Toolbar({
           onChange={(event) => send({ kind: "set-layout", layout: (event.currentTarget as HTMLSelectElement).value as LayoutMode })}
           class="h-8 rounded-lg border border-edge bg-field px-1.5 text-xs text-ink outline-none transition-colors focus:border-accent/70"
         >
+          <option value="free">Free</option>
           <option value="grid">Grid</option>
           <option value="horizontal">Horizontal</option>
           <option value="focus">Focus</option>
@@ -219,11 +220,10 @@ export function PaneCard({
 }) {
   return (
     <article
-      data-drag-x={dragging ? placement?.x : undefined}
       style={placement ? { position: "absolute", left: placement.x, top: placement.y, width: placement.width, height: placement.height } : undefined}
       class={`pane-card @container relative flex min-w-0 select-none flex-col overflow-hidden rounded-xl border shadow-xl shadow-black/30 transition-shadow ${
         focused ? "focused ring-2 ring-accent ring-offset-0" : ""
-      } ${dragging ? "z-30 border-accent/60 opacity-90" : ""} ${hidden ? "hidden" : dragging ? "border-accent/60" : "border-edge ring-1 ring-white/[0.04] hover:border-accent/40"}`}
+      } ${dragging ? "z-30 scale-[1.01] border-accent/60 shadow-black/50" : ""} ${hidden ? "hidden" : dragging ? "border-accent/60" : "border-edge ring-1 ring-white/[0.04] hover:border-accent/40"}`}
     >
       {pane.loading && (
         <div aria-hidden="true" class="absolute inset-x-0 top-0 z-10 h-0.5 animate-pulse bg-accent" />
@@ -286,7 +286,7 @@ export function ErrorToast({ message }: { message: string }) {
   return (
     <div
       role="alert"
-      class="fixed bottom-2 right-2 z-50 flex max-w-sm items-start gap-2 rounded-lg border border-danger/50 bg-panel px-3 py-2 shadow-lg shadow-black/40"
+      class="toast-enter fixed bottom-2 right-2 z-50 flex max-w-sm items-start gap-2 rounded-xl border border-danger/50 bg-panel px-3 py-2 shadow-xl shadow-black/40"
     >
       <IconAlertTriangle class="mt-0.5 text-danger" />
       <p class="min-w-0 break-words text-xs text-ink">{message}</p>
