@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ActionEnvelopeSchema, ActionSchema, ChromeStateSchema, HoolypaneConfigSchema, VIEWPORT_PRESETS, WorkspaceStateSchema, defaultWorkspace } from "./index.js";
+import { ActionEnvelopeSchema, ActionSchema, ChromeCommandSchema, ChromeStateSchema, HoolypaneConfigSchema, VIEWPORT_PRESETS, WorkspaceStateSchema, defaultWorkspace } from "./index.js";
 
 describe("configuration", () => {
   it("applies all recording defaults", () => {
@@ -81,5 +81,54 @@ describe("workspace state", () => {
     const chrome = { ...defaultWorkspace(), recording: true, lastError: null };
     const pane = { ...chrome.panes[0]!, outOfSync: { actionId: 1, actionKind: "hover", reason: "unsupported" } };
     expect(ChromeStateSchema.safeParse({ ...chrome, panes: [pane], order: [pane.id] }).success).toBe(false);
+  });
+});
+
+describe("emulation state", () => {
+  const emulationDefaults = { colorScheme: "auto", reducedMotion: false, throttling: "none", overlays: { outlines: false, disableImages: false, showRoles: false } };
+
+  it("ships emulation defaults on the default workspace", () => {
+    const workspace = defaultWorkspace();
+    expect(workspace.emulation).toEqual(emulationDefaults);
+    expect(WorkspaceStateSchema.parse(workspace)).toEqual(workspace);
+  });
+
+  it("fills emulation defaults into legacy workspaces without the field", () => {
+    const workspace = defaultWorkspace();
+    const legacy: Record<string, unknown> = { ...workspace };
+    delete legacy.emulation;
+    expect(WorkspaceStateSchema.parse(legacy)).toEqual(workspace);
+  });
+
+  it("completes partially specified emulation settings", () => {
+    const parsed = WorkspaceStateSchema.parse({ ...defaultWorkspace(), emulation: { colorScheme: "dark", overlays: { outlines: true } } });
+    expect(parsed.emulation).toEqual({ colorScheme: "dark", reducedMotion: false, throttling: "none", overlays: { outlines: true, disableImages: false, showRoles: false } });
+  });
+
+  it("rejects unknown emulation values", () => {
+    expect(WorkspaceStateSchema.safeParse({ ...defaultWorkspace(), emulation: { colorScheme: "sepia" } }).success).toBe(false);
+    expect(WorkspaceStateSchema.safeParse({ ...defaultWorkspace(), emulation: { throttling: "fiber" } }).success).toBe(false);
+    expect(WorkspaceStateSchema.safeParse({ ...defaultWorkspace(), emulation: { overlays: { outlines: "yes" } } }).success).toBe(false);
+    expect(WorkspaceStateSchema.safeParse({ ...defaultWorkspace(), emulation: { unexpected: true } }).success).toBe(false);
+  });
+});
+
+describe("emulation commands", () => {
+  it("parses every global emulation command", () => {
+    const commands = [
+      { kind: "set-color-scheme", value: "dark" },
+      { kind: "set-reduced-motion", enabled: true },
+      { kind: "set-throttling", mode: "slow3g" },
+      { kind: "set-overlay", key: "showRoles", enabled: false },
+    ];
+    expect(commands.map((command) => ChromeCommandSchema.parse(command))).toEqual(commands);
+  });
+
+  it("rejects malformed emulation commands", () => {
+    expect(ChromeCommandSchema.safeParse({ kind: "set-color-scheme", value: "sepia" }).success).toBe(false);
+    expect(ChromeCommandSchema.safeParse({ kind: "set-throttling", mode: "5g" }).success).toBe(false);
+    expect(ChromeCommandSchema.safeParse({ kind: "set-overlay", key: "grids", enabled: true }).success).toBe(false);
+    expect(ChromeCommandSchema.safeParse({ kind: "set-overlay", key: "outlines" }).success).toBe(false);
+    expect(ChromeCommandSchema.safeParse({ kind: "set-reduced-motion", enabled: true, extra: true }).success).toBe(false);
   });
 });

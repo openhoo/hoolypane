@@ -11,6 +11,27 @@ export const PanePositionSchema = z.strictObject({
   y: z.number().int().min(0),
 });
 export type PanePosition = z.infer<typeof PanePositionSchema>;
+export const ColorSchemeModeSchema = z.enum(["auto", "light", "dark"]);
+export type ColorSchemeMode = z.infer<typeof ColorSchemeModeSchema>;
+export const ThrottlingModeSchema = z.enum(["none", "slow3g", "offline"]);
+export type ThrottlingMode = z.infer<typeof ThrottlingModeSchema>;
+export const OverlayKeySchema = z.enum(["outlines", "disableImages", "showRoles"]);
+export type OverlayKey = z.infer<typeof OverlayKeySchema>;
+
+export const EmulationOverlaysSchema = z.strictObject({
+  outlines: z.boolean().default(false),
+  disableImages: z.boolean().default(false),
+  showRoles: z.boolean().default(false),
+});
+export type EmulationOverlays = z.infer<typeof EmulationOverlaysSchema>;
+/** Global emulation and debug-overlay settings applied to every pane via CDP; every key defaults so legacy workspaces load unchanged. */
+export const EmulationSettingsSchema = z.strictObject({
+  colorScheme: ColorSchemeModeSchema.default("auto"),
+  reducedMotion: z.boolean().default(false),
+  throttling: ThrottlingModeSchema.default("none"),
+  overlays: EmulationOverlaysSchema.prefault({}),
+});
+export type EmulationSettings = z.infer<typeof EmulationSettingsSchema>;
 
 const ActionKinds = ActionSchema.options.map((option) => option.shape.kind.value) as [Action["kind"], ...Action["kind"][]];
 const ActionKindSchema = z.enum(ActionKinds);
@@ -38,6 +59,7 @@ export const WorkspaceStateSchema = z.strictObject({
   layout: LayoutModeSchema,
   /** Free-layout card positions in workspace coordinates; panes without an entry are auto-tiled. */
   positions: z.record(z.string().min(1), PanePositionSchema).default({}),
+  emulation: EmulationSettingsSchema.prefault({}),
   focusedPaneId: z.string().min(1).nullable(),
   syncEnabled: z.boolean(),
   sharedUrl: HttpUrlSchema,
@@ -67,5 +89,5 @@ function paneFromViewport(viewport: ViewportSpec, id: string, url: string): Pane
 export function defaultWorkspace(url = "https://example.com/"): WorkspaceState {
   const viewports = VIEWPORT_PRESETS;
   const panes = viewports.map((viewport) => paneFromViewport(viewport, viewport.id, url));
-  return { version: 1, panes, order: panes.map((pane) => pane.id), layout: "free", positions: {}, focusedPaneId: null, syncEnabled: true, sharedUrl: url };
+  return { version: 1, panes, order: panes.map((pane) => pane.id), layout: "free", positions: {}, emulation: { colorScheme: "auto", reducedMotion: false, throttling: "none", overlays: { outlines: false, disableImages: false, showRoles: false } }, focusedPaneId: null, syncEnabled: true, sharedUrl: url };
 }

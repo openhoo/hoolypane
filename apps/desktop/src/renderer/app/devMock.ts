@@ -147,6 +147,18 @@ function apply(command: ChromeCommand): void {
     case "set-sync":
       patch({ syncEnabled: command.enabled });
       break;
+    case "set-color-scheme":
+      patch({ emulation: { ...mockState.emulation, colorScheme: command.value } });
+      break;
+    case "set-reduced-motion":
+      patch({ emulation: { ...mockState.emulation, reducedMotion: command.enabled } });
+      break;
+    case "set-throttling":
+      patch({ emulation: { ...mockState.emulation, throttling: command.mode } });
+      break;
+    case "set-overlay":
+      patch({ emulation: { ...mockState.emulation, overlays: { ...mockState.emulation.overlays, [command.key]: command.enabled } } });
+      break;
     case "capture-pane":
     case "capture-overview":
       // Screenshots require the native WebContentsView; no-op success in the mock.

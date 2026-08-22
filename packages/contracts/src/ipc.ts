@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ActionSchema } from "./action.js";
-import { LayoutModeSchema } from "./state.js";
+import { ColorSchemeModeSchema, LayoutModeSchema, OverlayKeySchema, ThrottlingModeSchema } from "./state.js";
 import { ViewportSpecSchema } from "./viewport.js";
 
 export const IPC_CHANNELS = {
@@ -42,6 +42,10 @@ export const ChromeCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("set-layout"), layout: LayoutModeSchema }),
   z.strictObject({ kind: z.literal("move-pane"), paneId, x: z.number().int().min(0), y: z.number().int().min(0) }),
   z.strictObject({ kind: z.literal("set-sync"), enabled: z.boolean() }),
+  z.strictObject({ kind: z.literal("set-color-scheme"), value: ColorSchemeModeSchema }),
+  z.strictObject({ kind: z.literal("set-reduced-motion"), enabled: z.boolean() }),
+  z.strictObject({ kind: z.literal("set-throttling"), mode: ThrottlingModeSchema }),
+  z.strictObject({ kind: z.literal("set-overlay"), key: OverlayKeySchema, enabled: z.boolean() }),
   z.strictObject({ kind: z.enum(["capture-pane"]), paneId }),
   z.strictObject({ kind: z.enum(["capture-overview", "record-start", "record-stop"]) }),
 ]);

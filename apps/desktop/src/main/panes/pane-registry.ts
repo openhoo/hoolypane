@@ -1,12 +1,12 @@
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, session, type Session, type WebContents, WebContentsView } from "electron";
-import { IPC_CHANNELS, PaneGenerationSchema, ViewportSpecSchema, type Action, type BoundsSnapshot, type ViewportSpec } from "@hoolypane/contracts";
+import { IPC_CHANNELS, PaneGenerationSchema, ViewportSpecSchema, type Action, type BoundsSnapshot, type ColorSchemeMode, type OverlayKey, type ThrottlingMode, type ViewportSpec } from "@hoolypane/contracts";
 import { displayScale, validateBoundsSnapshot, type Bounds } from "./layout.js";
 import { isAllowedProtocol, normalizeUrl } from "./url.js";
 import { addPane, closePane, defaultWorkspace, duplicatePane, removePane, reorderPane, rotatePane, uniquePaneId, updatePane, type PaneState, type WorkspaceState } from "./workspace.js";
 
 type PaneFailure = { paneId: string; message: string };
-type PaneRecord = { id: string; view: WebContentsView; lastBounds?: Bounds; debuggerAttached: boolean; documentGeneration: number };
+type PaneRecord = { id: string; view: WebContentsView; lastBounds?: Bounds; debuggerAttached: boolean; networkEmulationReady: boolean; documentGeneration: number; overlayCssKeys: Partial<Record<OverlayKey, string>> };
 
 export class PaneRegistry {
   readonly panes = new Map<string, PaneRecord>();
@@ -55,7 +55,7 @@ export class PaneRegistry {
     if (!this.window) throw new Error("pane registry has no window");
     const view = new WebContentsView({ webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, partition: "persist:hoolypane", preload: this.panePreloadPath() } });
     view.webContents.setBackgroundThrottling(false);
-    const record: PaneRecord = { id, view, debuggerAttached: false, documentGeneration: 0 };
+    const record: PaneRecord = { id, view, debuggerAttached: false, networkEmulationReady: false, documentGeneration: 0, overlayCssKeys: {} };
     this.panes.set(id, record);
     this.window.contentView.addChildView(view);
     this.workspace = this.workspace.order.includes(id) ? this.workspace : addPane(this.workspace, valid, this.workspace.sharedUrl, id);
@@ -65,6 +65,7 @@ export class PaneRegistry {
       if (!this.isLive(record)) return id;
       await this.configureViewport(record);
       if (!this.isLive(record)) return id;
+      await this.applyPaneSettings(record);
       // The chrome renderer measures pane cards once when they mount; if this record was
       // created after that measurement, the snapshot skipped it and no renderer churn will
       // re-emit. Replay this record's measured entry so late-created panes receive geometry.
@@ -122,6 +123,59 @@ export class PaneRegistry {
     this.emitChange();
   }
   setSync(enabled: boolean): void { this.workspace = { ...this.workspace, syncEnabled: enabled }; this.emitChange(); }
+  setColorScheme(value: ColorSchemeMode): void { this.workspace = { ...this.workspace, emulation: { ...this.workspace.emulation, colorScheme: value } }; this.applyEmulation(); }
+  setReducedMotion(enabled: boolean): void { this.workspace = { ...this.workspace, emulation: { ...this.workspace.emulation, reducedMotion: enabled } }; this.applyEmulation(); }
+  setThrottling(mode: ThrottlingMode): void { this.workspace = { ...this.workspace, emulation: { ...this.workspace.emulation, throttling: mode } }; this.applyEmulation(); }
+  setOverlay(key: OverlayKey, enabled: boolean): void {
+    this.workspace = { ...this.workspace, emulation: { ...this.workspace.emulation, overlays: { ...this.workspace.emulation.overlays, [key]: enabled } } };
+    this.applyEmulation();
+  }
+
+  /** Fans the current global emulation state out to every live pane; never throws. */
+  private applyEmulation(): void {
+    this.emitChange();
+    for (const record of this.panes.values()) void this.applyPaneSettings(record);
+  }
+
+  /** Applies global emulation media/network state plus overlays to one pane via its CDP debugger; failures are logged only. */
+  async applyPaneSettings(record: PaneRecord): Promise<void> {
+    if (!this.isLive(record)) return;
+    const contents = record.view.webContents;
+    const emulation = this.workspace.emulation;
+    try {
+      if (!record.debuggerAttached) { contents.debugger.attach("1.3"); record.debuggerAttached = true; }
+      // The features list is replaced wholesale on every send: inactive settings are omitted so
+      // Chromium resets them ("auto"/false) and no stale override can survive a toggle-off.
+      const features: Array<{ name: string; value: string }> = [];
+      if (emulation.colorScheme !== "auto") features.push({ name: "prefers-color-scheme", value: emulation.colorScheme });
+      if (emulation.reducedMotion) features.push({ name: "prefers-reduced-motion", value: "reduce" });
+      await contents.debugger.sendCommand("Emulation.setEmulatedMedia", { features });
+      if (!record.networkEmulationReady) { await contents.debugger.sendCommand("Network.enable"); record.networkEmulationReady = true; }
+      await contents.debugger.sendCommand("Network.emulateNetworkConditions", networkConditions(emulation.throttling));
+    } catch (error) {
+      if (this.isLive(record)) console.error(`[hoolypane] pane ${record.id}: emulation failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    await this.applyOverlays(record);
+  }
+
+  private async applyOverlays(record: PaneRecord): Promise<void> {
+    if (!this.isLive(record)) return;
+    const contents = record.view.webContents;
+    const overlays = this.workspace.emulation.overlays;
+    try {
+      // insertCSS keys do not survive cross-document navigation: drop every cached key first,
+      // then inject exactly the currently active overlays.
+      const staleKeys = record.overlayCssKeys;
+      record.overlayCssKeys = {};
+      for (const key of OVERLAY_KEYS) {
+        const cssKey = staleKeys[key];
+        if (cssKey !== undefined) await contents.removeInsertedCSS(cssKey).catch(() => undefined);
+        if (overlays[key]) record.overlayCssKeys[key] = await contents.insertCSS(OVERLAY_STYLES[key]);
+      }
+    } catch (error) {
+      if (this.isLive(record)) console.error(`[hoolypane] pane ${record.id}: overlay injection failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 
   async navigate(url: string): Promise<void> {
     const target = normalizeUrl(url);
@@ -179,6 +233,8 @@ export class PaneRegistry {
     });
     contents.on("did-finish-load", () => {
       contents.send(IPC_CHANNELS.paneGeneration, PaneGenerationSchema.parse({ documentGeneration: record.documentGeneration }));
+      // insertCSS keys die with the finished document: re-inject active overlays for the new one.
+      void this.applyPaneSettings(record);
     });
     contents.on("did-start-loading", () => this.setPane(record.id, { loading: true, failure: null }));
     contents.on("did-stop-loading", () => this.setPane(record.id, { loading: false, canGoBack: contents.canGoBack(), canGoForward: contents.canGoForward() }));
@@ -244,3 +300,16 @@ export class PaneRegistry {
   private panePreloadPath(): string { return fileURLToPath(new URL("../preload/pane.js", import.meta.url)); }
 }
 function sameBounds(left: Bounds, right: Bounds): boolean { return left.x === right.x && left.y === right.y && left.width === right.width && left.height === right.height; }
+
+const OVERLAY_STYLES: Record<OverlayKey, string> = {
+  outlines: "*{outline:1px solid rgba(99,102,241,.4)!important}",
+  disableImages: "img,picture,video,source,[style*=\"background-image\"]{filter:grayscale(1) opacity(.25)!important}",
+  showRoles: "[role]{position:relative}[role]::before{content:\"[\"attr(role)\"]\";position:absolute;background:#6366f1;color:#fff;font:10px monospace;padding:1px 3px;z-index:2147483647}",
+};
+const OVERLAY_KEYS = Object.keys(OVERLAY_STYLES) as OverlayKey[];
+
+function networkConditions(mode: ThrottlingMode): { offline: boolean; latency: number; downloadThroughput: number; uploadThroughput: number } {
+  if (mode === "offline") return { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 };
+  if (mode === "slow3g") return { offline: false, latency: 300, downloadThroughput: 50_000, uploadThroughput: 20_000 };
+  return { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 };
+}

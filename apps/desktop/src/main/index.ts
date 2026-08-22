@@ -149,6 +149,10 @@ async function handleCommand(command: ChromeCommand): Promise<void> {
     case "set-layout": registry.setLayout(command.layout); break;
     case "move-pane": registry.setPanePosition(command.paneId, command.x, command.y); break;
     case "set-sync": registry.setSync(command.enabled); break;
+    case "set-color-scheme": registry.setColorScheme(command.value); break;
+    case "set-reduced-motion": registry.setReducedMotion(command.enabled); break;
+    case "set-throttling": registry.setThrottling(command.mode); break;
+    case "set-overlay": registry.setOverlay(command.key, command.enabled); break;
     case "record-start": {
       const firstPane = registry.getState().order[0];
       if (firstPane) flowDraft.start(registry.getState().sharedUrl, firstPane, nextActionId++, Date.now());

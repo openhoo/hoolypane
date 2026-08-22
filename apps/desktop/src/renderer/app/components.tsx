@@ -18,6 +18,16 @@ import {
 
 export type SendCommand = (command: ChromeCommand) => void;
 type LayoutMode = ChromeState["layout"];
+type EmulationState = ChromeState["emulation"];
+
+const OVERLAY_ITEMS = [
+  { key: "outlines", label: "Outlines" },
+  { key: "disableImages", label: "Disable images" },
+  { key: "showRoles", label: "Show roles" },
+] as const;
+
+const selectClass = (active: boolean): string =>
+  `h-8 rounded-lg border bg-field px-1 text-xs text-ink outline-none transition-colors focus:border-accent/70 ${active ? "border-accent/70" : "border-edge"}`;
 
 function IconButton({
   label,
@@ -76,7 +86,7 @@ export function Toolbar({
 }) {
   return (
     <>
-      <header class="flex h-10 shrink-0 items-center gap-2.5 border-b border-edge bg-panel px-3">
+      <header class="flex min-h-10 flex-wrap shrink-0 items-center gap-2.5 border-b border-edge bg-panel px-3 py-1">
       <div class="flex shrink-0 items-center gap-1.5 pr-0.5">
         <span aria-hidden="true" class="size-4 rounded-[6px] bg-gradient-to-br from-accent to-cyan-400" />
         <span class="whitespace-nowrap text-[13px] font-semibold tracking-tight">Hoolypane</span>
@@ -138,6 +148,76 @@ export function Toolbar({
         </span>
         Sync
       </button>
+      <div role="group" aria-label="Emulation" class="flex h-8 shrink-0 items-center gap-1 border-l border-edge pl-2">
+        <label class="flex items-center gap-1">
+          <span aria-hidden="true" class={`size-1.5 shrink-0 rounded-full ${state.emulation.colorScheme !== "auto" ? "bg-accent" : "bg-edge"}`} />
+          <select
+            aria-label="Color scheme"
+            value={state.emulation.colorScheme}
+            onChange={(event) => send({ kind: "set-color-scheme", value: (event.currentTarget as HTMLSelectElement).value as EmulationState["colorScheme"] })}
+            class={selectClass(state.emulation.colorScheme !== "auto")}
+          >
+            <option value="auto">Auto</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+        <button
+          type="button"
+          aria-pressed={state.emulation.reducedMotion}
+          aria-label="Reduced motion"
+          title="Reduced motion"
+          onClick={() => send({ kind: "set-reduced-motion", enabled: !state.emulation.reducedMotion })}
+          class={`h-8 shrink-0 whitespace-nowrap rounded-lg border px-2 text-xs transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent ${
+            state.emulation.reducedMotion ? "border-accent/70 bg-accent/15 text-accent" : "border-edge bg-field text-mute hover:text-ink"
+          }`}
+        >
+          Motion
+        </button>
+        <label class="flex items-center gap-1">
+          <span aria-hidden="true" class={`size-1.5 shrink-0 rounded-full ${state.emulation.throttling !== "none" ? "bg-accent" : "bg-edge"}`} />
+          <select
+            aria-label="Throttling"
+            value={state.emulation.throttling}
+            onChange={(event) => send({ kind: "set-throttling", mode: (event.currentTarget as HTMLSelectElement).value as EmulationState["throttling"] })}
+            class={selectClass(state.emulation.throttling !== "none")}
+          >
+            <option value="none">No throttling</option>
+            <option value="slow3g">Slow 3G</option>
+            <option value="offline">Offline</option>
+          </select>
+        </label>
+        <details class="relative">
+          <summary
+            aria-label="Overlays"
+            class={`flex h-8 shrink-0 cursor-pointer list-none items-center gap-1 whitespace-nowrap rounded-lg border px-2 text-xs transition-colors [&::-webkit-details-marker]:hidden ${
+              OVERLAY_ITEMS.some((item) => state.emulation.overlays[item.key])
+                ? "border-accent/70 bg-accent/15 text-accent"
+                : "border-edge bg-field text-mute hover:text-ink"
+            }`}
+          >
+            Overlays
+          </summary>
+          <div class="absolute right-0 top-9 z-40 flex w-36 flex-col rounded-lg border border-edge bg-elevated p-1 shadow-xl">
+            {OVERLAY_ITEMS.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={state.emulation.overlays[item.key]}
+                onClick={(event) => {
+                  send({ kind: "set-overlay", key: item.key, enabled: !state.emulation.overlays[item.key] });
+                  (event.currentTarget.closest("details") as HTMLDetailsElement | null)?.removeAttribute("open");
+                }}
+                class="flex items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs text-ink hover:bg-field"
+              >
+                {item.label}
+                <span aria-hidden="true" class={`size-1.5 shrink-0 rounded-full ${state.emulation.overlays[item.key] ? "bg-accent" : "bg-edge"}`} />
+              </button>
+            ))}
+          </div>
+        </details>
+      </div>
       <button
         type="button"
         aria-pressed={state.recording}
