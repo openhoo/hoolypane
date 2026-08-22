@@ -50,7 +50,7 @@ describe("real runner", () => {
     if (result.status !== "success") {
       // Surface the per-viewport failure reasons recorded in the manifest instead of failing opaque.
       const diagnostics = await readFile(join(output, "manifest.json"), "utf8").then(JSON.parse).catch(() => null);
-      console.log("RUNNER FLOW DIAGNOSTICS", JSON.stringify(diagnostics)?.slice(0, 2000));
+      console.log("RUNNER FLOW FAILURES", JSON.stringify((diagnostics as { failures?: unknown })?.failures ?? diagnostics)?.slice(0, 4000));
     }
     expect(result.status).toBe("success");
     const observed = await results() as Array<Record<string, unknown>>;
