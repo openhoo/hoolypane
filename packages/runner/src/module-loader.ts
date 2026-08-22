@@ -4,8 +4,8 @@ import { createRequire } from "node:module";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export interface CompiledModule {
   readonly path: string;
@@ -86,11 +86,57 @@ function hoolypaneResolution(): Plugin {
   };
 }
 
-function playwrightResolution(): Plugin {
+// Playwright stays external at an absolute file URL so its own dependencies (playwright-core) resolve
+// from the playwright package's real location. createRequire locates the package through Node's own
+// resolver, but its "require" condition returns the CJS entry whose re-export chain cjs-module-lexer
+// cannot statically see — `import { chromium }` in the artifact would fail. So walk up to the package
+// root and pick the "import"-condition entry (ESM) explicitly; bare-string export targets serve every
+// condition and are therefore already covered by the CJS path.
+function playwrightEntry(): string {
+  const located = createRequire(import.meta.url).resolve("playwright");
+  let dir = dirname(located);
+  for (;;) {
+    if (existsSync(join(dir, "package.json"))) break;
+    const parent = dirname(dir);
+    if (parent === dir) return located;
+    dir = parent;
+  }
+  const manifestPath = join(dir, "package.json");
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  } catch {
+    return located;
+  }
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) return located;
+  // JSON boundary: member reads below are guarded by in-checks on this record.
+  const manifestRecord = manifest as Record<string, unknown>;
+  if (!("name" in manifestRecord) || manifestRecord.name !== "playwright") return located;
+  if (!("exports" in manifestRecord)) return located;
+  const exportTable: unknown = manifestRecord.exports;
+  if (typeof exportTable !== "object" || exportTable === null || Array.isArray(exportTable)) return located;
+  // Same JSON boundary as above for the exports table.
+  const exportRecord = exportTable as Record<string, unknown>;
+  if (!("." in exportRecord)) return located;
+  const rootExport: unknown = exportRecord["."];
+  if (rootExport === null || typeof rootExport !== "object" || Array.isArray(rootExport)) return located;
+  // Conditional map object: guarded member access via in-narrowing.
+  const conditions = rootExport as Record<string, unknown>;
+  const target: unknown = "import" in conditions ? conditions.import : "default" in conditions ? conditions.default : undefined;
+  return typeof target === "string" ? join(dir, target) : located;
+}
+
+// Emits a relative external specifier from the artifact to playwright's ESM entry, so Node loads the
+// real ESM file (named exports intact) while esbuild keeps it out of the bundle. Path separators are
+// normalized to "/" because ESM import specifiers always use forward slashes.
+function playwrightResolution(artifactPath: string): Plugin {
   return {
     name: "playwright-resolution",
     setup(pluginBuild: PluginBuild): void {
-      pluginBuild.onResolve({ filter: /^playwright$/ }, (args) => ({ path: pathToFileURL(createRequire(import.meta.url).resolve(args.path)).href }));
+      pluginBuild.onResolve({ filter: /^playwright$/ }, () => ({
+        path: relative(dirname(artifactPath), playwrightEntry()).split(sep).join("/"),
+        external: true,
+      }));
     },
   };
 }
@@ -105,7 +151,7 @@ export async function compileModule(entryFile: string, cacheDir: string): Promis
     entryPoints: [absoluteEntry],
     outfile: outputPath,
     bundle: true,
-    plugins: [hoolypaneResolution(), playwrightResolution()],
+    plugins: [hoolypaneResolution(), playwrightResolution(outputPath)],
     format: "esm",
     platform: "node",
     target: "node24",

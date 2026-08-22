@@ -2,9 +2,11 @@ import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseCliArguments } from "./cli-arguments.js";
 import { buildContextOptions, validateResolvedConfig } from "./run-flow.js";
+import { compileModule } from "./module-loader.js";
 import { verifyDirectory } from "./verify.js";
 import ffmpegPath from "ffmpeg-static";
 import { VIEWPORT_PRESETS } from "@hoolypane/contracts";
@@ -39,6 +41,25 @@ describe("runner preflight", () => {
 
   it("rejects invalid recording values during preflight", () => {
     expect(() => validateResolvedConfig({ viewports: [VIEWPORT_PRESETS[0]!], recording: { fps: 24 } })).toThrow();
+  });
+});
+
+describe("compiled artifact loading", () => {
+  it("exposes playwright named exports from the compiled bundle", async () => {
+    // Dynamic import is the point of this test: it exercises Node's runtime loading boundary for
+    // compiled artifacts exactly like runFlow does, which a static import could not observe.
+    const directory = await mkdtemp(join(tmpdir(), "hoolypane-pw-artifact-"));
+    scratchDirectories.push(directory);
+    const source = join(directory, "flow.ts");
+    await writeFile(source, 'import { chromium } from "playwright";\nexport const run = () => chromium.name();\n', "utf8");
+    const compiled = await compileModule(source, join(directory, ".hoolypane/cache"));
+    try {
+      const mod = await import(pathToFileURL(compiled.path).href);
+      expect(typeof mod.run).toBe("function");
+      expect(mod.run()).toBe("chromium");
+    } finally {
+      await compiled.cleanup();
+    }
   });
 });
 
