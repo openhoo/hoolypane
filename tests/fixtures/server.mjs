@@ -55,9 +55,10 @@ h2{font-size:clamp(22px,3vw,30px);letter-spacing:-.02em;margin:0 0 6px}
 .panel .lede{color:#a7adcf}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media(max-width:640px){.grid2{grid-template-columns:1fr}}
-@media(max-width:760px){nav{padding:12px 18px}nav .links{display:none}}
+@media(max-width:760px){nav{position:static;padding:12px 18px}nav .links{display:none}}
 @media(max-width:720px){.dash{grid-template-columns:1fr}.kpi b{font-size:18px}}
 .field{display:grid;gap:5px;font-size:12px;color:#a7adcf}
+.panel [data-testid]{scroll-margin-top:80px}
 .field input,.field select{background:#1d2040;border:1px solid #33375f;color:#e8eaf6;border-radius:8px;padding:8px 10px;font:inherit;font-size:13.5px;outline:none}
 .field input:focus,.field select:focus{border-color:#6c72ff}
 .check{display:flex;align-items:center;gap:8px;font-size:13px;color:#cdd2ee}
