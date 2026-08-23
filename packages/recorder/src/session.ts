@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join, relative } from "node:path";
 import { hrtime } from "node:process";
@@ -17,7 +17,7 @@ import {
   type SlotMapping,
 } from "./capture-contract.js";
 import { encodeAligned } from "./encoder.js";
-import { CaptureSpool, decodeScreencastData, frameMetadata, type CaptureTarget, type FrameSpool, type ScreencastFrame } from "./spool.js";
+import { CaptureSpool, decodeScreencastData, frameMetadata, writeFileAtomic, type CaptureTarget, type FrameSpool, type ScreencastFrame } from "./spool.js";
 import { verifyArtifacts } from "./verifier.js";
 
 export interface RecorderFailure { readonly message: string; readonly viewportId?: string; readonly stepId?: string; readonly stack?: string }
@@ -74,18 +74,7 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 async function atomicJson(path: string, value: unknown): Promise<void> {
-  const temporary = `${path}.${randomBytes(8).toString("hex")}.tmp`;
-  const handle = await fs.open(temporary, "wx");
-  try {
-    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`);
-    await handle.sync();
-    await fs.rename(temporary, path);
-  } catch (error) {
-    await fs.rm(temporary, { force: true }).catch(() => undefined);
-    throw error;
-  } finally {
-    await handle.close();
-  }
+  await writeFileAtomic(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 async function sha256(path: string): Promise<string> {
@@ -123,6 +112,7 @@ export class RecordingSession {
   private state: RecordingState = "awaiting-initial-frames";
   private readonly spools = new CaptureSpool();
   private readonly contexts: Context[] = [];
+  private readonly captureCloseFailures: RecorderFailure[] = [];
   private started = false;
   private finalized = false;
   private captureStopped = false;
@@ -144,9 +134,15 @@ export class RecordingSession {
     if (targets.length === 0) throw new Error("recording requires at least one target");
     this.started = true;
     await fs.mkdir(this.options.outputDir, { recursive: true });
+    // A rerun into the same outputDir must never inherit artifacts from a previous run.
+    await Promise.all([
+      ...["videos", "traces", "raw"].map((entry) => fs.rm(join(this.options.outputDir, entry), { recursive: true, force: true })),
+      ...["manifest.json", "diagnostics.json", "run-state.json"].map((file) => fs.rm(join(this.options.outputDir, file), { force: true })),
+    ]);
     await this.spools.create(targets, join(this.options.outputDir, "raw"));
-    await atomicJson(join(this.options.outputDir, "run-state.json"), { runId: this.runId, state: this.state, contract: null });
     try {
+      // Inside the guard: a failing initial state write must dispose the opened spools.
+      await atomicJson(join(this.options.outputDir, "run-state.json"), { runId: this.runId, state: this.state, contract: null });
       for (const target of targets) {
         const spool = this.spools.spools.get(target.id)!;
         let context: Context;
@@ -223,10 +219,35 @@ export class RecordingSession {
     this.captureStopped = true;
     await Promise.allSettled(this.contexts.map((context) => context.target.send("Page.stopScreencast")));
     for (const context of this.contexts) context.target.off("Page.screencastFrame", context.listener);
-    await this.spools.close();
+    await this.spools.close((viewportId, error) => {
+      this.captureCloseFailures.push({ message: `capture spool close failed: ${error.message}`, viewportId });
+    }).catch(() => undefined);
   }
 
-  async finalize(input: { readonly status: "success" | "failed" | "interrupted"; readonly failures: readonly RecorderFailure[]; readonly events?: readonly FlowEvent[] }): Promise<RecordingFinalizeResult> {
+  /** keepRaw=false: raw bins and partially encoded videos never survive any exit path. */
+  private async pruneTransientArtifacts(): Promise<void> {
+    if (this.options.recording.keepRaw) return;
+    await Promise.allSettled([
+      fs.rm(join(this.options.outputDir, "raw"), { recursive: true, force: true }),
+      fs.rm(join(this.options.outputDir, "videos"), { recursive: true, force: true }),
+    ]);
+  }
+
+  private async cancellableDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) throw signal.reason;
+    const completion = Promise.withResolvers<void>();
+    const timer = setTimeout(completion.resolve, milliseconds);
+    const onAbort = () => completion.reject(signal!.reason);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      await completion.promise;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
+  async finalize(input: { readonly status: "success" | "failed" | "interrupted"; readonly failures: readonly RecorderFailure[]; readonly events?: readonly FlowEvent[]; readonly signal?: AbortSignal }): Promise<RecordingFinalizeResult> {
     if (this.finalized) throw new Error("recording session already finalized");
     this.finalized = true;
     try {
@@ -234,22 +255,29 @@ export class RecordingSession {
         await fs.mkdir(this.options.outputDir, { recursive: true });
         if (this.state !== "failed") await this.transition("failed");
         await this.stopCapture();
+        const spoolNotes = this.contexts.flatMap((context) => [...context.spool.drainFailureNotes()]);
         const diagnosticsPath = join(this.options.outputDir, "diagnostics.json");
-        await atomicJson(diagnosticsPath, { contract: null, status: input.status, failures: input.failures });
+        await atomicJson(diagnosticsPath, { contract: null, status: input.status, failures: [...input.failures, ...spoolNotes] });
+        await this.pruneTransientArtifacts();
         return { kind: "diagnostics", diagnosticsPath };
       }
       try {
         const elapsedUs = Math.max(0, monotonicUs() - (this.flowStartUs ?? monotonicUs()));
         await this.transition("post-roll");
-        await delay(POST_ROLL_US / 1000);
+        await this.cancellableDelay(POST_ROLL_US / 1000, input.signal);
         const t1Us = this.t0Us + elapsedUs + POST_ROLL_US;
         await this.transition("stopping");
         await this.stopCapture();
+        input.signal?.throwIfAborted();
         await this.transition("aligning");
         const durationFrames = durationFrameCount(this.t0Us, t1Us, this.options.recording.fps);
-        const captureFailures = this.contexts
-          .filter((context) => context.captureError)
-          .map((context) => ({ message: `capture ended early: ${context.captureError!.message}`, viewportId: context.target.id }));
+        const captureFailures = [
+          ...this.contexts
+            .filter((context) => context.captureError)
+            .map((context) => ({ message: `capture ended early: ${context.captureError!.message}`, viewportId: context.target.id })),
+          ...this.captureCloseFailures,
+        ];
+        const spoolFailureNotes = this.contexts.flatMap((context) => [...context.spool.drainFailureNotes()]);
         const mappings: Record<string, readonly SlotMapping[]> = {};
         const aligned = this.contexts.map((context) => {
           const result = alignFrames(context.spool.index.frames, this.t0Us!, durationFrames, this.options.recording.fps);
@@ -304,7 +332,7 @@ export class RecordingSession {
             };
           }),
           mappings,
-          failures: [...input.failures, ...captureFailures],
+          failures: [...input.failures, ...spoolFailureNotes, ...captureFailures],
           flowEvents: input.events ?? [],
           artifacts,
           sha256: hashes,
@@ -316,7 +344,7 @@ export class RecordingSession {
         const stateKey = relative(this.options.outputDir, statePath);
         const finalManifest = { ...manifest, artifacts: { ...manifest.artifacts, "run-state.json": stateKey }, sha256: { ...manifest.sha256, [stateKey]: await sha256(statePath) } };
         await atomicJson(manifestPath, finalManifest);
-        if (!this.options.recording.keepRaw) await fs.rm(join(this.options.outputDir, "raw"), { recursive: true, force: true });
+        await this.pruneTransientArtifacts();
         return { kind: "manifest", manifestPath, manifest: finalManifest };
       } catch (error) {
         try {
@@ -326,6 +354,7 @@ export class RecordingSession {
           const message = error instanceof Error ? error.message : String(error);
           await atomicJson(join(this.options.outputDir, "diagnostics.json"), { contract: CAPTURE_CONTRACT, status: input.status, failures: [...input.failures, { message: `finalize pipeline failed: ${message}` }] });
         } catch { /* the original error takes precedence */ }
+        await this.pruneTransientArtifacts();
         throw error;
       }
     } finally {

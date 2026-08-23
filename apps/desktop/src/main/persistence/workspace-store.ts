@@ -84,9 +84,11 @@ export async function sweepStaleTemporaries(file: string): Promise<void> {
 const saveTails = new Map<string, Promise<void>>();
 let temporarySequence = 0;
 
-export async function saveWorkspace(file: string, state: WorkspaceState): Promise<void> {
+export async function saveWorkspace(file: string, state: WorkspaceState | (() => WorkspaceState)): Promise<void> {
   const previous = saveTails.get(file) ?? Promise.resolve();
-  const task = previous.catch(() => undefined).then(() => writeWorkspace(file, state));
+  // A provider is evaluated when the tail executes, not when it is enqueued, so mutations
+  // landing while earlier writes settle are still included.
+  const task = previous.catch(() => undefined).then(() => writeWorkspace(file, typeof state === "function" ? state() : state));
   saveTails.set(
     file,
     task.then(

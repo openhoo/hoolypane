@@ -1,10 +1,14 @@
 #!/usr/bin/env node
-import { parseCliArguments } from "./cli-arguments.js";
+import { parseCliArguments, TOP_LEVEL_USAGE } from "./cli-arguments.js";
 import { runFlow } from "./run-flow.js";
 import { verifyDirectory } from "./verify.js";
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
   try {
+    if (argv[0] === "-h" || argv[0] === "--help") {
+      process.stdout.write(`${TOP_LEVEL_USAGE}\n`);
+      return 0;
+    }
     if (argv[0] === "verify") {
       if (!argv[1] || argv.length !== 2) throw new Error("Usage: hoolypane verify <output-dir>");
       return await verifyDirectory(argv[1]);

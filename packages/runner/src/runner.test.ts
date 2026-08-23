@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseCliArguments } from "./cli-arguments.js";
 import { buildContextOptions, validateResolvedConfig } from "./run-flow.js";
 import { compileModule } from "./module-loader.js";
@@ -21,6 +21,47 @@ describe("runner CLI", () => {
   it("rejects duplicate flags", () => {
     expect(() => parseCliArguments(["run", "flow.ts", "--headed", "--headed"])).toThrow(/once/);
     expect(() => parseCliArguments(["run", "flow.ts", "--config", "a", "--config", "b"])).toThrow(/once/);
+  });
+  it("pins one distinct error per argument-parse failure site", () => {
+    expect(() => parseCliArguments(["verify", "out"])).toThrow(/^Usage:/u);
+    expect(() => parseCliArguments(["run"])).toThrow(/^Usage:/u);
+    expect(() => parseCliArguments(["run", "--headed"])).toThrow(/^Usage:/u);
+    expect(() => parseCliArguments(["run", "flow.ts", "--config"])).toThrow(/--config requires a path/u);
+    expect(() => parseCliArguments(["run", "flow.ts", "--config", "-x"])).toThrow(/--config requires a path/u);
+    expect(() => parseCliArguments(["run", "flow.ts", "--output"])).toThrow(/--output requires a path/u);
+    expect(() => parseCliArguments(["run", "flow.ts", "--output", "a", "--output", "b"])).toThrow(/--output may be specified only once/u);
+    expect(() => parseCliArguments(["run", "flow.ts", "stray"])).toThrow(/Unknown argument: stray/u);
+  });
+});
+
+describe("cli help", () => {
+  // Requires the runner-wave CLI contract: usage lists run AND verify, -h/--help exits 0.
+  it("prints the combined usage and exits 0 for -h and --help", async () => {
+    const originalArgv = process.argv;
+    const chunks: string[] = [];
+    const sink = (chunk: Uint8Array | string) => {
+      chunks.push(String(chunk));
+      return true;
+    };
+    const outWrite = vi.spyOn(process.stdout, "write").mockImplementation(sink);
+    const errWrite = vi.spyOn(process.stderr, "write").mockImplementation(sink);
+    try {
+      // Dynamic import is deliberate: cli.js runs main(process.argv) at evaluation time,
+      // so the help argv must be installed before the module is first loaded.
+      process.argv = [originalArgv[0]!, "hoolypane", "--help"];
+      const { main } = await import("./cli.js");
+      await expect(main()).resolves.toBe(0);
+      process.argv = [originalArgv[0]!, "hoolypane", "-h"];
+      await expect(main()).resolves.toBe(0);
+      const usage = chunks.join("");
+      expect(usage).toMatch(/^Usage:/mu);
+      expect(usage).toMatch(/\brun\b/u);
+      expect(usage).toMatch(/\bverify\b/u);
+    } finally {
+      outWrite.mockRestore();
+      errWrite.mockRestore();
+      process.argv = originalArgv;
+    }
   });
 });
 
@@ -117,6 +158,14 @@ describe("verify command", () => {
     expect(await verifyDirectory(directory)).toBe(0);
   }, 30_000);
 
+  it("verifies a valid single-frame recording (public durationFrames>=1 contract)", async ({ }) => {
+    const directory = await mkdtemp(join(tmpdir(), "hoolypane-verify-one-frame-"));
+    scratchDirectories.push(directory);
+    await writeRecordingFixture(directory, 30, 1);
+    await writeFile(join(directory, "manifest.json"), manifestBody({ durationFrames: 1 }));
+    expect(await verifyDirectory(directory)).toBe(0);
+  }, 30_000);
+
   it("wraps an unparsable or missing manifest with its path", async () => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-verify-broken-"));
     scratchDirectories.push(directory);
@@ -141,8 +190,30 @@ describe("verify command", () => {
     scratchDirectories.push(directory);
     await writeRecordingFixture(directory, 30, 22);
     await writeFile(join(directory, "manifest.json"), manifestBody({ durationFrames: 21 }));
+
     await expect(verifyDirectory(directory)).rejects.toThrow(/packet frame count mismatch/u);
     await writeFile(join(directory, "manifest.json"), manifestBody({ viewports: [{ id: "one", encodedWidth: 128, encodedHeight: 64 }] }));
     await expect(verifyDirectory(directory)).rejects.toThrow(/geometry .* differs from expected/u);
   }, 30_000);
+
+  it("fails loudly on a present-but-malformed viewports field instead of degrading to timeline-only", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "hoolypane-verify-malformed-"));
+    scratchDirectories.push(directory);
+    await writeFile(join(directory, "manifest.json"), manifestBody({ viewports: "not-an-array" }));
+    await expect(verifyDirectory(directory)).rejects.toThrow(/malformed viewports field/u);
+  });
+
+  it("fails loudly on a malformed viewports entry missing its encoded width", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "hoolypane-verify-malformed-entry-"));
+    scratchDirectories.push(directory);
+    await writeFile(join(directory, "manifest.json"), manifestBody({ viewports: [{ id: "one", encodedWidth: 64 }] }));
+    await expect(verifyDirectory(directory)).rejects.toThrow(/malformed viewports\[0\] entry/u);
+  });
+
+  it("fails loudly on a malformed geometry field", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "hoolypane-verify-malformed-geometry-"));
+    scratchDirectories.push(directory);
+    await writeFile(join(directory, "manifest.json"), manifestBody({ geometry: { outputWidth: 64 } }));
+    await expect(verifyDirectory(directory)).rejects.toThrow(/malformed geometry field/u);
+  });
 });

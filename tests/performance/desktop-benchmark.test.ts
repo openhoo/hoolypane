@@ -138,9 +138,16 @@ describe("six-pane direct compositor", () => {
       await waitForMirrorCount(sample);
     }
     const clickTimes = await Promise.all(pages.map((page) => page.evaluate(() => (globalThis as typeof globalThis & { __mirrorTimes: number[] }).__mirrorTimes)));
+    // Pairing assumes strict 1:1 samples; waitForMirrorCount only enforces a lower bound,
+    // so an over- or under-collecting pane would silently misalign every latency pair.
+    for (const [pageIndex, times] of clickTimes.entries()) {
+      if (times.length !== MIRROR_SAMPLES) throw new Error(`pane ${pages[pageIndex]!.url()} collected ${times.length} mirror timestamps, expected exactly ${MIRROR_SAMPLES}`);
+    }
     const sourceIndex = pages.indexOf(source);
     const sourceTimes = clickTimes[sourceIndex]!;
-    const mirrorLatencies = clickTimes.flatMap((times, pageIndex) => pageIndex === sourceIndex ? [] : times.map((time, sample) => time - sourceTimes[sample]!));
+    const pairedLatencies = clickTimes.flatMap((times, pageIndex) => pageIndex === sourceIndex ? [] : times.map((time, sample) => time - sourceTimes[sample]!));
+    const mirrorLatencies = pairedLatencies.filter((latency) => Number.isFinite(latency));
+    if (mirrorLatencies.length !== pairedLatencies.length) throw new Error(`${pairedLatencies.length - mirrorLatencies.length} non-finite mirror latencies would poison the percentile gate`);
     const mirrorP95Ms = percentile(mirrorLatencies, 0.95);
     rssSamples.push(await mainProcessRssBytes());
 

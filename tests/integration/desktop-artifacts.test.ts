@@ -1,9 +1,10 @@
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cpSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ElectronApplication, Page } from "playwright";
 import sharp from "sharp";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { runFlow } from "../../packages/runner/src/run-flow.js";
 import { launchDesktopApp, pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
 import { clickPaneSurface } from "./cdp-input.js";
@@ -85,9 +86,23 @@ beforeAll(async () => {
   await pollUntil(async () => await paneCount() === 5 || null, 10_000);
 }, 30_000);
 
+let evidenceDirty = false;
+
+afterEach((context) => {
+  const state = context.task.result?.state;
+  if (state === "fail") evidenceDirty = true;
+});
+
 afterAll(async () => {
   await application?.close().catch(() => undefined);
   await fixture?.close();
+  // Preserve the whole scratch directory (screenshots, recorded flow, runner output,
+  // workspace store) for diagnosis before the cleanup below destroys it.
+  if (directory && evidenceDirty) {
+    const dumpDir = await mkdtemp(join(tmpdir(), "artifacts-fail-dump-"));
+    cpSync(directory, join(dumpDir, "artifacts"), { recursive: true });
+    console.log(`ARTIFACTS FAIL DUMP copied to ${join(dumpDir, "artifacts")}`);
+  }
   if (directory) await rm(directory, { recursive: true, force: true });
 }, 30_000);
 

@@ -121,11 +121,14 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
   const contexts: BrowserContext[] = [];
   let interrupted = false;
   let signalDeadline: ReturnType<typeof setTimeout> | undefined;
+  // Cooperative cancellation for the user flow itself: createFlowContext checks this between steps.
+  const flowAbort = new AbortController();
   const signal = Promise.withResolvers<void>();
   const onSignal = (): void => {
     // A second SIGINT/SIGTERM means "stop now": bypass graceful teardown like the force timer below.
     if (interrupted) process.exit(130);
     interrupted = true;
+    flowAbort.abort();
     signal.resolve();
     signalDeadline = setTimeout(() => process.exit(130), 10_000);
   };
@@ -171,7 +174,18 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
     await recorder.start(targets);
     let flowError: unknown;
     let flowFailed = false;
+    let timedOut = false;
+    // Once the race below picks a terminal outcome, late settlements (an orphaned flow rejecting
+    // after SIGINT or timeout) must not overwrite status or failures.
+    let outcomeDecided = false;
+    const recordFlowFailure = (error: unknown): void => {
+      if (outcomeDecided) return;
+      flowFailed = true;
+      flowError = error;
+    };
     const flowEvents: FlowEvent[] = [];
+    // Snapshotted when the race ends early so post-interrupt event pushes cannot pollute finalize.
+    let finalizedEvents: FlowEvent[] = flowEvents;
     const stopTraces = async (): Promise<readonly RecorderFailure[]> => {
       if (tracesStopped) return [];
       tracesStopped = true;
@@ -188,14 +202,31 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
         const initialOutcome = await Promise.race([initial, signal.promise.then(() => "interrupted" as const)]);
         if (initialOutcome === "ready" && !interrupted) {
           recorder.markFlowStart();
+          const flowAbortSignal = flowAbort.signal;
           const execution = Promise.resolve()
-            .then(() => flow.run(createFlowContext(screens, (event) => flowEvents.push(event))))
+            .then(() => flow.run(createFlowContext(screens, (event) => flowEvents.push(event), flowAbortSignal)))
             .catch((error: unknown) => {
-              flowFailed = true;
-              flowError = error;
+              recordFlowFailure(error);
             });
-          await Promise.race([execution, signal.promise]);
-          void execution.catch(() => undefined);
+          // config.timeoutMs bounds the OVERALL flow execution; without a winner an endless user
+          // flow would keep recording forever while artifacts stay unwritten.
+          const timeoutSettled = Promise.withResolvers<"timeout">();
+          const timeoutTimer = setTimeout(() => timeoutSettled.resolve("timeout"), config.timeoutMs);
+          const raced = await Promise.race([
+            execution.then(() => "executed" as const),
+            signal.promise.then(() => "interrupted" as const),
+            timeoutSettled.promise,
+          ]);
+          clearTimeout(timeoutTimer);
+          outcomeDecided = true;
+          if (raced === "timeout") {
+            timedOut = true;
+            flowFailed = true;
+            flowAbort.abort();
+            finalizedEvents = flowEvents.slice();
+          } else if (raced === "interrupted") {
+            finalizedEvents = flowEvents.slice();
+          }
         }
       }
       initialFramesAbort.abort();
@@ -204,9 +235,13 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
       // they land in manifest.failures AND flip the manifest status and the runner exit code.
       traceFailed = traceFailures.length > 0;
       const failures: RecorderFailure[] = [...traceFailures];
-      if (flowFailed) failures.push(failureFrom(flowError));
+      if (timedOut) {
+        failures.push({ message: `flow timed out after ${config.timeoutMs}ms` });
+      } else if (flowFailed) {
+        failures.push(failureFrom(flowError));
+      }
       if (interrupted) failures.push({ message: "Interrupted by SIGINT or SIGTERM" });
-      const finalizeResult = await recorder.finalize({ status: traceFailed ? "failed" : interrupted ? "interrupted" : flowFailed ? "failed" : "success", failures, events: flowEvents });
+      const finalizeResult = await recorder.finalize({ status: traceFailed ? "failed" : interrupted ? "interrupted" : flowFailed ? "failed" : "success", failures, events: finalizedEvents });
       recorderFinalized = true;
       // captureFailures (a pane's screencast ending early) flip the manifest to "failed" even when the flow
       // itself succeeded; the CLI must not exit 0 while the written manifest reports a failed recording.

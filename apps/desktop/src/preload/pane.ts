@@ -1,5 +1,5 @@
 import { ipcRenderer } from "electron";
-import { IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, ReplayRequestSchema, type Action, type LocatorSpec, type ReplayRequest, type ReplayResult } from "@hoolypane/contracts";
+import { IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, RecordFailureSchema, ReplayRequestSchema, type Action, type LocatorSpec, type ReplayRequest, type ReplayResult } from "@hoolypane/contracts";
 
 let documentGeneration = 0;
 type SuppressionEntry = { generation: number; kind: Action["kind"]; box?: { x: number; y: number; width: number; height: number } };
@@ -22,17 +22,38 @@ function autoScrollCenter(element: Element): void {
   }
 }
 let pendingFill: { element: HTMLInputElement | HTMLTextAreaElement; timer: number } | undefined;
-let scrollFrame = 0;
+// Containers awaiting their end-of-frame position read. One shared rAF drains the whole set so a
+// gesture touching several containers records every one of them, not just the first.
+const pendingScrollTargets = new Set<HTMLElement>();
+let pendingScrollFrame = 0;
+
+function drainScrollTargets(): void {
+  pendingScrollFrame = 0;
+  const targets = [...pendingScrollTargets];
+  pendingScrollTargets.clear();
+  for (const target of targets) {
+    // The end position wins over the gesture that scheduled this frame: a programmatic scroll
+    // landing between event and callback is our own echo and must never be mirrored.
+    const programmed = programmaticScrolls.get(target);
+    if (programmed) {
+      programmaticScrolls.delete(target);
+      if (Math.abs(target.scrollTop - programmed.top) <= 1 && Math.abs(target.scrollLeft - programmed.left) <= 1) continue;
+    }
+    const horizontalRatio = target.scrollWidth === target.clientWidth ? 0 : Math.min(1, Math.max(0, target.scrollLeft / (target.scrollWidth - target.clientWidth)));
+    const verticalRatio = target.scrollHeight === target.clientHeight ? 0 : Math.min(1, Math.max(0, target.scrollTop / (target.scrollHeight - target.clientHeight)));
+    record(() => ({ kind: "scroll", locator: locatorFor(target), horizontalRatio, verticalRatio }));
+  }
+}
 
 function normalizedText(value: string | null | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim();
 }
 
-function elementsFor(locator: LocatorSpec): Element[] {
+function elementsFor(locator: LocatorSpec, labelElements?: readonly Element[]): Element[] {
   switch (locator.kind) {
     case "testId": return [...document.querySelectorAll(`[data-testid=${CSS.escape(locator.value)}]`)];
     case "role": return [...document.querySelectorAll("[role],button,a,input,select,textarea")].filter((element) => roleFor(element) === locator.role && accessibleName(element) === locator.name);
-    case "label": return [...document.querySelectorAll("label")].filter((label) => normalizedText(label.textContent) === locator.value).flatMap((label) => {
+    case "label": return [...(labelElements ?? document.querySelectorAll("label"))].filter((label) => normalizedText(label.textContent) === locator.value).flatMap((label) => {
       const control = (label as HTMLLabelElement).control;
       return control ? [control] : [];
     });
@@ -66,8 +87,8 @@ function accessibleName(element: Element): string {
   return normalizedText(element.textContent || element.getAttribute("title") || (element as HTMLInputElement).value);
 }
 
-function unique(locator: LocatorSpec): boolean {
-  try { return elementsFor(locator).length === 1; } catch { return false; }
+function unique(locator: LocatorSpec, labelElements?: readonly Element[]): boolean {
+  try { return elementsFor(locator, labelElements).length === 1; } catch { return false; }
 }
 
 function cssPath(element: Element): string {
@@ -95,9 +116,16 @@ function locatorFor(element: Element): LocatorSpec {
   const name = accessibleName(element);
   if (role && name && unique({ kind: "role", role, name })) return { kind: "role", role, name };
   if (element instanceof HTMLInputElement || element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement) {
-    for (const label of element.labels ?? []) {
-      const value = normalizedText(label.textContent);
-      if (value && unique({ kind: "label", value })) return { kind: "label", value };
+    const labels = element.labels ?? [];
+    if (labels.length > 0) {
+      // One shared sweep serves every label variant: the DOM cannot mutate between synchronous
+      // reads, so the cached list resolves identically to per-variant queries — same winners,
+      // same order, strictly fewer full-document traversals.
+      const labelElements = [...document.querySelectorAll("label")];
+      for (const label of labels) {
+        const value = normalizedText(label.textContent);
+        if (value && unique({ kind: "label", value }, labelElements)) return { kind: "label", value };
+      }
     }
     const placeholder = element.getAttribute("placeholder");
     if (placeholder && unique({ kind: "placeholder", value: placeholder })) return { kind: "placeholder", value: placeholder };
@@ -117,7 +145,15 @@ function emit(action: Action, force = false): void {
 }
 
 function record(action: () => Action, force = false): void {
-  try { emit(action(), force); } catch (error) { console.error("[hoolypane] failed to record action", error); }
+  try {
+    emit(action(), force);
+  } catch (error) {
+    console.error("[hoolypane] failed to record action", error);
+    // Recording used to fail silently (locator resolution throws routinely); surface it to main.
+    // Truncated before parse so the payload is always schema-valid and the send can never throw.
+    const reason = (error instanceof Error ? error.message : String(error)).slice(0, 512);
+    ipcRenderer.send(IPC_CHANNELS.recordFailure, RecordFailureSchema.parse({ kind: "record", reason }));
+  }
 }
 
 function flushFill(force = false): void {
@@ -211,31 +247,26 @@ document.addEventListener("scroll", (event) => {
   // Echo reconciliation must run before every other guard: an entry left unconsumed here would
   // linger past the suppression window and later swallow a genuine user scroll landing exactly
   // on the recorded position.
+  let takeover = false;
   if (target instanceof Element) {
     const programmed = programmaticScrolls.get(target);
     if (programmed) {
       programmaticScrolls.delete(target);
       // An echo lands exactly where the replay scrolled; a diverging position means the user moved it.
-      if (Math.abs(target.scrollTop - programmed.top) <= 1 && Math.abs(target.scrollLeft - programmed.left) <= 1) return;
+      takeover = Math.abs(target.scrollTop - programmed.top) > 1 || Math.abs(target.scrollLeft - programmed.left) > 1;
+      if (!takeover) return;
     }
   }
-  if (suppressed.size > 0 || scrollFrame) return;
   // Document-level scrolls are viewport management, and replay-driven auto-scrolls are our own
   // doing — recording either would mirror them back into all other panes as phantom user actions.
   if (!(target instanceof HTMLElement) || target === document.documentElement || target === document.body) return;
-  scrollFrame = window.requestAnimationFrame(() => {
-    scrollFrame = 0;
-    // The end position wins over the gesture that scheduled this frame: a programmatic scroll
-    // landing between event and callback is our own echo and must never be mirrored.
-    const endProgrammed = programmaticScrolls.get(target);
-    if (endProgrammed) {
-      programmaticScrolls.delete(target);
-      if (Math.abs(target.scrollTop - endProgrammed.top) <= 1 && Math.abs(target.scrollLeft - endProgrammed.left) <= 1) return;
-    }
-    const horizontalRatio = target.scrollWidth === target.clientWidth ? 0 : Math.min(1, Math.max(0, target.scrollLeft / (target.scrollWidth - target.clientWidth)));
-    const verticalRatio = target.scrollHeight === target.clientHeight ? 0 : Math.min(1, Math.max(0, target.scrollTop / (target.scrollHeight - target.clientHeight)));
-    record(() => ({ kind: "scroll", locator: locatorFor(target), horizontalRatio, verticalRatio }));
-  });
+  // A user takeover survives suppression and coalescing alike; only pure echoes may be dropped
+  // by suppression. Everything else queues onto the one shared frame, which reads every queued
+  // container's terminal position.
+  if (!takeover && suppressed.size > 0) return;
+  pendingScrollTargets.add(target);
+  if (pendingScrollFrame) return;
+  pendingScrollFrame = window.requestAnimationFrame(drainScrollTargets);
 }, true);
 
 ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {

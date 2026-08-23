@@ -9,6 +9,8 @@
   --color-field: #171a21;
   --color-edge: #2a2f3a;
   --color-accent: #6366f1;
+  /* Lightened accent for text/icons on accent-tinted chips: >=4.5:1 at 12px, >=3:1 for icons. */
+  --color-accent-text: #a5b4fc;
   --color-danger: #f87171;
   --color-warning: #fbbf24;
   --color-ink: #eef0f4;

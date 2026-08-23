@@ -29,4 +29,17 @@ describe("viewport contracts", () => {
     expect(ViewportSpecSchema.safeParse({ id: "unsafe", name: "Unsafe", width: 16_384, height: 16_384, deviceScaleFactor: 4, isMobile: false, hasTouch: false }).success).toBe(false);
     expect(ViewportSpecSchema.safeParse({ ...VIEWPORT_PRESETS[0], id: "Not A Slug" }).success).toBe(false);
   });
+  it("rejects an isolated viewport above the encoded area cap and accepts the exact boundary", () => {
+    const base = { id: "probe", name: "Probe", deviceScaleFactor: 1, isMobile: false, hasTouch: false };
+    expect(ViewportSpecSchema.safeParse({ ...base, width: 16_384, height: 5_000 }).success).toBe(false);
+    expect(ViewportSpecSchema.safeParse({ ...base, width: 16_384, height: 4_096 }).success).toBe(true);
+    expect(ViewportSpecSchema.safeParse({ ...base, width: 16_384, height: 900 }).success).toBe(true);
+  });
+
+  it("rejects the reserved composite id in lists and empty viewport lists", () => {
+    const composite = { ...VIEWPORT_PRESETS[0], id: "composite", name: "Composite" };
+    expect(ViewportSpecSchema.safeParse(composite).success).toBe(true);
+    expect(ViewportListSchema.safeParse([composite]).success).toBe(false);
+    expect(ViewportListSchema.safeParse([]).success).toBe(false);
+  });
 });

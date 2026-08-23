@@ -23,6 +23,8 @@ interface ProbePacket { readonly pts?: number | string; readonly duration?: numb
 interface ProbeStream { readonly time_base?: string; readonly width?: number; readonly height?: number; readonly duration_ts?: number | string }
 interface PacketOutput { readonly streams?: readonly ProbeStream[]; readonly packets?: readonly ProbePacket[] }
 
+const CHILD_GRACE_MS = 10_000;
+
 async function ffprobeJson(executable: string, args: readonly string[]): Promise<unknown> {
   const child = spawn(executable, args, { stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
@@ -32,7 +34,15 @@ async function ffprobeJson(executable: string, args: readonly string[]): Promise
   const completion = Promise.withResolvers<void>();
   child.once("error", completion.reject);
   child.once("close", (code: number | null) => code === 0 ? completion.resolve() : completion.reject(new Error(`${executable} exited ${code}: ${stderr}`)));
-  await completion.promise;
+  const watchdog = setTimeout(() => {
+    completion.reject(new Error(`${executable} did not exit within ${CHILD_GRACE_MS}ms; sending SIGKILL`));
+    child.kill("SIGKILL");
+  }, CHILD_GRACE_MS);
+  try {
+    await completion.promise;
+  } finally {
+    clearTimeout(watchdog);
+  }
   try { return JSON.parse(stdout); } catch (error) { throw new Error(`${error instanceof Error ? error.message : String(error)}\n${stdout.slice(0, 1000)}`); }
 }
 
@@ -67,7 +77,7 @@ function timeBaseTicks(timeBase: string): { numerator: bigint; denominator: bigi
   return { numerator, denominator };
 }
 
-function exactPtsVector(stream: ProbeStream, packets: readonly ProbePacket[]): { entries: string[]; ticks: bigint[] } {
+function exactPtsVector(stream: ProbeStream, packets: readonly ProbePacket[], fps: 30 | 60): { entries: string[]; ticks: bigint[] } {
   const { numerator, denominator } = timeBaseTicks(stream.time_base!);
   const ticks: bigint[] = [];
   const entries = packets.map((packet, index) => {
@@ -75,8 +85,15 @@ function exactPtsVector(stream: ProbeStream, packets: readonly ProbePacket[]): {
     const next = packets[index + 1]?.pts;
     const previous = packets[index - 1]?.pts;
     const inferred = next === undefined ? previous === undefined ? undefined : BigInt(packet.pts) - BigInt(previous) : BigInt(next) - BigInt(packet.pts);
-    const duration = packet.duration === undefined ? inferred : BigInt(packet.duration);
-    if (duration === undefined || duration <= 0n) throw new Error(`packet ${index} lacks positive duration`);
+    let duration = packet.duration === undefined ? inferred : BigInt(packet.duration);
+    if (duration === undefined) {
+      // A lone packet has no neighbor to infer from and the pinned container stores no durations;
+      // accept it at the ideal constant-frame-rate slot duration instead of rejecting a valid artifact.
+      if (packets.length !== 1) throw new Error(`packet ${index} lacks positive duration`);
+      const [firstTick, secondTick] = idealPtsTicks(stream.time_base!, fps, 2);
+      duration = secondTick! - firstTick!;
+    }
+    if (duration <= 0n) throw new Error(`packet ${index} lacks positive duration`);
     ticks.push(BigInt(packet.pts));
     return `${BigInt(packet.pts) * numerator}/${denominator}|${duration * numerator}/${denominator}`;
   });
@@ -109,7 +126,7 @@ export async function verifyArtifacts(outputDir: string, fps: 30 | 60, durationF
     const probed = await Promise.all(names.map((name) => probe(encoders.ffprobe, join(outputDir, "videos", name))));
     const vectors = probed.map(({ stream, packets }) => {
       if (packets.length !== durationFrames) throw new Error("packet frame count mismatch");
-      return exactPtsVector(stream, packets);
+      return exactPtsVector(stream, packets, fps);
     });
     const [firstVector] = vectors;
     if (!firstVector) throw new Error("no encoded WebM artifacts");

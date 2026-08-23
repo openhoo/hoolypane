@@ -3,7 +3,12 @@ import { spawn } from "node:child_process";
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 function run(command, args, environment = process.env) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: "inherit", env: environment });
+    const child = spawn(command, args, {
+      stdio: "inherit",
+      env: environment,
+      // .cmd shims on Windows only resolve through cmd.exe; args are fixed literals.
+      shell: process.platform === "win32",
+    });
     child.once("error", reject);
     child.once("exit", (code, signal) => code === 0 ? resolve() : reject(new Error(`${command} ${args.join(" ")} exited ${code ?? signal}`)));
   });

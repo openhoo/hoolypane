@@ -25,7 +25,7 @@ export function defineFlow(run: (context: FlowContext) => Promise<void>): FlowDe
   return Object.freeze({ run });
 }
 
-export function createFlowContext(screens: readonly Screen[], onEvent?: (event: FlowEvent) => void): FlowContext {
+export function createFlowContext(screens: readonly Screen[], onEvent?: (event: FlowEvent) => void, signal?: AbortSignal): FlowContext {
   const immutableScreens = Object.freeze(screens.map((screen) => Object.freeze({ ...screen, viewport: Object.freeze({ ...screen.viewport }) })));
   const byId = new Map(immutableScreens.map((screen) => [screen.id, screen]));
   if (byId.size !== immutableScreens.length) {
@@ -39,6 +39,9 @@ export function createFlowContext(screens: readonly Screen[], onEvent?: (event: 
       return found;
     },
     async all(label: string, action: (screen: Screen) => Promise<void>): Promise<void> {
+      // Checked BETWEEN user steps: in-flight screen actions finish, but the next step refuses to
+      // start once the runner signaled cancellation.
+      if (signal?.aborted) throw new Error(`Flow aborted before step: ${label}`);
       onEvent?.({ label, phase: "start", atUnixMs: Date.now() });
       const pending = immutableScreens.map((screen) => {
         try { return action(screen); } catch (error) { return Promise.reject(error); }

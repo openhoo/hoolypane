@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, type IpcMainEvent } from "electron";
 import { promises as fs } from "node:fs";
+import { appendFileSync } from "node:fs";
 import { dirname, extname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -8,6 +9,7 @@ import {
   ChromeCommandSchema,
   IPC_CHANNELS,
   PaneObservedActionSchema,
+  RecordFailureSchema,
   ReplayResultSchema,
   type ActionEnvelope,
   type ChromeCommand,
@@ -28,7 +30,7 @@ let workspacePath = "";
 let nextActionId = 1;
 const coordinator = new InteractionCoordinator();
 const flowDraft = new FlowDraft();
-const pendingReplay = new Map<string, { resolve: (result: ReplayResult) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+const pendingReplay = new Map<string, { resolve: (result: ReplayResult) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; epoch?: number | undefined }>();
 let chromeStarting = false;
 let commandQueue = Promise.resolve();
 let flushBarrier = false;
@@ -36,6 +38,11 @@ let lastError: string | null = null;
 let workspacePersistable = true;
 const deferredActions: Array<{ paneId: string; observed: unknown }> = [];
 let drainingDeferredActions = false;
+// Promise of the running deferred-action drain; stopAndSaveFlow awaits it before reading the draft.
+let activeDrain: Promise<void> | null = null;
+
+/** Deadline for the before-quit command drain so a stuck command can never hold the app hostage. */
+const QUIT_FLUSH_DEADLINE_MS = 10_000;
 
 function trustedChrome(event: IpcMainEvent): boolean {
   return chromeWindow !== undefined && event.sender === chromeWindow.webContents && event.senderFrame === chromeWindow.webContents.mainFrame;
@@ -69,6 +76,12 @@ async function applyTestReplayDelay(): Promise<void> {
   const completion = Promise.withResolvers<void>();
   setTimeout(completion.resolve, milliseconds);
   await completion.promise;
+}
+
+/** Ends the recording session and drops any still-buffered pre-stop actions so they cannot leak into the next one. */
+function commitFlowDraft(): void {
+  deferredActions.length = 0;
+  flowDraft.commit();
 }
 
 async function stopAndSaveFlow(): Promise<void> {
@@ -175,21 +188,22 @@ function replayKey(paneId: string, actionId: number, phase: ReplayResult["phase"
   return `${paneId}:${actionId}:${phase}`;
 }
 
-function waitForReplayResult(paneId: string, actionId: number, phase: ReplayResult["phase"]): Promise<ReplayResult> {
-  return new Promise((resolve, reject) => {
-    const key = replayKey(paneId, actionId, phase);
-    const timer = setTimeout(() => {
-      pendingReplay.delete(key);
-      reject(new Error(`pane ${paneId} timed out during ${phase}`));
-    }, 5_000);
-    pendingReplay.set(key, { resolve, reject, timer });
-  });
+function waitForReplayResult(paneId: string, actionId: number, phase: ReplayResult["phase"], epoch?: number): Promise<ReplayResult> {
+  const key = replayKey(paneId, actionId, phase);
+  const { promise, resolve, reject } = Promise.withResolvers<ReplayResult>();
+  const timer = setTimeout(() => {
+    pendingReplay.delete(key);
+    reject(new Error(`pane ${paneId} timed out during ${phase}`));
+  }, 5_000);
+  // Stamp the pane's creation epoch so a late result from a superseded surface is recognizable.
+  pendingReplay.set(key, { resolve, reject, timer, epoch });
+  return promise;
 }
 
 function requestReplay(paneId: string, request: ReplayRequest): Promise<ReplayResult> {
   const record = registry?.getPane(paneId);
   if (!record) return Promise.reject(new Error(`pane closed: ${paneId}`));
-  const result = waitForReplayResult(paneId, request.actionId, request.phase);
+  const result = waitForReplayResult(paneId, request.actionId, request.phase, record.creationEpoch);
   record.view.webContents.send(IPC_CHANNELS.replay, request);
   return result;
 }
@@ -204,7 +218,7 @@ async function applyCdp(paneId: string, envelope: ActionEnvelope, resolved: Repl
   const x = (box.x + box.width / 2) * scale;
   const y = (box.y + box.height / 2) * scale;
   const click = async (): Promise<void> => {
-    const confirmation = waitForReplayResult(paneId, envelope.actionId, "confirm");
+    const confirmation = waitForReplayResult(paneId, envelope.actionId, "confirm", record.creationEpoch);
     record.view.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(x), y: Math.round(y), button: "left", clickCount: 1 });
     record.view.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(x), y: Math.round(y), button: "left", clickCount: 1 });
     const result = await confirmation;
@@ -404,6 +418,18 @@ async function launchChrome(): Promise<void> {
     if (!paneId) return;
     void acceptSourceAction(paneId, value).catch((error: unknown) => report(paneId, error instanceof Error ? error.message : String(error)));
   });
+  ipcMain.on(IPC_CHANNELS.recordFailure, (event, value: unknown) => {
+    const paneId = sourcePane(event);
+    if (!paneId) return;
+    try {
+      const failure = RecordFailureSchema.parse(value);
+      // Only meaningful mid-recording: a failed recorded action must surface to the user.
+      if (!flowDraft.isActive) return;
+      lastError = `pane ${paneId}: recording failed: ${failure.reason}`;
+      report(paneId, `recording failed: ${failure.reason}`);
+      publishState();
+    } catch (error) { report(paneId, error instanceof Error ? error.message : String(error)); }
+  });
   ipcMain.on(IPC_CHANNELS.replayResult, (event, value: unknown) => {
     const paneId = sourcePane(event);
     if (!paneId) return;
@@ -414,6 +440,9 @@ async function launchChrome(): Promise<void> {
       if (!pending) return;
       clearTimeout(pending.timer);
       pendingReplay.delete(key);
+      // A result authored by a superseded surface (pane closed and recreated with the same id)
+      // belongs to no live waiter: drop it and let the requester's timeout clean up.
+      if (pending.epoch !== undefined && registry?.epochOf(paneId) !== pending.epoch) return;
       pending.resolve({ ...parsed, paneId });
     } catch (error) { report(paneId, error instanceof Error ? error.message : String(error)); }
   });

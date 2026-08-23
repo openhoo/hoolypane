@@ -2,6 +2,7 @@ import { rm } from "node:fs/promises";
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { launchDesktopApp, pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
+import { IPC_CHANNELS } from "@hoolypane/contracts";
 import { clickPaneSurface } from "./cdp-input.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
 
@@ -90,6 +91,30 @@ afterAll(async () => {
 }, 30_000);
 
 describe("direct Electron surfaces", () => {
+  it("receives published state through the preload stateRequest pull handshake", async () => {
+    // Pane cards can only render from a received ChromeState snapshot, so their presence
+    // plus a populated address input proves the renderer got published state after launch.
+    await pollUntil(async () => (await chrome.locator(".pane-card").count()) === 5 || null, 15_000);
+    await pollUntil(async () => (await chrome.locator("#address").inputValue()).startsWith(`http://127.0.0.1:${FIXTURE_PORT}`) || null, 10_000);
+
+    // Regression pin for the lost-initial-push bug: subscribe() must PULL state via
+    // stateRequest exactly once per subscription. A fresh chrome reload is one clean
+    // subscription cycle observed through a main-side counter.
+    await application.evaluate(({ ipcMain }, channel) => {
+      const state = globalThis as typeof globalThis & { __stateRequestCount?: number };
+      if (state.__stateRequestCount === undefined) {
+        state.__stateRequestCount = 0;
+        ipcMain.on(channel, () => { state.__stateRequestCount += 1; });
+      }
+      state.__stateRequestCount = 0;
+    }, IPC_CHANNELS.stateRequest);
+    await chrome.evaluate(() => location.reload());
+    await pollUntil(async () => (await chrome.locator(".pane-card").count()) === 5 || null, 15_000);
+    await pollUntil(async () => (await chrome.locator("#address").inputValue()).startsWith(`http://127.0.0.1:${FIXTURE_PORT}`) || null, 10_000);
+    const stateRequests = await application.evaluate(() => (globalThis as typeof globalThis & { __stateRequestCount?: number }).__stateRequestCount ?? -1);
+    expect(stateRequests).toBe(1);
+  }, 30_000);
+
   it("creates direct emulated panes with hardened sessions and tears them down", async () => {
     // Native child views expose no readiness event to Playwright; poll Electron's authoritative WebContents registry.
     await pollUntil(async () => {

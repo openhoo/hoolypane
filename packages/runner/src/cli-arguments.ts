@@ -8,6 +8,19 @@ export interface RunArguments {
 
 const USAGE = "Usage: hoolypane run <flow-file> [--config <path>] [--output <dir>] [--headed]";
 
+export const TOP_LEVEL_USAGE = [
+  "Usage: hoolypane <command>",
+  "",
+  "Commands:",
+  "  run <flow-file> [--config <path>] [--output <dir>] [--headed]",
+  "      Record a flow across all configured viewports.",
+  "  verify <output-dir>",
+  "      Verify the manifest and encoded frames of a finished recording.",
+  "",
+  "Options:",
+  "  -h, --help  Show this help and exit",
+].join("\n");
+
 export function parseCliArguments(argv: readonly string[]): RunArguments {
   if (argv[0] !== "run" || !argv[1] || argv[1].startsWith("-")) throw new Error(USAGE);
 

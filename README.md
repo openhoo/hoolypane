@@ -50,6 +50,7 @@ hoolypane run checkout.flow.ts
 hoolypane run checkout.flow.ts --config custom.config.ts --output results --headed
 hoolypane verify results
 ```
+Artifact verification needs no global install: run `node packages/runner/dist/cli.js verify <output-dir>` directly, or `pnpm verify:artifacts <output-dir>` from the repository root — pnpm passes positional arguments through to the script (no `--` required).
 
 Each viewport receives an isolated `BrowserContext` and `Page` in one Chromium process. `all()` starts every viewport callback before awaiting the barrier and reports all failures.
 

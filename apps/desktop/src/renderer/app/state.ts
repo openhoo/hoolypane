@@ -1,12 +1,13 @@
 import { defaultWorkspace, type ChromeState, type ViewportSpec } from "@hoolypane/contracts";
 
 export type { ChromeState };
-type ChromeAction = { type: "state"; state: ChromeState };
+type ChromeAction = { type: "state"; state: ChromeState } | { type: "error"; message: string };
 
 export function initialChromeState(): ChromeState {
   return { ...defaultWorkspace(), recording: false, lastError: null };
 }
-export function chromeReducer(_state: ChromeState, action: ChromeAction): ChromeState {
+export function chromeReducer(state: ChromeState, action: ChromeAction): ChromeState {
+  if (action.type === "error") return { ...state, lastError: action.message };
   return action.state;
 }
 export function customViewport(width: number, height: number): ViewportSpec {

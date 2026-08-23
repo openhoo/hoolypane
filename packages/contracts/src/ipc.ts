@@ -7,6 +7,7 @@ export const IPC_CHANNELS = {
   command: "hoolypane:command",
   bounds: "hoolypane:bounds",
   paneAction: "hoolypane:pane-action",
+  recordFailure: "hoolypane:record-failure",
   paneGeneration: "hoolypane:pane-generation",
   replay: "hoolypane:replay",
   replayResult: "hoolypane:replay-result",
@@ -54,6 +55,11 @@ export const PaneObservedActionSchema = z.strictObject({
   documentGeneration: z.number().int().nonnegative(),
   action: ActionSchema,
 });
+
+export const RecordFailureSchema = z.strictObject({
+  kind: z.literal("record"),
+  reason: z.string().max(512),
+});
 export const PaneGenerationSchema = z.strictObject({
   documentGeneration: z.number().int().nonnegative(),
 });
@@ -77,4 +83,5 @@ export const ReplayResultSchema = z.strictObject({
 export type BoundsSnapshot = z.infer<typeof BoundsSnapshotSchema>;
 export type ChromeCommand = z.infer<typeof ChromeCommandSchema>;
 export type ReplayRequest = z.infer<typeof ReplayRequestSchema>;
+export type RecordFailure = z.infer<typeof RecordFailureSchema>;
 export type ReplayResult = z.infer<typeof ReplayResultSchema>;

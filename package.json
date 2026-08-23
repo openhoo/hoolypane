@@ -36,6 +36,7 @@
     "pins:check": "node scripts/check-version-pins.mjs"
   },
   "devDependencies": {
+    "@hoolypane/contracts": "workspace:*",
     "@hoolypane/runner": "workspace:*",
     "@types/node": "24.3.0",
     "dependency-cruiser": "17.1.0",

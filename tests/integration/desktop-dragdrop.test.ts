@@ -10,11 +10,33 @@ import { FIXTURE_PORTS } from "../fixtures/ports.js";
 const FIXTURE_PORT = FIXTURE_PORTS.dragdrop;
 
 let fixture: FixtureServer | undefined;
-let application: ElectronApplication | undefined;
+let application!: ElectronApplication;
+let chrome!: Page;
 let userDataDir = "";
 
 afterAll(async () => {
-  await application?.close().catch(() => undefined);
+  console.log("TEARDOWN start");
+  if (application) {
+    const closeOutcome = await Promise.race([
+      application.close().then(() => "closed" as const, (e: unknown) => `close-error: ${e instanceof Error ? e.message : String(e)}` as const),
+      new Promise<"hang">((resolve) => setTimeout(() => resolve("hang"), 8000)),
+    ]);
+    console.log("TEARDOWN close outcome:", closeOutcome);
+    if (closeOutcome === "hang") {
+      try {
+        const proc = application.process();
+        console.log("TEARDOWN electron pid", proc.pid, "exitCode", proc.exitCode, "killed", proc.killed);
+        const alive = await Promise.race([
+          application.evaluate(() => "responsive").then(() => "responsive", (e: unknown) => `unresponsive: ${e instanceof Error ? e.message : String(e)}`),
+          new Promise((r) => setTimeout(() => r("eval-timeout"), 3000)),
+        ]);
+        console.log("TEARDOWN evaluate:", alive);
+      } catch (probeError) { console.log("TEARDOWN probe failed:", probeError instanceof Error ? probeError.message : String(probeError)); }
+      try { application.process().kill("SIGKILL"); } catch {}
+      throw new Error("application.close() hung; electron process force-killed");
+    }
+  }
+  console.log("TEARDOWN fixture closing");
   await fixture?.close();
   if (userDataDir) await rm(userDataDir, { recursive: true, force: true });
 }, 30_000);
@@ -37,8 +59,8 @@ it("drag and drop moves a pane and persists the position", async () => {
   fixture = await startFixtureServer(FIXTURE_PORT);
   const launched = await launchDesktopApp({ port: FIXTURE_PORT });
   application = launched.application;
+  chrome = launched.chrome;
   userDataDir = launched.userDataDir;
-  const chrome = launched.chrome;
   await pollUntil(async () => {
     const count = await launched.application.evaluate(({ webContents }, port) =>
       webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`)).length,
@@ -89,36 +111,42 @@ it("drag and drop moves a pane and persists the position", async () => {
   }
   await chrome.mouse.up();
 
-  // Wait until the workspace store flushed the new position (graceful-close races the async write).
+  // From here on, ANY failure (flush/move pollUntils, relaunch, either axis) must preserve
+  // on-disk evidence before afterAll wipes userDataDir — not just an x-axis mismatch.
   const workspaceFile = join(userDataDir, "user-data", "workspace.json");
-  await pollUntil(async () => {
-    const saved = await readFile(workspaceFile, "utf8").then(JSON.parse).catch(() => null);
-    return saved?.positions?.["desktop-1440"]?.x === undefined ? null : saved.positions["desktop-1440"];
-  }, 10_000);
+  try {
+    // Wait until the workspace store flushed the new position (graceful-close races the async write).
+    await pollUntil(async () => {
+      const saved = await readFile(workspaceFile, "utf8").then(JSON.parse).catch(() => null);
+      return saved?.positions?.["desktop-1440"]?.x === undefined ? null : saved.positions["desktop-1440"];
+    }, 10_000);
 
-  const moved = await pollUntil(async () => {
-    const boxes = await cardBoxes(chrome);
-    const current = boxes.get("desktop-1440");
-    return current && current.x > before.x + 150 && current.y > before.y + 80 ? current : null;
-  }, 10_000);
-  console.log("DND moved to", moved.x, moved.y);
+    const moved = await pollUntil(async () => {
+      const boxes = await cardBoxes(chrome);
+      const current = boxes.get("desktop-1440");
+      return current && current.x > before.x + 150 && current.y > before.y + 80 ? current : null;
+    }, 10_000);
+    console.log("DND moved to", moved.x, moved.y);
 
-  // Position persists across an app restart (workspace store).
-  await application.close();
-  const relaunched = await launchDesktopApp({ port: FIXTURE_PORT, userDataDir });
-  application = relaunched.application;
-  userDataDir = relaunched.userDataDir;
-  await pollUntil(async () => (await cardBoxes(relaunched.chrome)).size === 5 || null, 15_000);
-  const persisted = (await cardBoxes(relaunched.chrome)).get("desktop-1440");
-  if (!persisted) throw new Error("persisted card missing");
-  const fileOnDisk = await readFile(workspaceFile, "utf8").catch(() => "MISSING");
-  if (Math.abs(persisted.x - moved.x) > 3) {
-    // Keep the evidence: afterAll would wipe userDataDir. A fresh mkdtemp target needs no rmSync.
+    // Position persists across an app restart (workspace store).
+    await application.close();
+    const relaunched = await launchDesktopApp({ port: FIXTURE_PORT, userDataDir });
+    application = relaunched.application;
+    chrome = relaunched.chrome;
+    userDataDir = relaunched.userDataDir;
+    await pollUntil(async () => (await cardBoxes(chrome)).size === 5 || null, 15_000);
+    const persisted = (await cardBoxes(chrome)).get("desktop-1440");
+    if (!persisted) throw new Error("persisted card missing");
+    const fileOnDisk = await readFile(workspaceFile, "utf8").catch(() => "MISSING");
+    expect(Math.abs(persisted.x - moved.x), `persisted=${JSON.stringify(persisted)} moved=${JSON.stringify(moved)} file=${fileOnDisk.slice(0, 400)}`).toBeLessThanOrEqual(3);
+    expect(Math.abs(persisted.y - moved.y), `y-axis drifted: persisted=${JSON.stringify(persisted)} moved=${JSON.stringify(moved)} file=${fileOnDisk.slice(0, 400)}`).toBeLessThanOrEqual(3);
+    console.log("DND persisted", persisted.x, persisted.y);
+  } catch (error) {
+    // A fresh mkdtemp target needs no rmSync and can never clobber real evidence.
     const dumpDir = await mkdtemp(join(tmpdir(), "dnd-fail-dump-"));
-    cpSync(join(userDataDir, "user-data"), dumpDir, { recursive: true });
+    cpSync(join(userDataDir, "user-data"), join(dumpDir, "user-data"), { recursive: true });
+    const fileOnDisk = await readFile(workspaceFile, "utf8").catch(() => "MISSING");
     console.log(`DND FAIL DUMP copied to ${dumpDir}; workspace.json:`, fileOnDisk.slice(0, 600));
+    throw error;
   }
-  expect(Math.abs(persisted.x - moved.x), `persisted=${JSON.stringify(persisted)} moved=${JSON.stringify(moved)} file=${fileOnDisk.slice(0, 400)}`).toBeLessThanOrEqual(3);
-  expect(Math.abs(persisted.y - moved.y)).toBeLessThanOrEqual(3);
-  console.log("DND persisted", persisted.x, persisted.y);
 }, 60_000);

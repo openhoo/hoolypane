@@ -6,7 +6,25 @@ import { isAllowedProtocol, normalizeUrl } from "./url.js";
 import { addPane, closePane, defaultWorkspace, duplicatePane, removePane, reorderPane, rotatePane, uniquePaneId, updatePane, type PaneState, type WorkspaceState } from "./workspace.js";
 
 type PaneFailure = { paneId: string; message: string };
-type PaneRecord = { id: string; view: WebContentsView; lastBounds?: Bounds; debuggerAttached: boolean; networkEmulationReady: boolean; documentGeneration: number; overlayCssKeys: Partial<Record<OverlayKey, string>> };
+type PaneRecord = { id: string; view: WebContentsView; lastBounds?: Bounds; debuggerAttached: boolean; networkEmulationReady: boolean; documentGeneration: number; overlayCssKeys: Partial<Record<OverlayKey, string>>; creationEpoch: number; settingsChain?: Promise<void> };
+
+// Monotonic per-record identity: lets replay bookkeeping tell a recreated pane apart from its predecessor with the same id.
+let nextCreationEpoch = 1;
+
+// Strips userinfo and query/hash from URLs embedded in failure messages so credentials never leak into UI state or logs.
+function redactUrlForMessage(value: string): string {
+  if (!value) return value;
+  try {
+    const url = new URL(value);
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return "<unparsable>";
+  }
+}
 
 export class PaneRegistry {
   readonly panes = new Map<string, PaneRecord>();
@@ -44,10 +62,12 @@ export class PaneRegistry {
   markOutOfSync(paneId: string, actionId: number, actionKind: Action["kind"], reason: string): void {
     this.setPane(paneId, { outOfSync: { actionId, actionKind, reason } });
   }
-  clearOutOfSync(paneId: string): void {
+  /** Clears the out-of-sync mark only when it belongs to the given action: a newer failure must survive an older action's success. */
+  clearOutOfSync(paneId: string, actionId: number): void {
+    if (this.getPaneState(paneId)?.outOfSync?.actionId !== actionId) return;
     this.setPane(paneId, { outOfSync: null });
   }
-
+  epochOf(paneId: string): number | undefined { return this.panes.get(paneId)?.creationEpoch; }
   async create(viewport: ViewportSpec, paneId?: string): Promise<string> {
     const valid = ViewportSpecSchema.parse(viewport);
     const id = paneId ?? uniquePaneId(new Set([...this.workspace.order, ...this.panes.keys()]), valid.id);
@@ -55,10 +75,13 @@ export class PaneRegistry {
     if (!this.window) throw new Error("pane registry has no window");
     const view = new WebContentsView({ webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, partition: "persist:hoolypane", preload: this.panePreloadPath() } });
     view.webContents.setBackgroundThrottling(false);
-    const record: PaneRecord = { id, view, debuggerAttached: false, networkEmulationReady: false, documentGeneration: 0, overlayCssKeys: {} };
+    // Track whether this call introduced the workspace entry: rollback must stay symmetric and
+    // never delete a pane that existed before the failed create (e.g. a restored saved pane).
+    const preexistingEntry = this.workspace.order.includes(id);
+    const record: PaneRecord = { id, view, debuggerAttached: false, networkEmulationReady: false, documentGeneration: 0, overlayCssKeys: {}, creationEpoch: nextCreationEpoch++ };
     this.panes.set(id, record);
     this.window.contentView.addChildView(view);
-    this.workspace = this.workspace.order.includes(id) ? this.workspace : addPane(this.workspace, valid, this.workspace.sharedUrl, id);
+    this.workspace = preexistingEntry ? this.workspace : addPane(this.workspace, valid, this.workspace.sharedUrl, id);
     this.emitChange();
     try {
       await view.webContents.loadURL("about:blank");
@@ -75,7 +98,8 @@ export class PaneRegistry {
       // Content-load failures are reported per pane via did-fail-load; creation must not fail on network problems.
       await Promise.allSettled([view.webContents.loadURL(this.restoreTarget(pane?.url ?? this.workspace.sharedUrl))]);
     } catch (error) {
-      await this.rollbackCreate(record);
+      // A destroyed window means the registry is going away anyway; a rollback would fight destroy().
+      if (this.window && !this.window.isDestroyed()) await this.rollbackCreate(record, !preexistingEntry);
       throw error;
     }
     return id;
@@ -86,6 +110,7 @@ export class PaneRegistry {
     if (!record || this.workspace.panes.length === 1) return;
     this.panes.delete(paneId);
     this.workspace = closePane(this.workspace, paneId);
+    this.pruneCachedBounds(paneId);
     await this.destroyRecord(record);
     this.emitChange();
   }
@@ -96,9 +121,19 @@ export class PaneRegistry {
     const next = duplicatePane(this.workspace, paneId);
     const created = next.order.find((id) => !this.workspace.order.includes(id));
     if (!created) throw new Error("unable to duplicate pane");
-    this.workspace = next;
+    // The duplicated workspace state commits only AFTER the risky create succeeds; committing
+    // earlier would leave a phantom entry no record backs whenever create fails.
     await this.create(next.panes.find((pane) => pane.id === created)!.viewport, created);
+    this.workspace = next;
+    this.emitChange();
     return created;
+  }
+
+  /** Drops the closed pane's entry from the cached snapshot so a reused pane id cannot resurrect stale geometry. */
+  private pruneCachedBounds(paneId: string): void {
+    const snapshot = this.lastBoundsSnapshot;
+    if (!snapshot || !snapshot.panes.some((entry) => entry.paneId === paneId)) return;
+    this.lastBoundsSnapshot = { ...snapshot, panes: snapshot.panes.filter((entry) => entry.paneId !== paneId) };
   }
 
   rename(paneId: string, name: string): void {
@@ -137,8 +172,15 @@ export class PaneRegistry {
     for (const record of this.panes.values()) void this.applyPaneSettings(record);
   }
 
-  /** Applies global emulation media/network state plus overlays to one pane via its CDP debugger; failures are logged only. */
-  async applyPaneSettings(record: PaneRecord): Promise<void> {
+  /** Applies global emulation media/network state plus overlays to one pane via its CDP debugger; failures are logged only.
+   * Invocations serialize per record through an in-flight promise chain: overlapping calls race shared CSS keys and debugger state otherwise. */
+  applyPaneSettings(record: PaneRecord): Promise<void> {
+    const task = (record.settingsChain ?? Promise.resolve()).then(() => this.writeEmulationSettings(record));
+    record.settingsChain = task.then(() => undefined, () => undefined);
+    return task;
+  }
+
+  private async writeEmulationSettings(record: PaneRecord): Promise<void> {
     if (!this.isLive(record)) return;
     const contents = record.view.webContents;
     const emulation = this.workspace.emulation;
@@ -222,6 +264,8 @@ export class PaneRegistry {
   async destroy(): Promise<void> {
     const records = [...this.panes.values()];
     this.panes.clear();
+    // Every cached bounds entry now refers to a closed pane id: drop the snapshot wholesale.
+    this.lastBoundsSnapshot = undefined;
     await Promise.all(records.map((record) => this.destroyRecord(record)));
   }
 
@@ -242,7 +286,7 @@ export class PaneRegistry {
       if (!isAllowedProtocol(url)) return; // ignore chrome-error://chromewebdata/, about: and other non-http(s) commits
       this.setPane(record.id, { url: normalizeUrl(url), canGoBack: contents.canGoBack(), canGoForward: contents.canGoForward() });
     });
-    contents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => { if (isMainFrame && errorCode !== -3) this.reportFailure(record.id, `${errorDescription} (${errorCode}) at ${validatedURL}`); });
+    contents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => { if (isMainFrame && errorCode !== -3) this.reportFailure(record.id, `${errorDescription} (${errorCode}) at ${redactUrlForMessage(validatedURL)}`); });
     contents.on("render-process-gone", (_event, details) => this.reportFailure(record.id, `render process gone: ${details.reason}`));
     contents.on("will-navigate", (event, url) => { if (!isAllowedProtocol(url)) event.preventDefault(); });
     contents.on("will-redirect", (event, url) => { if (!isAllowedProtocol(url)) event.preventDefault(); });
@@ -291,9 +335,10 @@ export class PaneRegistry {
     try { return normalizeUrl(this.workspace.sharedUrl); } catch { return defaultWorkspace().sharedUrl; }
   }
 
-  private async rollbackCreate(record: PaneRecord): Promise<void> {
+  private async rollbackCreate(record: PaneRecord, addedWorkspaceEntry: boolean): Promise<void> {
     this.panes.delete(record.id);
-    this.workspace = removePane(this.workspace, record.id);
+    // Symmetric rollback: only remove the workspace entry when this create introduced it.
+    if (addedWorkspaceEntry) this.workspace = removePane(this.workspace, record.id);
     await this.destroyRecord(record).catch(() => undefined);
     this.emitChange();
   }

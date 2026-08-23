@@ -71,6 +71,30 @@ describe("interaction coordinator", () => {
     expect(next).toEqual([{ paneId: "one", ok: true }]);
     expect(ran).toBe(true);
   });
+
+  it("keeps a mixed multi-pane action blocked with the failing reason intact", async () => {
+    const coordinator = new InteractionCoordinator();
+    const draft = new FlowDraft();
+    draft.start("https://example.test", "desktop", 1, 1);
+    const pending = coordinator.dispatch(envelope, ["phone", "desktop"], async (paneId) => {
+      if (paneId === "phone") throw new Error("locator resolved 0 elements");
+    });
+    const outcomes = await pending;
+    expect(outcomes).toEqual([
+      { paneId: "phone", ok: false, reason: "locator resolved 0 elements" },
+      { paneId: "desktop", ok: true },
+    ]);
+
+    // Main replay loop contract (per-pane blocking keys): a sibling pane's success must
+    // never erase another pane's failure reasons for the same actionId.
+    draft.append(envelope);
+    for (const outcome of outcomes) {
+      if (outcome.ok) draft.unblock(envelope.actionId, outcome.paneId);
+      else draft.block(envelope.actionId, outcome.paneId, outcome.reason ?? "unknown replay failure");
+    }
+    expect(draft.stop()).toEqual({ kind: "blocked", reasons: ["action 1 (phone): locator resolved 0 elements"] });
+    expect(draft.isActive).toBe(true); // stays armed so recovery can resync and unblock
+  });
 });
 
 describe("flow draft", () => {
@@ -82,8 +106,8 @@ describe("flow draft", () => {
 
     draft.start("https://example.test", "source", 3, 3);
     draft.append({ ...envelope, actionId: 4 });
-    draft.block(4, "phone: locator resolved 0 elements");
-    expect(draft.stop()).toEqual({ kind: "blocked", reasons: ["action 4: phone: locator resolved 0 elements"] });
+    draft.block(4, "phone", "locator resolved 0 elements");
+    expect(draft.stop()).toEqual({ kind: "blocked", reasons: ["action 4 (phone): locator resolved 0 elements"] });
   });
 
   it("drops appends while inactive and reports empty stops", () => {
@@ -101,8 +125,8 @@ describe("flow draft", () => {
     const draft = new FlowDraft();
     draft.start("https://example.test", "source", 1, 1);
     draft.append({ ...envelope, actionId: 2 });
-    draft.block(2, "phone: navigation raced the replay");
-    expect(draft.stop()).toEqual({ kind: "blocked", reasons: ["action 2: phone: navigation raced the replay"] });
+    draft.block(2, "phone", "navigation raced the replay");
+    expect(draft.stop()).toEqual({ kind: "blocked", reasons: ["action 2 (phone): navigation raced the replay"] });
     expect(draft.isActive).toBe(true);
   });
 
@@ -110,9 +134,9 @@ describe("flow draft", () => {
     const draft = new FlowDraft();
     draft.start("https://example.test", "source", 1, 1);
     draft.append({ ...envelope, actionId: 2 });
-    draft.block(2, "phone: replay timed out");
-    draft.block(2, "phone: replay timed out again");
-    draft.unblock(2);
+    draft.block(2, "phone", "replay timed out");
+    draft.block(2, "phone", "replay timed out again");
+    draft.unblock(2, "phone");
     const stopped = draft.stop();
     expect(stopped).toEqual({ kind: "saved", source: expect.any(String) });
     draft.commit();
@@ -124,7 +148,7 @@ describe("flow draft", () => {
     const draft = new FlowDraft();
     draft.start("https://example.test", "source", 1, 1);
     draft.append({ ...envelope, actionId: 2 });
-    draft.block(2, "stale");
+    draft.block(2, "phone", "stale");
     draft.start("https://example.test", "source", 5, 5);
     draft.append({ ...envelope, actionId: 6 });
     expect(draft.stop()).toEqual({ kind: "saved", source: expect.any(String) });

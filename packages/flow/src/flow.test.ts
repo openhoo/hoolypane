@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import ts from "typescript";
 import { createFlowContext, defineConfig, defineFlow, locatorExpression, serializeFlow } from "./index.js";
 import { ActionEnvelopeSchema, VIEWPORT_PRESETS } from "@hoolypane/contracts";
 import type { Action, ActionEnvelope } from "@hoolypane/contracts";
@@ -118,5 +119,32 @@ describe("flow API", () => {
     const context = createFlowContext(screens, (event) => events.push(event));
     await context.all("ok", async () => undefined);
     expect(events.at(-1)).toMatchObject({ label: "ok", phase: "complete" });
+  });
+
+  it("keeps adversarial strings intact as escaped literals in generated sources", () => {
+    const envelope = (action: Action): ActionEnvelope => ActionEnvelopeSchema.parse({
+      actionId: 1,
+      documentGeneration: 0,
+      sourcePaneId: "pane-1",
+      action,
+      recordedAtUnixMs: 0,
+    });
+    const adversarial = [
+      'quote " terminated',
+      "back\\slash",
+      "line1\nline2",
+      "${process.exitCode = 1}",
+      "` + (() => { throw new Error(\"template breakout\"); })() + `",
+    ];
+    const source = serializeFlow([
+      ...adversarial.map((value, index) => envelope({ kind: "fill", locator: { kind: "label", value: `field-${index}` }, value })),
+      envelope({ kind: "click", locator: { kind: "role", role: "but\"ton", name: "${name}" } }),
+    ]);
+    for (const [index, value] of adversarial.entries()) {
+      // Eval-free contract: each input appears exactly as JSON.stringify emits it.
+      expect(source).toContain(`await page.getByLabel("field-${index}", { exact: true }).fill(${JSON.stringify(value)});`);
+    }
+    const { diagnostics } = ts.transpileModule(source, { reportDiagnostics: true, compilerOptions: { target: ts.ScriptTarget.ES2022 } });
+    expect(diagnostics).toEqual([]);
   });
 });

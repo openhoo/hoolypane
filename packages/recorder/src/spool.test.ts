@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Writable } from "node:stream";
@@ -22,7 +22,7 @@ function streamOf(spool: FrameSpool): Writable | undefined {
 }
 
 describe("frame spool", () => {
-  it("rejects beyond the queue caps without corrupting counters or offsets", async () => {
+  it("drops over-cap frames without rejecting: acks proceed, drops counted, notes throttled", async () => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-spool-cap-"));
     directories.push(directory);
     const spool = new FrameSpool("capped", directory);
@@ -30,18 +30,30 @@ describe("frame spool", () => {
     const attempts = Array.from({ length: MAX_QUEUED_FRAMES + 1 }, (_unused, sequence) =>
       spool.append(FRAME, frameMeta(sequence)).then(() => null, (error: unknown) => error),
     );
+    // Every over-cap frame resolves so the upstream screencast ack keeps flowing.
     const outcomes = await Promise.all(attempts);
-    const rejections = outcomes.filter((outcome): outcome is Error => outcome instanceof Error);
-    expect(rejections).toHaveLength(1);
-    expect(rejections[0]).toMatchObject({ message: `capture queue cap exceeded for capped` });
-    // Every accepted frame kept its sequential slot; the rejected one consumed neither offset nor queue budget.
-    await spool.append(FRAME, frameMeta(MAX_QUEUED_FRAMES + 1)).then((record) => expect(record.offset).toBe(MAX_QUEUED_FRAMES * FRAME.length));
-    expect(spool.index.frames).toHaveLength(MAX_QUEUED_FRAMES + 1);
+    expect(outcomes.every((outcome) => outcome === null)).toBe(true);
+    expect(spool.index.frames).toHaveLength(MAX_QUEUED_FRAMES);
+    expect(spool.index.droppedFrames).toBe(1);
+    // Accepted frames keep contiguous offsets; the dropped one consumed neither slot nor budget.
+    await expect(spool.append(FRAME, frameMeta(MAX_QUEUED_FRAMES + 1))).resolves.toMatchObject({ offset: MAX_QUEUED_FRAMES * FRAME.length });
 
+    // The byte cap stays a hard rejection.
     const oversized = Buffer.alloc(MAX_QUEUED_BYTES + 1, 3);
     await expect(spool.append(oversized, frameMeta(99))).rejects.toThrow(/queue cap exceeded/);
-    await expect(spool.append(FRAME, frameMeta(MAX_QUEUED_FRAMES + 2))).resolves.toMatchObject({ offset: (MAX_QUEUED_FRAMES + 1) * FRAME.length });
+
+    const notes = [...spool.drainFailureNotes()];
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatchObject({ viewportId: "capped", message: expect.stringMatching(/dropped 1 over-cap frame/) });
+    expect(spool.drainFailureNotes()).toEqual([]);
+
     await spool.close();
+    const persisted = JSON.parse(await readFile(join(directory, "capped.index.json"), "utf8")) as { frames: unknown[]; droppedFrames: number };
+    expect(persisted.frames).toHaveLength(MAX_QUEUED_FRAMES + 1);
+    expect(persisted.droppedFrames).toBe(1);
+    // Recording artifacts are private to the owning user.
+    expect(((await stat(join(directory, "capped.index.json"))).mode & 0o777)).toBe(0o600);
+    expect(((await stat(join(directory, "capped.jpeg.bin"))).mode & 0o777)).toBe(0o600);
   });
 
   it("poisons failure state on write errors: later appends reject, records stay out of the index", async () => {

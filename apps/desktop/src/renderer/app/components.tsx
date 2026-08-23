@@ -1,4 +1,5 @@
-import { useEffect, useState } from "preact/hooks";
+import { memo } from "preact/compat";
+import { useEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import type { ChromeCommand, ChromeState, PaneState } from "@hoolypane/contracts";
 import { customViewport } from "./state.js";
@@ -17,8 +18,7 @@ import {
 } from "./icons.js";
 
 export type SendCommand = (command: ChromeCommand) => void;
-type LayoutMode = ChromeState["layout"];
-type EmulationState = ChromeState["emulation"];
+import type { EmulationSettings as EmulationState, LayoutMode } from "@hoolypane/contracts";
 
 const OVERLAY_ITEMS = [
   { key: "outlines", label: "Outlines" },
@@ -58,7 +58,7 @@ function IconButton({
         danger
           ? "text-mute hover:bg-danger/15 hover:text-danger"
           : active
-            ? "bg-accent/15 text-accent hover:bg-accent/25"
+            ? "bg-accent/15 text-accent-text hover:bg-accent/25"
             : "text-mute hover:bg-ink/10 hover:text-ink"
       }`}
     >
@@ -169,7 +169,7 @@ export function Toolbar({
           title="Reduced motion"
           onClick={() => send({ kind: "set-reduced-motion", enabled: !state.emulation.reducedMotion })}
           class={`h-8 shrink-0 whitespace-nowrap rounded-lg border px-2 text-xs transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent ${
-            state.emulation.reducedMotion ? "border-accent/70 bg-accent/15 text-accent" : "border-edge bg-field text-mute hover:text-ink"
+            state.emulation.reducedMotion ? "border-accent/70 bg-accent/15 text-accent-text" : "border-edge bg-field text-mute hover:text-ink"
           }`}
         >
           Motion
@@ -192,7 +192,7 @@ export function Toolbar({
             aria-label="Overlays"
             class={`flex h-8 shrink-0 cursor-pointer list-none items-center gap-1 whitespace-nowrap rounded-lg border px-2 text-xs transition-colors [&::-webkit-details-marker]:hidden ${
               OVERLAY_ITEMS.some((item) => state.emulation.overlays[item.key])
-                ? "border-accent/70 bg-accent/15 text-accent"
+                ? "border-accent/70 bg-accent/15 text-accent-text"
                 : "border-edge bg-field text-mute hover:text-ink"
             }`}
           >
@@ -237,7 +237,7 @@ export function Toolbar({
   );
 }
 
-/** Plain-text pane name (visible in body.innerText); double-click switches to an inline rename input. */
+/** Plain-text pane name; double-click or Enter/F2 switches to an inline rename input. */
 function PaneName({ pane, onRename }: { pane: PaneState; onRename(name: string): void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(pane.name);
@@ -252,9 +252,19 @@ function PaneName({ pane, onRename }: { pane: PaneState; onRename(name: string):
   if (!editing) {
     return (
       <span
-        title="Double-click to rename"
+        title="Double-click or press Enter to rename"
+        role="button"
+        tabIndex={0}
+        aria-label={`Rename ${pane.name}`}
         onDblClick={() => setEditing(true)}
-        class="min-w-4 flex-1 cursor-text truncate rounded px-0.5 text-xs font-semibold text-ink hover:bg-ink/5"
+        onKeyDown={(event) => {
+          const key = (event as KeyboardEvent).key;
+          if (key === "Enter" || key === "F2") {
+            event.preventDefault();
+            setEditing(true);
+          }
+        }}
+        class="min-w-4 flex-1 cursor-text truncate rounded px-0.5 text-xs font-semibold text-ink hover:bg-ink/5 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
       >
         {pane.name}
       </span>
@@ -271,12 +281,12 @@ function PaneName({ pane, onRename }: { pane: PaneState; onRename(name: string):
         if ((event as KeyboardEvent).key === "Escape") setEditing(false);
       }}
       onInput={(event) => setDraft((event.currentTarget as HTMLInputElement).value)}
-      class="min-w-6 max-w-36 shrink rounded bg-field px-0.5 text-xs font-semibold text-ink outline-none focus:border-accent"
+      class="min-w-6 max-w-36 shrink rounded border border-edge bg-field px-0.5 text-xs font-semibold text-ink outline-none focus:border-accent"
     />
   );
 }
 
-export function PaneCard({
+export const PaneCard = memo(function PaneCard({
   pane,
   focused,
   closable,
@@ -285,6 +295,7 @@ export function PaneCard({
   zoom,
   dragging,
   onHeaderPointerDown,
+  onHeaderKeyDown,
   send,
 }: {
   pane: PaneState;
@@ -295,6 +306,7 @@ export function PaneCard({
   placement?: { x: number; y: number; width: number; height: number };
   zoom?: number;
   dragging?: boolean;
+  onHeaderKeyDown?: (event: KeyboardEvent) => void;
   onHeaderPointerDown?: (event: PointerEvent) => void;
   send: SendCommand;
 }) {
@@ -308,7 +320,15 @@ export function PaneCard({
       {pane.loading && (
         <div aria-hidden="true" class="absolute inset-x-0 top-0 z-10 h-0.5 animate-pulse bg-accent" />
       )}
-      <header onPointerDown={(event) => { const target = event.target as HTMLElement; if (target.closest("button, input, select")) return; event.preventDefault(); onHeaderPointerDown?.(event); }} class={`flex h-7 shrink-0 cursor-grab items-center gap-0.5 border-b border-edge bg-elevated pl-1 pr-1 active:cursor-grabbing ${dragging ? "bg-field" : ""}`}>
+      <header
+        data-pane-header=""
+        data-pane-id={pane.id}
+        tabIndex={0}
+        aria-label={`${pane.name} pane header`}
+        onPointerDown={(event) => { const target = event.target as HTMLElement; if (target.closest("button, input, select")) return; event.preventDefault(); onHeaderPointerDown?.(event); }}
+        onKeyDown={(event) => onHeaderKeyDown?.(event as KeyboardEvent)}
+        class={`flex h-7 shrink-0 cursor-grab items-center gap-0.5 border-b border-edge bg-elevated pl-1 pr-1 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent active:cursor-grabbing ${dragging ? "bg-field" : ""}`}
+      >
         <PaneName pane={pane} onRename={(name) => send({ kind: "rename", paneId: pane.id, name })} />
         {pane.failure && (
           <p role="alert" title={pane.failure} class="min-w-0 truncate rounded bg-danger/15 px-1.5 leading-4 text-[11px] text-danger">
@@ -358,11 +378,12 @@ export function PaneCard({
       </div>
     </article>
   );
-}
+});
 
 export function ErrorToast({ message }: { message: string }) {
   const [dismissedMessage, setDismissedMessage] = useState<string | null>(null);
   const [lastMessage, setLastMessage] = useState(message);
+  const toastRef = useRef<HTMLDivElement | null>(null);
   if (message !== lastMessage) {
     // A different error arrived: forget the dismissal so the new toast shows even when an
     // identical earlier message was already dismissed within this mount streak.
@@ -371,13 +392,22 @@ export function ErrorToast({ message }: { message: string }) {
   }
   if (dismissedMessage === message) return null;
   return (
-    <div
+    <div ref={toastRef}
       role="alert"
       class="toast-enter fixed bottom-2 right-2 z-50 flex max-w-sm items-start gap-2 rounded-xl border border-danger/50 bg-panel px-3 py-2 shadow-xl shadow-black/40"
     >
       <IconAlertTriangle class="mt-0.5 text-danger" />
       <p class="min-w-0 break-words text-xs text-ink">{message}</p>
-      <IconButton label="Dismiss error" danger onClick={() => setDismissedMessage(message)}>
+      <IconButton
+        label="Dismiss error"
+        danger
+        onClick={() => {
+          // Restore focus to the address bar before the toast unmounts under the pointer.
+          const active = document.activeElement;
+          if (active instanceof Node && toastRef.current?.contains(active)) document.getElementById("address")?.focus();
+          setDismissedMessage(message);
+        }}
+      >
         <IconClose />
       </IconButton>
     </div>

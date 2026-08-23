@@ -2,8 +2,8 @@ export { ActionEnvelopeSchema, ActionSchema, HttpUrlSchema, LocatorSpecSchema } 
 export type { Action, ActionEnvelope, FlowEvent, LocatorSpec } from "./action.js";
 export { HoolypaneConfigSchema } from "./config.js";
 export type { HoolypaneConfig, ResolvedHoolypaneConfig, ResolvedRecordingConfig } from "./config.js";
-export { BoundsSnapshotSchema, ChromeCommandSchema, IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, ReplayRequestSchema, ReplayResultSchema } from "./ipc.js";
-export type { BoundsSnapshot, ChromeCommand, ReplayRequest, ReplayResult } from "./ipc.js";
+export { BoundsSnapshotSchema, ChromeCommandSchema, IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, RecordFailureSchema, ReplayRequestSchema, ReplayResultSchema } from "./ipc.js";
+export type { BoundsSnapshot, ChromeCommand, RecordFailure, ReplayRequest, ReplayResult } from "./ipc.js";
 export { VIEWPORT_PRESETS } from "./presets.js";
 export { ChromeStateSchema, ColorSchemeModeSchema, EmulationOverlaysSchema, EmulationSettingsSchema, LayoutModeSchema, OverlayKeySchema, PanePositionSchema, ThrottlingModeSchema, WorkspaceStateSchema, defaultWorkspace } from "./state.js";
 export type { ChromeState, ColorSchemeMode, EmulationOverlays, EmulationSettings, LayoutMode, OverlayKey, PanePosition, PaneState, ThrottlingMode, WorkspaceState } from "./state.js";
