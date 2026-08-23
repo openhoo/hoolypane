@@ -21,6 +21,9 @@ export async function verifyDirectory(path: string): Promise<number> {
   let tracks: Array<{ id: string; encodedWidth: number; encodedHeight: number }> = [];
   if (manifestRecord.viewports !== undefined) {
     if (!Array.isArray(manifestRecord.viewports)) throw new Error(`${manifestPath} has a malformed viewports field: expected an array`);
+    // A present-but-empty array must fail loudly for the same reason: ViewportListSchema
+    // enforces min(1) viewport, so silently degrading to timeline-only would claim success.
+    if (manifestRecord.viewports.length === 0) throw new Error(`${manifestPath} has an empty viewports field: at least one viewport entry is required`);
     // A present-but-malformed entry must fail loudly: silently dropping it would degrade
     // geometry verification to timeline-only while claiming success.
     for (const [index, viewport] of manifestRecord.viewports.entries()) {

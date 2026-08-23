@@ -261,6 +261,7 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
   const [keyboardMove, setKeyboardMove] = useState<{ id: string; x: number; y: number } | null>(null);
   const tilesRef = useRef(tiles);
   tilesRef.current = tiles;
+  keyboardMoveRef.current = keyboardMove;
   // Shared teardown so an unmount mid-drag cannot strand window listeners or guides.
   const endDragRef = useRef<(() => void) | null>(null);
   useEffect(() => () => endDragRef.current?.(), []);
@@ -375,7 +376,9 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
   }, [drag]);
 
   const startKeyboardMove = useCallback((paneId: string): void => {
-    if (endDragRef.current) return;
+    // Mirrors startPaneDrag: keyboard moves rearrange stored free positions, so they must
+    // not arm in generated layouts where a move-pane command would freeze masonry seeds.
+    if (endDragRef.current || layoutRef.current !== "free") return;
     const tile = tilesRef.current.get(paneId);
     if (!tile || tile.hidden) return;
     kbOriginRef.current = { x: tile.x, y: tile.y };
@@ -421,6 +424,12 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [kbActive]);
 
+  // A layout switch mid-move would leave the free-position override pinned over generated
+  // tiles; disarm so a dead mode neither renders dragging chrome nor keeps emitting move-pane.
+  useEffect(() => {
+    if (state.layout !== "free") setKeyboardMove(null);
+  }, [state.layout]);
+
   // Stable per-card header handlers: pane identity comes from data-pane-id on the header
   // element, so memoized PaneCards never observe a fresh callback identity.
   const onHeaderPointerDown = useCallback(
@@ -455,8 +464,8 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
       // exists (post-measurement) before emitting.
       if (surfaces.length !== expectedSurfaceCount.current || surfaces.length === 0) return;
       window.hoolypaneChrome.sendBounds({
-        windowWidth: Math.max(1, window.innerWidth),
-        windowHeight: Math.max(1, window.innerHeight),
+        windowWidth: Math.max(1, Math.round(window.innerWidth)),
+        windowHeight: Math.max(1, Math.round(window.innerHeight)),
         panes: surfaces.map((element) => ({ paneId: element.dataset.paneSurface ?? "", bounds: rect(element) })),
       });
     };

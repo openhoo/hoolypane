@@ -22,6 +22,12 @@ export class FlowDraft {
   append(envelope: ActionEnvelope, generation: number = this.generation): void {
     if (!this.active || generation !== this.generation) return;
     this.envelopes.push(ActionEnvelopeSchema.parse(envelope));
+    // A later successful action recorded ON a pane proves it recovered: drop that pane's stale
+    // replay-failure reasons so one transient miss cannot wedge the session until app restart.
+    const suffix = `:${envelope.sourcePaneId}`;
+    for (const key of [...this.blocking.keys()]) {
+      if (key.endsWith(suffix)) this.blocking.delete(key);
+    }
   }
 
   block(actionId: number, paneId: string, reason: string): void {

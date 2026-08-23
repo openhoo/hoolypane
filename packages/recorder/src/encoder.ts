@@ -124,8 +124,12 @@ export async function encodeAligned(
     for (const pipe of pipes) pipe.destroy();
     child.kill("SIGTERM");
     const graceful = Promise.withResolvers<void>();
-    setTimeout(graceful.resolve, 10_000);
-    await Promise.race([completion.promise.catch(() => undefined), graceful.promise]);
+    const watchdog = setTimeout(graceful.resolve, 10_000);
+    try {
+      await Promise.race([completion.promise.catch(() => undefined), graceful.promise]);
+    } finally {
+      clearTimeout(watchdog);
+    }
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     await completion.promise.catch(() => undefined);
     throw new Error(`ffmpeg ${paths.ffmpeg} failed (ffprobe ${paths.ffprobe}): ${spawnError?.message ?? (error instanceof Error ? error.message : String(error))}${stderr ? `\n${stderr}` : ""}`);

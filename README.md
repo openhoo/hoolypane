@@ -64,8 +64,10 @@ run-state.json
 traces/<viewport-id>.zip
 videos/<viewport-id>.webm
 videos/composite.webm
-raw/                         # retained on failure or when keepRaw=true
+raw/                         # only when recording.keepRaw=true
 ```
+
+With the default `recording.keepRaw=false`, raw capture bins are pruned on every exit and failed runs additionally discard their partially encoded videos; a failed run records its outcome in `diagnostics.json` instead of `manifest.json`.
 
 `multi-viewport-cfr-v1` means every viewport video and the composite have exactly the same frame count, complete rational PTS/duration vector, zero start, and end time. Slot `k` selects the newest captured source frame at or before the shared target timestamp and holds the prior frame when no new paint exists. This guarantees zero output drift. Independent Chromium pages are not promised to paint on one physical compositor tick; acquisition skew is measured separately in `manifest.json`.
 

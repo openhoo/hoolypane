@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, type IpcMainEvent } from "electron";
 import { promises as fs } from "node:fs";
 import { dirname, extname, isAbsolute, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   ActionEnvelopeSchema,
   BoundsSnapshotSchema,
@@ -83,10 +83,13 @@ function commitFlowDraft(): void {
   flowDraft.commit();
 }
 
-async function stopAndSaveFlow(): Promise<void> {
+/** Record-stop outcome: "blocked" reports unresolved replay failures after the draft was discarded; "handled" covers persisted, empty, and abandoned saves. */
+type StopFlowOutcome = { kind: "blocked"; reasons: string[] } | { kind: "handled" };
+
+async function stopAndSaveFlow(): Promise<StopFlowOutcome> {
   const paneRegistry = registry;
   const chrome = chromeWindow;
-  if (!paneRegistry || !chrome) return;
+  if (!paneRegistry || !chrome) return { kind: "handled" };
   flushBarrier = true;
   try {
     for (const record of paneRegistry.panes.values()) record.view.webContents.send(IPC_CHANNELS.flush);
@@ -102,20 +105,26 @@ async function stopAndSaveFlow(): Promise<void> {
   if (activeDrain) await activeDrain;
   try {
     const stopped = flowDraft.stop();
-    if (stopped.kind === "blocked") throw new Error(`Flow cannot be exported:\n${stopped.reasons.join("\n")}`);
+    // A trailing replay failure is a discardable outcome, not a wedge: abandon the save
+    // here so the draft can never stay active past record-stop; the caller surfaces the
+    // reasons as a user-visible lastError instead of this throwing past cleanup.
+    if (stopped.kind === "blocked") {
+      commitFlowDraft();
+      return { kind: "blocked", reasons: stopped.reasons };
+    }
     if (stopped.kind === "empty") {
       commitFlowDraft();
-      return;
+      return { kind: "handled" };
     }
     const directPath = testFlowSavePath();
     if (directPath === "") {
       commitFlowDraft();
-      return;
+      return { kind: "handled" };
     }
     if (directPath) {
       await fs.writeFile(directPath, stopped.source, "utf8");
       commitFlowDraft();
-      return;
+      return { kind: "handled" };
     }
     const selection = await dialog.showSaveDialog(chrome, {
       title: "Save Hoolypane flow",
@@ -124,13 +133,14 @@ async function stopAndSaveFlow(): Promise<void> {
     });
     if (selection.canceled || !selection.filePath) {
       commitFlowDraft();
-      return;
+      return { kind: "handled" };
     }
     await fs.writeFile(selection.filePath, stopped.source, { encoding: "utf8", flag: "wx" }).catch(async (error: unknown) => {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       await fs.writeFile(selection.filePath!, stopped.source, "utf8");
     });
     commitFlowDraft();
+    return { kind: "handled" };
   } finally {
     publishState();
   }
@@ -179,7 +189,18 @@ async function handleCommand(command: ChromeCommand): Promise<void> {
       if (firstPane) flowDraft.start(paneRegistry.getState().sharedUrl, firstPane, nextActionId++, Date.now());
       break;
     }
-    case "record-stop": await stopAndSaveFlow(); break;
+    case "record-stop": {
+      const stopped = await stopAndSaveFlow();
+      if (stopped.kind !== "blocked") break;
+      // Early return, not break: the success tail below resets lastError on every completed
+      // command and would instantly erase the discard signal published here. Skipping the
+      // tail also mirrors the old throw path, which never reached the workspace save either.
+      const message = `flow recording discarded without saving:\n${stopped.reasons.join("\n")}`;
+      lastError = message;
+      report("", message);
+      publishState();
+      return;
+    }
     case "capture-pane": if (chromeWindow) await capturePane(chromeWindow, paneRegistry, command.paneId); break;
     case "capture-overview": if (chromeWindow) await captureOverview(chromeWindow, paneRegistry); break;
   }
@@ -256,6 +277,14 @@ async function replayEnvelope(paneId: string, envelope: ActionEnvelope): Promise
     await registry?.getPane(paneId)?.view.webContents.loadURL(normalizeUrl(envelope.action.url));
     return;
   }
+  // Envelope generations are stamped by the SOURCE pane, and per-view counters drift apart with
+  // any pane-local navigation (per-pane reload/back-forward, a window.open loaded into the same
+  // view), so strict cross-pane equality can never hold again once one pane browses on its own —
+  // every later synced action would fail "stale" forever. Translate instead: stamp the request
+  // with the TARGET's current generation, the exact value its preload mirror holds. Staleness
+  // then still means "this target's document changed under the replay" (enforced below between
+  // resolve and input delivery, and by the pane's echo guard keyed to this value), never "some
+  // pane navigated historically".
   const request = { actionId: envelope.actionId, documentGeneration: envelope.documentGeneration, action: envelope.action } as const;
   try {
     if (envelope.action.kind === "select" || envelope.action.kind === "scroll") {
@@ -346,6 +375,10 @@ async function createChrome(): Promise<void> {
     const normalized = normalizeUrl(requestedUrl);
     workspace = { ...workspace, sharedUrl: normalized, panes: workspace.panes.map((pane) => ({ ...pane, url: normalized })) };
   }
+  // The renderer document path is needed twice: as the load target and as the only URL the
+  // navigation guards below may ever see this window load.
+  const rendererPath = join(dirname(fileURLToPath(import.meta.url)), "renderer/index.html");
+  const rendererUrl = pathToFileURL(rendererPath).href;
   chromeWindow = new BrowserWindow({
     width: 1600,
     height: 1000,
@@ -354,12 +387,29 @@ async function createChrome(): Promise<void> {
     show: false,
     webPreferences: { preload: fileURLToPath(new URL("../preload/chrome.js", import.meta.url)), nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false },
   });
+  // This window carries the privileged hoolypaneChrome bridge, and Electron re-exposes preload
+  // APIs into whatever document the window loads next. A link or file dragged onto the toolbar
+  // would otherwise hand the bridge (full workspace state plus pane-steering commands) to that
+  // document. Renderer-initiated navigations are therefore denied except reloading our own
+  // bundled renderer; only main-process loadFile() populates this window. Popups and permission
+  // requests from a hostile document are refused the same way. Panes are unaffected: their
+  // content lives in separate WebContentsViews with their own bindPane() guards.
+  chromeWindow.webContents.on("will-navigate", (event, url) => {
+    if (url === rendererUrl) return;
+    event.preventDefault();
+  });
+  chromeWindow.webContents.on("will-redirect", (event) => event.preventDefault());
+  chromeWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  const shellContents = chromeWindow.webContents;
+  // Scoped to the shell webContents: every other surface keeps its session's existing behavior.
+  shellContents.session.setPermissionRequestHandler((requesting, _permission, callback) => callback(requesting !== shellContents));
+  shellContents.session.setPermissionCheckHandler((requesting) => requesting !== shellContents);
   chromeWindow.on("closed", () => { flowDraft.cancel(); quittingRegistry = registry; void registry?.destroy(); chromeWindow = undefined; registry = undefined; });
   registry = new PaneRegistry({ workspace, onChange: publishState, onFailure: (failure) => report(failure.paneId, failure.message) });
   quittingRegistry = undefined;
   registry.attachWindow(chromeWindow);
   chromeWindow.once("ready-to-show", () => chromeWindow?.show());
-  await chromeWindow.loadFile(join(dirname(fileURLToPath(import.meta.url)), "renderer/index.html"));
+  await chromeWindow.loadFile(rendererPath);
   for (const pane of workspace.panes) {
     if (chromeWindow.isDestroyed()) return;
     if (!registry.panes.has(pane.id)) await registry.create(pane.viewport, pane.id);

@@ -33,6 +33,12 @@ export class PaneRegistry {
   private readonly onChange: ((workspace: WorkspaceState) => void) | undefined;
   private readonly onFailure: ((failure: PaneFailure) => void) | undefined;
   private window: BrowserWindow | undefined;
+  // Registry-wide document generation: bumped on every main-frame navigation of ANY pane and
+  // mirrored into every record. A single counter keeps generations comparable across panes, so
+  // a pane-local navigation can never make cross-pane sync reject as "stale" forever (the old
+  // per-pane counters drifted apart permanently), while any navigation between observation and
+  // replay still invalidates the envelope.
+  private documentEpoch = 0;
 
   constructor(options: { onChange?: (workspace: WorkspaceState) => void; onFailure?: (failure: PaneFailure) => void; workspace?: WorkspaceState } = {}) {
     this.workspace = options.workspace ?? defaultWorkspace();
@@ -75,10 +81,10 @@ export class PaneRegistry {
     if (!this.window) throw new Error("pane registry has no window");
     const view = new WebContentsView({ webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, partition: "persist:hoolypane", preload: this.panePreloadPath() } });
     view.webContents.setBackgroundThrottling(false);
+    const preexistingEntry = this.workspace.panes.find((pane) => pane.id === id);
     // Track whether this call introduced the workspace entry: rollback must stay symmetric and
     // never delete a pane that existed before the failed create (e.g. a restored saved pane).
-    const preexistingEntry = this.workspace.order.includes(id);
-    const record: PaneRecord = { id, view, debuggerAttached: false, networkEmulationReady: false, documentGeneration: 0, overlayCssKeys: {}, creationEpoch: nextCreationEpoch++ };
+    const record: PaneRecord = { id, view, debuggerAttached: false, networkEmulationReady: false, documentGeneration: this.documentEpoch, overlayCssKeys: {}, creationEpoch: nextCreationEpoch++ };
     this.panes.set(id, record);
     this.window.contentView.addChildView(view);
     this.workspace = preexistingEntry ? this.workspace : addPane(this.workspace, valid, this.workspace.sharedUrl, id);
@@ -124,7 +130,20 @@ export class PaneRegistry {
     // The duplicated workspace state commits only AFTER the risky create succeeds; committing
     // earlier would leave a phantom entry no record backs whenever create fails.
     await this.create(next.panes.find((pane) => pane.id === created)!.viewport, created);
-    this.workspace = next;
+    // Merge instead of overwriting: event-driven mutators (loading flags, url patches, failure
+    // and out-of-sync marks) legally mutate the live workspace while create() awaits its loads,
+    // and the `next` snapshot predates every one of them. Overlay only the duplication-specific
+    // deltas onto the live state: the clone's identity fields (name/url from the source pane)
+    // with its live runtime flags kept, plus the clone's order position after its source.
+    const duplicated = next.panes.find((pane) => pane.id === created);
+    const panes = this.workspace.panes.map((pane) => {
+      if (pane.id !== created || !duplicated) return pane;
+      return { ...duplicated, loading: pane.loading, canGoBack: pane.canGoBack, canGoForward: pane.canGoForward, failure: pane.failure, outOfSync: pane.outOfSync };
+    });
+    const order = this.workspace.order.filter((id) => id !== created);
+    const anchor = order.indexOf(paneId);
+    order.splice(anchor >= 0 ? anchor + 1 : order.length, 0, created);
+    this.workspace = { ...this.workspace, panes, order };
     this.emitChange();
     return created;
   }
@@ -273,14 +292,22 @@ export class PaneRegistry {
     const contents = record.view.webContents;
     contents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
       if (!isMainFrame || isInPlace) return;
-      record.documentGeneration += 1;
+      // One shared counter for every pane: all records advance together, so envelopes stamped by
+      // any pane stay comparable against any target. Broadcast immediately so every preload's
+      // local mirror (and its suppression sweep) observes the same value before later replays.
+      this.documentEpoch += 1;
+      const generation = PaneGenerationSchema.parse({ documentGeneration: this.documentEpoch });
+      for (const other of this.panes.values()) {
+        other.documentGeneration = this.documentEpoch;
+        other.view.webContents.send(IPC_CHANNELS.paneGeneration, generation);
+      }
     });
     contents.on("did-finish-load", () => {
+      // Resend on finish-load: a just-attached or reloaded preload must learn the current epoch.
       contents.send(IPC_CHANNELS.paneGeneration, PaneGenerationSchema.parse({ documentGeneration: record.documentGeneration }));
       // insertCSS keys die with the finished document: re-inject active overlays for the new one.
       void this.applyPaneSettings(record);
     });
-    contents.on("did-start-loading", () => this.setPane(record.id, { loading: true, failure: null }));
     contents.on("did-stop-loading", () => this.setPane(record.id, { loading: false, canGoBack: contents.canGoBack(), canGoForward: contents.canGoForward() }));
     contents.on("did-navigate", (_event, url) => {
       if (!isAllowedProtocol(url)) return; // ignore chrome-error://chromewebdata/, about: and other non-http(s) commits

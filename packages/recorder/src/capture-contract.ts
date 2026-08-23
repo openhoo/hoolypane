@@ -6,6 +6,11 @@ export const POST_ROLL_US = 250_000;
 export const MAX_QUEUED_FRAMES = 8;
 export const MAX_QUEUED_BYTES = 32 * 1024 * 1024;
 
+// libvpx's VP8 encoder rejects any dimension above 16383 px ("Invalid parameter", verified against the pinned
+// ffmpeg-static build), one pixel below the 16384 config ceiling; folding the codec limit into the fit scale
+// keeps composite outputs encodable while preserving aspect ratio.
+const VP8_MAX_DIMENSION = 16_383;
+
 export type RecordingState = "awaiting-initial-frames" | "recording" | "post-roll" | "stopping" | "aligning" | "encoding" | "validating" | "complete" | "failed";
 const NEXT_STATES: Readonly<Record<RecordingState, readonly RecordingState[]>> = {
   "awaiting-initial-frames": ["recording", "failed"],
@@ -52,7 +57,7 @@ export function compositeGeometry(tracks: readonly TrackGeometry[], maximum: { r
   const tileHeight = Math.max(...tracks.map((track) => track.encodedHeight));
   const unscaledWidth = tileWidth * columns;
   const unscaledHeight = tileHeight * rows;
-  const scale = Math.min(1, maximum.width / unscaledWidth, maximum.height / unscaledHeight);
+  const scale = Math.min(1, maximum.width / unscaledWidth, maximum.height / unscaledHeight, VP8_MAX_DIMENSION / unscaledWidth, VP8_MAX_DIMENSION / unscaledHeight);
   return {
     columns,
     rows,

@@ -190,7 +190,11 @@ ipcRenderer.on(IPC_CHANNELS.flush, () => flushFill());
 document.addEventListener("input", (event) => {
   if (!event.isTrusted || suppressed.size > 0) return;
   const element = event.target;
-  if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) || ["checkbox", "radio", "password"].includes(element.type)) return;
+  // Fill replay applies values via CDP Input.insertText, which only mutates text-like controls:
+  // range/color/file and the date/time pickers ignore inserted text, so recording a fill for them
+  // would replay as a silent no-op on every mirror while sync reports the panes healthy. Exclude
+  // them like password — the gesture stays local instead of claiming a mirrored write that never lands.
+  if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) || ["checkbox", "radio", "password", "range", "color", "file", "date", "datetime-local", "month", "time", "week"].includes(element.type)) return;
   if (pendingFill) window.clearTimeout(pendingFill.timer);
   pendingFill = { element, timer: window.setTimeout(flushFill, 300) };
 }, true);
@@ -212,7 +216,10 @@ document.addEventListener("click", (event) => {
     let matchedEntry: SuppressionEntry | undefined;
     for (const [actionId, entry] of suppressed) {
       const box = entry.box;
-      if (!box || entry.kind !== "click") continue;
+      // check toggles land as the same trusted click — main drives CDP mouseDown/mouseUp and
+      // awaits this confirm exactly like for click. Without admitting them the confirm promise
+      // times out after 5s and marks the pane outOfSync although the toggle itself landed.
+      if (!box || (entry.kind !== "click" && entry.kind !== "check")) continue;
       if (event.clientX >= box.x - 2 && event.clientX <= box.x + box.width + 2 && event.clientY >= box.y - 2 && event.clientY <= box.y + box.height + 2) {
         matchedActionId = actionId;
         matchedEntry = entry;
@@ -307,7 +314,11 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
       }
       // Mirrored native input is routed at viewport coordinates: bring the target into view first,
       // exactly like a real user (or Playwright's auto-scroll) would, before measuring its box.
-      autoScrollCenter(element);
+      // Only click/check/fill/press qualify: select/scroll apply via DOM writes alone, and
+      // centering them would mutate ancestor scroll positions the recording never captured.
+      if (request.action.kind === "click" || request.action.kind === "check" || request.action.kind === "fill" || request.action.kind === "press") {
+        autoScrollCenter(element);
+      }
       const box = element.getBoundingClientRect();
       const entry = suppressed.get(request.actionId);
       if (entry) entry.box = { x: box.x, y: box.y, width: box.width, height: box.height };

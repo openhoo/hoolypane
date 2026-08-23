@@ -34,7 +34,7 @@ jobs:
           npm init -y
           npm install "$GITHUB_WORKSPACE"/dist/hoolypane-runner-*.tgz
           output="$(npx hoolypane --help 2>&1 || true)"
-          case "$output" in *"Usage: hoolypane run <flow-file>"*) ;; *) printf '%s\n' "$output" >&2; exit 1 ;; esac
+          case "$output" in *"Usage: hoolypane <command>"*"run <flow-file>"*) ;; *) printf '%s\n' "$output" >&2; exit 1 ;; esac
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: runner-tarball
@@ -115,9 +115,6 @@ jobs:
         with:
           path: release-artifacts
           merge-multiple: true
-      - name: Publish runner
-        if: vars.NPM_PUBLISH_ENABLED == 'true' && env.NODE_AUTH_TOKEN != ''
-        run: npm publish ./release-artifacts/hoolypane-runner-*.tgz --provenance --access public --tag beta
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           prerelease: ${{ contains(github.ref_name, '-') }}
@@ -127,3 +124,7 @@ jobs:
             release-artifacts/*.dmg
             release-artifacts/*.exe
             release-artifacts/hoolypane-runner-*.tgz
+      - name: Publish runner
+        if: vars.NPM_PUBLISH_ENABLED == 'true' && env.NODE_AUTH_TOKEN != ''
+        continue-on-error: true
+        run: npm publish ./release-artifacts/hoolypane-runner-*.tgz --provenance --access public --tag beta

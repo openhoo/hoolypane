@@ -258,6 +258,10 @@ function PaneName({ pane, onRename }: { pane: PaneState; onRename(name: string):
         aria-label={`Rename ${pane.name}`}
         onDblClick={() => setEditing(true)}
         onKeyDown={(event) => {
+          // The name control owns its keys: without this, Enter/F2 bubble into the draggable
+          // header and arm sticky keyboard-move state (the pointer path excludes us at the
+          // header via closest("button, input, select") — keyboard must behave the same).
+          event.stopPropagation();
           const key = (event as KeyboardEvent).key;
           if (key === "Enter" || key === "F2") {
             event.preventDefault();
@@ -277,6 +281,9 @@ function PaneName({ pane, onRename }: { pane: PaneState; onRename(name: string):
       value={draft}
       onBlur={commit}
       onKeyDown={(event) => {
+        // Same ownership rule as the name span: rename keys must never reach the header
+        // delegate or the global keyboard-move listener.
+        event.stopPropagation();
         if ((event as KeyboardEvent).key === "Enter") (event.currentTarget as HTMLInputElement).blur();
         if ((event as KeyboardEvent).key === "Escape") setEditing(false);
       }}
@@ -326,7 +333,7 @@ export const PaneCard = memo(function PaneCard({
         tabIndex={0}
         aria-label={`${pane.name} pane header`}
         onPointerDown={(event) => { const target = event.target as HTMLElement; if (target.closest("button, input, select")) return; event.preventDefault(); onHeaderPointerDown?.(event); }}
-        onKeyDown={(event) => onHeaderKeyDown?.(event as KeyboardEvent)}
+        onKeyDown={(event) => { const target = event.target as HTMLElement; if (target.closest("button, input, select")) return; onHeaderKeyDown?.(event as KeyboardEvent); }}
         class={`flex h-7 shrink-0 cursor-grab items-center gap-0.5 border-b border-edge bg-elevated pl-1 pr-1 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent active:cursor-grabbing ${dragging ? "bg-field" : ""}`}
       >
         <PaneName pane={pane} onRename={(name) => send({ kind: "rename", paneId: pane.id, name })} />

@@ -224,13 +224,15 @@ export class RecordingSession {
     }).catch(() => undefined);
   }
 
-  /** keepRaw=false: raw bins and partially encoded videos never survive any exit path. */
-  private async pruneTransientArtifacts(): Promise<void> {
+  /** keepRaw=false: raw bins never survive any exit path. */
+  private async pruneRawBins(): Promise<void> {
     if (this.options.recording.keepRaw) return;
-    await Promise.allSettled([
-      fs.rm(join(this.options.outputDir, "raw"), { recursive: true, force: true }),
-      fs.rm(join(this.options.outputDir, "videos"), { recursive: true, force: true }),
-    ]);
+    await fs.rm(join(this.options.outputDir, "raw"), { recursive: true, force: true }).catch(() => undefined);
+  }
+
+  /** Failed exits additionally discard partially encoded videos; success keeps every artifact the manifest certifies. */
+  private async pruneFailedArtifacts(): Promise<void> {
+    await Promise.allSettled([this.pruneRawBins(), fs.rm(join(this.options.outputDir, "videos"), { recursive: true, force: true })]);
   }
 
   private async cancellableDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
@@ -257,8 +259,8 @@ export class RecordingSession {
         await this.stopCapture();
         const spoolNotes = this.contexts.flatMap((context) => [...context.spool.drainFailureNotes()]);
         const diagnosticsPath = join(this.options.outputDir, "diagnostics.json");
-        await atomicJson(diagnosticsPath, { contract: null, status: input.status, failures: [...input.failures, ...spoolNotes] });
-        await this.pruneTransientArtifacts();
+        await atomicJson(diagnosticsPath, { contract: null, status: input.status, failures: [...input.failures, ...spoolNotes, ...this.captureCloseFailures] });
+        await this.pruneFailedArtifacts();
         return { kind: "diagnostics", diagnosticsPath };
       }
       try {
@@ -344,7 +346,7 @@ export class RecordingSession {
         const stateKey = relative(this.options.outputDir, statePath);
         const finalManifest = { ...manifest, artifacts: { ...manifest.artifacts, "run-state.json": stateKey }, sha256: { ...manifest.sha256, [stateKey]: await sha256(statePath) } };
         await atomicJson(manifestPath, finalManifest);
-        await this.pruneTransientArtifacts();
+        await this.pruneRawBins();
         return { kind: "manifest", manifestPath, manifest: finalManifest };
       } catch (error) {
         try {
@@ -354,7 +356,7 @@ export class RecordingSession {
           const message = error instanceof Error ? error.message : String(error);
           await atomicJson(join(this.options.outputDir, "diagnostics.json"), { contract: CAPTURE_CONTRACT, status: input.status, failures: [...input.failures, { message: `finalize pipeline failed: ${message}` }] });
         } catch { /* the original error takes precedence */ }
-        await this.pruneTransientArtifacts();
+        await this.pruneFailedArtifacts();
         throw error;
       }
     } finally {
