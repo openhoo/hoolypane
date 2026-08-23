@@ -15,28 +15,7 @@ let chrome!: Page;
 let userDataDir = "";
 
 afterAll(async () => {
-  console.log("TEARDOWN start");
-  if (application) {
-    const closeOutcome = await Promise.race([
-      application.close().then(() => "closed" as const, (e: unknown) => `close-error: ${e instanceof Error ? e.message : String(e)}` as const),
-      new Promise<"hang">((resolve) => setTimeout(() => resolve("hang"), 8000)),
-    ]);
-    console.log("TEARDOWN close outcome:", closeOutcome);
-    if (closeOutcome === "hang") {
-      try {
-        const proc = application.process();
-        console.log("TEARDOWN electron pid", proc.pid, "exitCode", proc.exitCode, "killed", proc.killed);
-        const alive = await Promise.race([
-          application.evaluate(() => "responsive").then(() => "responsive", (e: unknown) => `unresponsive: ${e instanceof Error ? e.message : String(e)}`),
-          new Promise((r) => setTimeout(() => r("eval-timeout"), 3000)),
-        ]);
-        console.log("TEARDOWN evaluate:", alive);
-      } catch (probeError) { console.log("TEARDOWN probe failed:", probeError instanceof Error ? probeError.message : String(probeError)); }
-      try { application.process().kill("SIGKILL"); } catch {}
-      throw new Error("application.close() hung; electron process force-killed");
-    }
-  }
-  console.log("TEARDOWN fixture closing");
+  await application?.close().catch(() => undefined);
   await fixture?.close();
   if (userDataDir) await rm(userDataDir, { recursive: true, force: true });
 }, 30_000);

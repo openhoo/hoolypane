@@ -1,6 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, type IpcMainEvent } from "electron";
 import { promises as fs } from "node:fs";
-import { appendFileSync } from "node:fs";
 import { dirname, extname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -98,21 +97,24 @@ async function stopAndSaveFlow(): Promise<void> {
     flushBarrier = false;
     drainDeferredActions();
   }
+  // The drain spawned above runs asynchronously: let it finish so every buffered action is
+  // reflected in the draft BEFORE stop() computes the export outcome.
+  if (activeDrain) await activeDrain;
   try {
     const stopped = flowDraft.stop();
     if (stopped.kind === "blocked") throw new Error(`Flow cannot be exported:\n${stopped.reasons.join("\n")}`);
     if (stopped.kind === "empty") {
-      flowDraft.commit();
+      commitFlowDraft();
       return;
     }
     const directPath = testFlowSavePath();
     if (directPath === "") {
-      flowDraft.commit();
+      commitFlowDraft();
       return;
     }
     if (directPath) {
       await fs.writeFile(directPath, stopped.source, "utf8");
-      flowDraft.commit();
+      commitFlowDraft();
       return;
     }
     const selection = await dialog.showSaveDialog(chrome, {
@@ -121,64 +123,72 @@ async function stopAndSaveFlow(): Promise<void> {
       filters: [{ name: "TypeScript", extensions: ["ts"] }],
     });
     if (selection.canceled || !selection.filePath) {
-      flowDraft.commit();
+      commitFlowDraft();
       return;
     }
     await fs.writeFile(selection.filePath, stopped.source, { encoding: "utf8", flag: "wx" }).catch(async (error: unknown) => {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       await fs.writeFile(selection.filePath!, stopped.source, "utf8");
     });
-    flowDraft.commit();
+    commitFlowDraft();
   } finally {
     publishState();
   }
 }
 
 async function handleCommand(command: ChromeCommand): Promise<void> {
-  if (!registry) return;
+  // Pin the registry for the whole body: the singleton may be swapped or cleared mid-command.
+  const paneRegistry = registry;
+  if (!paneRegistry) return;
   switch (command.kind) {
-    case "create": await registry.create(command.viewport); break;
-    case "close": coordinator.cancelPane(command.paneId); await registry.close(command.paneId); break;
-    case "duplicate": await registry.duplicate(command.paneId); break;
-    case "rename": registry.rename(command.paneId, command.name); break;
-    case "reorder": registry.reorder(command.paneId, command.index); break;
-    case "resize": registry.resize(command.paneId, command.width, command.height); break;
-    case "rotate": registry.rotate(command.paneId); break;
-    case "focus": registry.focus(command.paneId); break;
+    case "create": await paneRegistry.create(command.viewport); break;
+    case "close": coordinator.cancelPane(command.paneId); await paneRegistry.close(command.paneId); break;
+    case "duplicate": await paneRegistry.duplicate(command.paneId); break;
+    case "rename": paneRegistry.rename(command.paneId, command.name); break;
+    case "reorder": paneRegistry.reorder(command.paneId, command.index); break;
+    case "resize": paneRegistry.resize(command.paneId, command.width, command.height); break;
+    case "rotate": paneRegistry.rotate(command.paneId); break;
+    case "focus": paneRegistry.focus(command.paneId); break;
     case "navigate": {
       flushBarrier = true;
       try {
-        for (const record of registry.panes.values()) record.view.webContents.send(IPC_CHANNELS.flush);
-        await registry.navigate(command.url);
+        for (const record of paneRegistry.panes.values()) record.view.webContents.send(IPC_CHANNELS.flush);
+        await paneRegistry.navigate(command.url);
       } finally {
         flushBarrier = false;
         drainDeferredActions();
       }
       break;
     }
-    case "back": registry.back(command.paneId); break;
-    case "forward": registry.forward(command.paneId); break;
-    case "reload": registry.reload(command.paneId); break;
-    case "set-layout": registry.setLayout(command.layout); break;
-    case "move-pane": registry.setPanePosition(command.paneId, command.x, command.y); break;
-    case "set-sync": registry.setSync(command.enabled); break;
-    case "set-color-scheme": registry.setColorScheme(command.value); break;
-    case "set-reduced-motion": registry.setReducedMotion(command.enabled); break;
-    case "set-throttling": registry.setThrottling(command.mode); break;
-    case "set-overlay": registry.setOverlay(command.key, command.enabled); break;
+    case "back": paneRegistry.back(command.paneId); break;
+    case "forward": paneRegistry.forward(command.paneId); break;
+    case "reload": paneRegistry.reload(command.paneId); break;
+    case "set-layout": paneRegistry.setLayout(command.layout); break;
+    case "move-pane": paneRegistry.setPanePosition(command.paneId, command.x, command.y); break;
+    case "set-sync": paneRegistry.setSync(command.enabled); break;
+    case "set-color-scheme": paneRegistry.setColorScheme(command.value); break;
+    case "set-reduced-motion": paneRegistry.setReducedMotion(command.enabled); break;
+    case "set-throttling": paneRegistry.setThrottling(command.mode); break;
+    case "set-overlay": paneRegistry.setOverlay(command.key, command.enabled); break;
     case "record-start": {
-      const firstPane = registry.getState().order[0];
-      if (firstPane) flowDraft.start(registry.getState().sharedUrl, firstPane, nextActionId++, Date.now());
+      // A recording is already running: surface the refusal instead of silently restarting.
+      if (flowDraft.isActive) throw new Error("a flow recording is already active");
+      // Drop stale buffered actions so a previous session's leftovers never seed the new recording.
+      deferredActions.length = 0;
+      const firstPane = paneRegistry.getState().order[0];
+      if (firstPane) flowDraft.start(paneRegistry.getState().sharedUrl, firstPane, nextActionId++, Date.now());
       break;
     }
     case "record-stop": await stopAndSaveFlow(); break;
-    case "capture-pane": if (chromeWindow) await capturePane(chromeWindow, registry, command.paneId); break;
-    case "capture-overview": if (chromeWindow) await captureOverview(chromeWindow, registry); break;
+    case "capture-pane": if (chromeWindow) await capturePane(chromeWindow, paneRegistry, command.paneId); break;
+    case "capture-overview": if (chromeWindow) await captureOverview(chromeWindow, paneRegistry); break;
   }
+  // Re-read singletons after the awaited body: the window may have closed mid-command.
+  if (!chromeWindow || registry !== paneRegistry) return;
   if (workspacePersistable) {
     lastError = null;
     publishState();
-    await saveWorkspace(workspacePath, registry.getState());
+    await saveWorkspace(workspacePath, paneRegistry.getState());
   } else {
     publishState();
   }
@@ -262,12 +272,15 @@ async function replayEnvelope(paneId: string, envelope: ActionEnvelope): Promise
 }
 
 async function acceptSourceAction(sourcePaneId: string, observed: unknown): Promise<void> {
-  if (!registry) return;
+  const paneRegistry = registry;
+  if (!paneRegistry) return;
   if (flushBarrier) {
     // Buffer instead of dropping: actions observed during a navigate/stop flush are processed once the barrier lifts.
     deferredActions.push({ paneId: sourcePaneId, observed });
     return;
   }
+  // Capture the draft session before any await: an outliving drain must not pollute a newer recording.
+  const draftGeneration = flowDraft.sessionGeneration;
   const source = PaneObservedActionSchema.parse(observed);
   const envelope = ActionEnvelopeSchema.parse({
     actionId: nextActionId++,
@@ -276,20 +289,21 @@ async function acceptSourceAction(sourcePaneId: string, observed: unknown): Prom
     action: source.action,
     recordedAtUnixMs: Date.now(),
   });
-  flowDraft.append(envelope);
-  if (!registry.getState().syncEnabled) return;
-  const targets = registry.getState().order.filter((paneId) => paneId !== sourcePaneId);
+  flowDraft.append(envelope, draftGeneration);
+  if (!paneRegistry.getState().syncEnabled) return;
+  const targets = paneRegistry.getState().order.filter((paneId) => paneId !== sourcePaneId);
   const outcomes = await coordinator.dispatch(envelope, targets, replayEnvelope);
   for (const outcome of outcomes) {
     if (outcome.ok) {
-      registry.clearOutOfSync(outcome.paneId);
-      flowDraft.unblock(envelope.actionId);
-    } else if (!registry.getPane(outcome.paneId)) continue;
+      // Scope the clear to the succeeded action: a success for one action must not hide a
+      // different unresolved failure on the same pane.
+      paneRegistry.clearOutOfSync(outcome.paneId, envelope.actionId);
+      flowDraft.unblock(envelope.actionId, outcome.paneId);
+    } else if (!paneRegistry.getPane(outcome.paneId)) continue;
     else {
       const reason = outcome.reason ?? "unknown replay failure";
-      registry.markOutOfSync(outcome.paneId, envelope.actionId, envelope.action.kind, reason);
-      flowDraft.block(envelope.actionId, `${outcome.paneId}: ${reason}`);
-      report(outcome.paneId, reason);
+      paneRegistry.markOutOfSync(outcome.paneId, envelope.actionId, envelope.action.kind, reason);
+      flowDraft.block(envelope.actionId, outcome.paneId, reason);
     }
   }
   publishState();
@@ -298,7 +312,7 @@ async function acceptSourceAction(sourcePaneId: string, observed: unknown): Prom
 function drainDeferredActions(): void {
   if (drainingDeferredActions || flushBarrier || deferredActions.length === 0) return;
   drainingDeferredActions = true;
-  void (async () => {
+  activeDrain = (async () => {
     try {
       while (!flushBarrier && registry && deferredActions.length > 0) {
         const next = deferredActions.shift();
@@ -312,6 +326,7 @@ function drainDeferredActions(): void {
     } finally {
       drainingDeferredActions = false;
     }
+    activeDrain = null;
   })();
 }
 
@@ -354,6 +369,18 @@ async function createChrome(): Promise<void> {
 }
 
 app.commandLine.appendSwitch("disable-background-timer-throttling");
+  // Surface relaunch failures instead of swallowing them: prefer the renderer error surface,
+  // fall back to quitting when no window exists to show anything in.
+  const handleLaunchFailure = (error: unknown): void => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(message);
+    if (chromeWindow) {
+      lastError = `failed to (re)open the Hoolypane window: ${message}`;
+      publishState();
+    } else {
+      app.quit();
+    }
+  };
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   app.quit();
@@ -362,11 +389,11 @@ if (!hasSingleInstanceLock) {
     if (chromeWindow) {
       chromeWindow.restore();
       chromeWindow.focus();
-    } else void launchChrome().catch((error: unknown) => { console.error(error); });
+    } else void launchChrome().catch(handleLaunchFailure);
   });
-  void app.whenReady().then(launchChrome).catch((error: unknown) => { console.error(error); app.quit(); });
+  void app.whenReady().then(launchChrome).catch(handleLaunchFailure);
 }
-app.on("activate", () => { void launchChrome().catch((error: unknown) => { console.error(error); }); });
+app.on("activate", () => { void launchChrome().catch(handleLaunchFailure); });
 
 // Flush-on-quit: a workspace mutation racing app shutdown must still reach disk. Hold quit once,
 // drain queued commands plus every in-flight save tail, then re-issue quit (single guarded pass).
@@ -376,16 +403,32 @@ app.on("before-quit", (event) => {
   quitFlushStarted = true;
   event.preventDefault();
   void (async () => {
-    try { await commandQueue; } catch { /* command failures already reported */ }
+    // Bound the drain: a stuck command must not hold the app hostage at shutdown.
+    const outcome = await Promise.race([
+      commandQueue.then(() => "drained" as const, () => "drained" as const),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), QUIT_FLUSH_DEADLINE_MS)),
+    ]);
+    if (outcome === "timeout") report("", `command drain exceeded the ${QUIT_FLUSH_DEADLINE_MS}ms quit deadline; proceeding with shutdown`);
     const activeRegistry = registry ?? quittingRegistry;
     try {
-      if (workspacePersistable && activeRegistry && workspacePath) await saveWorkspace(workspacePath, activeRegistry.getState());
-    } catch (error) { report("", error instanceof Error ? error.message : String(error)); }
+      // Enqueue as a tail with a provider: state is read when the write executes, so mutations
+      // landing during the drain above are still included.
+      if (workspacePersistable && activeRegistry && workspacePath) await saveWorkspace(workspacePath, () => activeRegistry.getState());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      report("", message);
+      // Never block quit: prefer the renderer error surface, fall back to a native dialog.
+      if (chromeWindow) {
+        lastError = `failed to save the workspace during quit: ${message}`;
+        publishState();
+      } else {
+        dialog.showErrorBox("Hoolypane", `Failed to save the workspace during quit:\n${message}`);
+      }
+    }
     try { await flushWorkspaceSaves(); } catch { /* save tails never reject */ }
     app.quit();
   })();
 });
-
 async function launchChrome(): Promise<void> {
   if (chromeWindow !== undefined || chromeStarting) return;
   chromeStarting = true;
@@ -412,7 +455,7 @@ async function launchChrome(): Promise<void> {
         });
     } catch (error) { report("", error instanceof Error ? error.message : String(error)); }
   });
-  ipcMain.on(IPC_CHANNELS.stateRequest, () => { if (chromeWindow && registry) publishState(); });
+  ipcMain.on(IPC_CHANNELS.stateRequest, (event) => { if (!trustedChrome(event)) return; if (chromeWindow && registry) publishState(); });
   ipcMain.on(IPC_CHANNELS.paneAction, (event, value: unknown) => {
     const paneId = sourcePane(event);
     if (!paneId) return;
