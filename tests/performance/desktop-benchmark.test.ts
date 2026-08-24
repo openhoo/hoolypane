@@ -107,7 +107,7 @@ afterAll(async () => {
   await application?.close().catch(() => undefined);
   await fixture?.close();
   if (userDataDir) await rm(userDataDir, { recursive: true, force: true });
-});
+}, 30_000);
 
 describe("six-pane direct compositor", () => {
   it("meets animation, mirrored-action, final-state, long-task, and RSS gates", async () => {

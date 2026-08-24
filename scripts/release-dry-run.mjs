@@ -1,9 +1,15 @@
 import { spawn } from "node:child_process";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-function run(command, args, environment = process.env) {
+const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const npx = process.platform === "win32" ? "npx.cmd" : "npx";
+function run(command, args, environment = process.env, cwd) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
+      cwd,
       stdio: "inherit",
       env: environment,
       // .cmd shims on Windows only resolve through cmd.exe; args are fixed literals.
@@ -11,6 +17,22 @@ function run(command, args, environment = process.env) {
     });
     child.once("error", reject);
     child.once("exit", (code, signal) => code === 0 ? resolve() : reject(new Error(`${command} ${args.join(" ")} exited ${code ?? signal}`)));
+  });
+}
+
+// Captures combined output regardless of exit code, mirroring the workflow's "$(npx ... || true)".
+function capture(command, args, cwd) {
+  return new Promise((resolveCapture, rejectCapture) => {
+    const child = spawn(command, args, {
+      cwd,
+      env: process.env,
+      shell: process.platform === "win32",
+    });
+    let output = "";
+    child.stdout.on("data", (chunk) => { output += chunk; });
+    child.stderr.on("data", (chunk) => { output += chunk; });
+    child.once("error", rejectCapture);
+    child.once("exit", () => resolveCapture(output));
   });
 }
 
@@ -34,6 +56,27 @@ if (process.platform === "linux") {
 }
 await run(pnpm, ["benchmark:recording"]);
 await run(pnpm, ["pack:runner"]);
+
+// Consumer-side smoke of the packed runner tarball: mirrors the release workflow's
+// clean-project install plus CLI help assertion, so a broken package fails here
+// instead of wasting a tagged three-OS release run.
+const runnerTarball = (await readdir("dist")).find((entry) => /^hoolypane-runner-.+\.tgz$/.test(entry));
+if (!runnerTarball) throw new Error("pack:runner produced no dist/hoolypane-runner-*.tgz");
+const tarballPath = resolve("dist", runnerTarball);
+const smokeProject = await mkdtemp(join(tmpdir(), "hoolypane-runner-smoke-"));
+try {
+  await writeFile(join(smokeProject, "package.json"), `${JSON.stringify({ name: "hoolypane-runner-smoke", private: true })}\n`);
+  // Quoted for the win32 shell:true spawn path, which joins args verbatim.
+  await run(npm, ["install", process.platform === "win32" ? `"${tarballPath}"` : tarballPath], process.env, smokeProject);
+  const help = await capture(npx, ["hoolypane", "--help"], smokeProject);
+  const usageAt = help.indexOf("Usage: hoolypane <command>");
+  const runUsageAt = help.indexOf("run <flow-file>");
+  if (usageAt === -1 || runUsageAt === -1 || runUsageAt < usageAt) {
+    throw new Error(`packed runner --help output does not match the CLI contract:\n${help}`);
+  }
+} finally {
+  await rm(smokeProject, { recursive: true, force: true });
+}
 const packageScript = process.platform === "win32" ? "package:windows" : process.platform === "darwin" ? "package:mac" : "package:linux";
 await run(pnpm, [packageScript]);
 if (process.platform === "linux") {

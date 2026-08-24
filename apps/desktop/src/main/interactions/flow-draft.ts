@@ -42,6 +42,15 @@ export class FlowDraft {
     this.blocking.delete(`${actionId}:${paneId}`);
   }
 
+  /** Drops a closed pane's blocking entries: its replay failures can never recover via a later
+   *  recorded action on it, so keeping them would wedge every future stop() as blocked. */
+  discardPane(paneId: string): void {
+    const suffix = `:${paneId}`;
+    for (const key of [...this.blocking.keys()]) {
+      if (key.endsWith(suffix)) this.blocking.delete(key);
+    }
+  }
+
   /** Computes the export outcome without mutating the draft; callers commit only after a successful save. */
   stop(): FlowStopResult {
     if (!this.active) return { kind: "empty" };

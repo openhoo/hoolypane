@@ -152,7 +152,14 @@ async function handleCommand(command: ChromeCommand): Promise<void> {
   if (!paneRegistry) return;
   switch (command.kind) {
     case "create": await paneRegistry.create(command.viewport); break;
-    case "close": coordinator.cancelPane(command.paneId); await paneRegistry.close(command.paneId); break;
+    case "close": {
+      // Once the pane is gone its replay failures can never recover via a later recorded action
+      // on it, so drop them: stop() must not discard every future save over a deleted pane.
+      coordinator.cancelPane(command.paneId);
+      await paneRegistry.close(command.paneId);
+      flowDraft.discardPane(command.paneId);
+      break;
+    }
     case "duplicate": await paneRegistry.duplicate(command.paneId); break;
     case "rename": paneRegistry.rename(command.paneId, command.name); break;
     case "reorder": paneRegistry.reorder(command.paneId, command.index); break;
@@ -239,6 +246,36 @@ function requestReplay(paneId: string, request: ReplayRequest): Promise<ReplayRe
   return result;
 }
 
+/** Parameters for a replayed native key event. Chromium matches editing commands and default key
+ *  behaviors (select-all, implicit form submit, focus traversal) on the Windows virtual key code
+ *  and the char text, never on the key name: omitting them makes replays silently diverge from
+ *  Playwright's own press() of the same recorded flow. */
+type KeyEventParams = { type: "rawKeyDown" | "keyDown" | "keyUp"; key: string; code?: string | undefined; windowsVirtualKeyCode?: number | undefined; text?: string | undefined; unmodifiedText?: string | undefined };
+
+// The only keys the pane preload records (preload/pane.ts restricts press to this set).
+const PRESS_KEY_EVENTS: Record<string, Pick<KeyEventParams, "code" | "windowsVirtualKeyCode" | "text">> = {
+  Enter: { code: "Enter", windowsVirtualKeyCode: 13, text: "\r" },
+  Escape: { code: "Escape", windowsVirtualKeyCode: 27 },
+  Tab: { code: "Tab", windowsVirtualKeyCode: 9 },
+};
+
+function pressKeyDownEvent(key: string): KeyEventParams {
+  const spec = PRESS_KEY_EVENTS[key];
+  if (!spec) return { type: "rawKeyDown", key };
+  // With char text Chromium synthesizes the matching char event, exactly like Playwright's
+  // raw-keyboard dispatch for Enter (keyDown + "\r"); without it, rawKeyDown + virtual code.
+  return spec.text === undefined
+    ? { type: "rawKeyDown", key, code: spec.code, windowsVirtualKeyCode: spec.windowsVirtualKeyCode }
+    : { type: "keyDown", key, code: spec.code, windowsVirtualKeyCode: spec.windowsVirtualKeyCode, text: spec.text, unmodifiedText: spec.text };
+}
+
+function pressKeyUpEvent(key: string): KeyEventParams {
+  const spec = PRESS_KEY_EVENTS[key];
+  return spec
+    ? { type: "keyUp", key, code: spec.code, windowsVirtualKeyCode: spec.windowsVirtualKeyCode }
+    : { type: "keyUp", key };
+}
+
 async function applyCdp(paneId: string, envelope: ActionEnvelope, resolved: ReplayResult): Promise<void> {
   const record = registry?.getPane(paneId);
   const box = resolved.box;
@@ -260,12 +297,12 @@ async function applyCdp(paneId: string, envelope: ActionEnvelope, resolved: Repl
   else if (action.kind === "check") {
     if (resolved.checked !== action.checked) await click();
   } else if (action.kind === "fill") {
-    await cdp.sendCommand("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "a", code: "KeyA", modifiers: process.platform === "darwin" ? 4 : 2 });
-    await cdp.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", modifiers: process.platform === "darwin" ? 4 : 2 });
+    await cdp.sendCommand("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: process.platform === "darwin" ? 4 : 2 });
+    await cdp.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: process.platform === "darwin" ? 4 : 2 });
     await cdp.sendCommand("Input.insertText", { text: action.value });
   } else if (action.kind === "press") {
-    await cdp.sendCommand("Input.dispatchKeyEvent", { type: "rawKeyDown", key: action.key });
-    await cdp.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: action.key });
+    await cdp.sendCommand("Input.dispatchKeyEvent", pressKeyDownEvent(action.key));
+    await cdp.sendCommand("Input.dispatchKeyEvent", pressKeyUpEvent(action.key));
   }
   // A navigation may start between resolve and native input delivery; refuse to count the action as applied then.
   if (record.documentGeneration !== envelope.documentGeneration) throw new Error(`stale document generation ${envelope.documentGeneration}, current ${record.documentGeneration}`);
@@ -277,14 +314,14 @@ async function replayEnvelope(paneId: string, envelope: ActionEnvelope): Promise
     await registry?.getPane(paneId)?.view.webContents.loadURL(normalizeUrl(envelope.action.url));
     return;
   }
-  // Envelope generations are stamped by the SOURCE pane, and per-view counters drift apart with
-  // any pane-local navigation (per-pane reload/back-forward, a window.open loaded into the same
-  // view), so strict cross-pane equality can never hold again once one pane browses on its own —
-  // every later synced action would fail "stale" forever. Translate instead: stamp the request
-  // with the TARGET's current generation, the exact value its preload mirror holds. Staleness
-  // then still means "this target's document changed under the replay" (enforced below between
-  // resolve and input delivery, and by the pane's echo guard keyed to this value), never "some
-  // pane navigated historically".
+  // Envelope generations come from the registry-wide documentEpoch: any pane's main-frame
+  // navigation bumps it once and broadcasts the new value to every pane, so all live mirrors
+  // share one counter and strict cross-pane equality holds by construction. Forward the
+  // envelope's generation unchanged; staleness then means exactly "this target's document
+  // changed under the replay" (enforced below between resolve and input delivery, and by the
+  // target preload's generation-keyed echo guard). Never translate the value to the target's
+  // current epoch: rewriting it would defeat that echo suppression and let stale pending
+  // mirrors land as phantom user inputs mid-navigation.
   const request = { actionId: envelope.actionId, documentGeneration: envelope.documentGeneration, action: envelope.action } as const;
   try {
     if (envelope.action.kind === "select" || envelope.action.kind === "scroll") {
@@ -409,10 +446,19 @@ async function createChrome(): Promise<void> {
   quittingRegistry = undefined;
   registry.attachWindow(chromeWindow);
   chromeWindow.once("ready-to-show", () => chromeWindow?.show());
-  await chromeWindow.loadFile(rendererPath);
-  for (const pane of workspace.panes) {
-    if (chromeWindow.isDestroyed()) return;
-    if (!registry.panes.has(pane.id)) await registry.create(pane.viewport, pane.id);
+  try {
+    await chromeWindow.loadFile(rendererPath);
+    for (const pane of workspace.panes) {
+      if (chromeWindow.isDestroyed()) return;
+      if (!registry.panes.has(pane.id)) await registry.create(pane.viewport, pane.id);
+    }
+  } catch (error) {
+    // A failed load or pane restore leaves an invisible window behind: show:false plus a
+    // ready-to-show that never fired means there is no error surface inside it, and keeping it
+    // alive wedges every relaunch behind the launchChrome guard. Destroying routes cleanup
+    // through the 'closed' handler above, which resets the singletons for a clean retry.
+    chromeWindow.destroy();
+    throw error;
   }
   if (chromeWindow.isDestroyed()) return;
   publishState();
@@ -424,7 +470,7 @@ app.commandLine.appendSwitch("disable-background-timer-throttling");
   const handleLaunchFailure = (error: unknown): void => {
     const message = error instanceof Error ? error.message : String(error);
     console.error(message);
-    if (chromeWindow) {
+    if (chromeWindow && !chromeWindow.isDestroyed()) {
       lastError = `failed to (re)open the Hoolypane window: ${message}`;
       publishState();
     } else {
@@ -445,13 +491,18 @@ if (!hasSingleInstanceLock) {
 }
 app.on("activate", () => { void launchChrome().catch(handleLaunchFailure); });
 
-// Flush-on-quit: a workspace mutation racing app shutdown must still reach disk. Hold quit once,
-// drain queued commands plus every in-flight save tail, then re-issue quit (single guarded pass).
+// Flush-on-quit: a workspace mutation racing app shutdown must still reach disk. Every quit
+// request is held (preventDefault) until queued commands plus every in-flight save tail have
+// drained, then quit is re-issued once with the hold lifted. This includes a second quit signal
+// arriving mid-drain (another Cmd+Q, window-all-closed, session end): letting it through would
+// tear down the app ahead of the final save.
 let quitFlushStarted = false;
+let quitFlushComplete = false;
 app.on("before-quit", (event) => {
+  if (quitFlushComplete) return;
+  event.preventDefault();
   if (quitFlushStarted) return;
   quitFlushStarted = true;
-  event.preventDefault();
   void (async () => {
     // Bound the drain: a stuck command must not hold the app hostage at shutdown.
     const outcome = await Promise.race([
@@ -465,17 +516,12 @@ app.on("before-quit", (event) => {
       // landing during the drain above are still included.
       if (workspacePersistable && activeRegistry && workspacePath) await saveWorkspace(workspacePath, () => activeRegistry.getState());
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      report("", message);
-      // Never block quit: prefer the renderer error surface, fall back to a native dialog.
-      if (chromeWindow) {
-        lastError = `failed to save the workspace during quit: ${message}`;
-        publishState();
-      } else {
-        dialog.showErrorBox("Hoolypane", `Failed to save the workspace during quit:\n${message}`);
-      }
+      // Never block quit: a native dialog here wedges headless/Xvfb sessions forever, so
+      // surface the failure through the log only and proceed with shutdown.
+      report("", `failed to save the workspace during quit: ${error instanceof Error ? error.message : String(error)}`);
     }
     try { await flushWorkspaceSaves(); } catch { /* save tails never reject */ }
+    quitFlushComplete = true;
     app.quit();
   })();
 });

@@ -42,4 +42,20 @@ if (conflicts.length > 0) {
   console.error(conflicts.join("\n"));
   process.exit(1);
 }
-console.log(`version pins consistent across ${manifests.length} manifests`);
+// electron-builder.yml pins the Electron embedded into packaged binaries independently
+// of node_modules; it must equal the devDependency that every test, benchmark, and
+// smoke actually executes, or a one-sided bump ships installers nothing validated.
+const pinnedElectron = /^electronVersion:\s*["']?([^\s"']+)["']?\s*(?:#.*)?$/m.exec(
+  await readFile("apps/desktop/electron-builder.yml", "utf8"),
+)?.[1];
+const electronSpecs = byName.get("electron");
+const testedElectron = electronSpecs ? [...electronSpecs.keys()][0] : undefined;
+if (!testedElectron) {
+  console.error("no electron dependency pin found in workspace manifests");
+  process.exit(1);
+}
+if (!pinnedElectron || pinnedElectron !== testedElectron) {
+  console.error(`electron drift: apps/desktop/electron-builder.yml electronVersion (${pinnedElectron ?? "missing"}) != tested electron (${testedElectron})`);
+  process.exit(1);
+}
+console.log(`version pins consistent across ${manifests.length} manifests; packaged electron matches tested electron`);

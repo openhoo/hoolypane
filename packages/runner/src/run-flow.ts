@@ -99,6 +99,21 @@ function failureFrom(error: unknown): RecorderFailure {
   return { message: String(error) };
 }
 
+// User config/flow modules are user code: their top-level evaluation is bounded like the flow
+// phase so a never-settling top-level await cannot hang the CLI before any deadline, output
+// directory, or artifact exists. The config deadline matches the schema default for timeoutMs
+// (the config itself defines the real flow deadline and is not known yet).
+const MODULE_EVAL_TIMEOUT_MS = 30_000;
+
+async function evaluateModule(path: string, deadlineMs: number, source: string): Promise<Record<string, unknown>> {
+  const deadline = Promise.withResolvers<never>();
+  const timer = setTimeout(() => deadline.reject(new Error(`${source} module evaluation exceeded ${deadlineMs}ms (top-level await never settled?)`)), deadlineMs);
+  try {
+    return (await Promise.race([import(`${pathToFileURL(path).href}?run=${Date.now()}`), deadline.promise])) as Record<string, unknown>;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export async function runFlow(args: RunArguments, dependencies: RunnerDependencies = defaultDependencies): Promise<RunResult> {
   const projectDir = dirname(resolve(args.flowFile));
@@ -141,11 +156,11 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
   let traceFailed = false;
   try {
     // The specifiers are only known at runtime: freshly compiled cache artifacts with a cache-busting query.
-    const configModule = (await import(`${pathToFileURL(configCompiled.path).href}?run=${Date.now()}`)) as Record<string, unknown>;
+    const configModule = await evaluateModule(configCompiled.path, MODULE_EVAL_TIMEOUT_MS, configPath);
     const configCandidate = resolveExport<unknown>(configModule, ["default", "config"], configPath);
     validateConfigExport(configCandidate, configPath);
     const config = validateResolvedConfig(configCandidate);
-    const flowModule = (await import(`${pathToFileURL(flowCompiled.path).href}?run=${Date.now()}`)) as Record<string, unknown>;
+    const flowModule = await evaluateModule(flowCompiled.path, config.timeoutMs, flowPath);
     const flow = resolveExport<FlowDefinition>(flowModule, ["default", "flow"], flowPath);
     validateFlowExport(flow, flowPath);
     const outputDir = resolve(args.outputDir ?? config.recording.outputDir);
@@ -162,6 +177,7 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
     const targets: RecordingTarget[] = [];
     let tracesStopped = false;
     for (const viewport of config.viewports) {
+      if (interrupted) break;
       const context = await browser.newContext(buildContextOptions(config, viewport));
       contexts.push(context);
       await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
@@ -170,8 +186,12 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
       targets.push(recorderTarget(viewport.id, viewport, cdp));
       screens.push({ id: viewport.id, viewport, page });
     }
-    recorder = dependencies.createRecorder?.(config, config.timeoutMs, outputDir) ?? new RecordingSession({ recording: config.recording, timeoutMs: config.timeoutMs, outputDir });
-    await recorder.start(targets);
+    // recorder.start() wipes the output directory: a SIGINT during browser/context setup must
+    // never reach it, or a rerun into the same --output dir destroys the previous recording.
+    if (!interrupted) {
+      recorder = dependencies.createRecorder?.(config, config.timeoutMs, outputDir) ?? new RecordingSession({ recording: config.recording, timeoutMs: config.timeoutMs, outputDir });
+      await recorder.start(targets);
+    }
     let flowError: unknown;
     let flowFailed = false;
     let timedOut = false;
@@ -193,7 +213,7 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
       return results.flatMap((result) => (result.status === "rejected" ? [failureFrom(result.reason)] : []));
     };
     try {
-      if (!interrupted) {
+      if (!interrupted && recorder !== undefined) {
         const initial = recorder.awaitInitialFrames(initialFramesAbort.signal).then(() => "ready" as const, (error: unknown) => {
           flowError = error;
           if (!interrupted) flowFailed = true;
@@ -228,6 +248,11 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
             finalizedEvents = flowEvents.slice();
           }
         }
+      }
+      if (recorder === undefined) {
+        // Interrupted during setup: no recording started and the previous output directory
+        // contents are intact, so there is nothing to finalize.
+        return { outputDir, status: "interrupted" };
       }
       initialFramesAbort.abort();
       const traceFailures = await stopTraces();

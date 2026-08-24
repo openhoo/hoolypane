@@ -82,9 +82,15 @@ function computePaneTiles(
   }
   if (layout === "horizontal") {
     const contentHeight = innerHeight - PANE_HEADER_HEIGHT;
+    // Height-fit zoom per pane, then a uniform fit so the row cannot overflow the workspace:
+    // window-truncated rects would collapse emulation scale for clipped edge panes.
+    const heightZoom = (pane: TileInput): number => Math.max(0, Math.min(1, contentHeight / pane.viewportHeight));
+    const rowWidth =
+      panes.reduce((sum, pane) => sum + pane.viewportWidth * heightZoom(pane), 0) + LAYOUT_GAP * (panes.length - 1);
+    const fit = Math.min(1, innerWidth / Math.max(1, rowWidth));
     let x = LAYOUT_PADDING;
     for (const pane of panes) {
-      const zoom = Math.max(0, Math.min(1, contentHeight / pane.viewportHeight));
+      const zoom = heightZoom(pane) * fit;
       const width = Math.round(pane.viewportWidth * zoom);
       tiles.set(pane.id, tileFor(pane, width, innerHeight, x, LAYOUT_PADDING));
       x += width + LAYOUT_GAP;
@@ -403,8 +409,11 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
         const height = workspaceRef.current?.clientHeight ?? 0;
         const dx = event.key === "ArrowRight" ? SNAP_PX : event.key === "ArrowLeft" ? -SNAP_PX : 0;
         const dy = event.key === "ArrowDown" ? SNAP_PX : event.key === "ArrowUp" ? -SNAP_PX : 0;
-        const x = Math.max(0, Math.min(width - tile.width, Math.round(current.x + dx)));
-        const y = Math.max(0, Math.min(height - tile.height, Math.round(current.y + dy)));
+        // Clamp nudges to the same padded domain the free-tile restore clamp renders: a committed
+        // gutter coordinate would re-render the card at its LAYOUT_PADDING clamp while the native
+        // view keeps the committed position — a persistent visual and click-target desync.
+        const x = Math.max(LAYOUT_PADDING, Math.min(width - LAYOUT_PADDING - tile.width, Math.round(current.x + dx)));
+        const y = Math.max(LAYOUT_PADDING, Math.min(height - LAYOUT_PADDING - tile.height, Math.round(current.y + dy)));
         if (x !== current.x || y !== current.y) {
           setKeyboardMove({ id: current.id, x, y });
           window.hoolypaneChrome.send({ kind: "move-pane", paneId: current.id, x, y });

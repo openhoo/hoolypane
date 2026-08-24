@@ -19,7 +19,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await fixture?.close();
   await Promise.all(outputs.map((output) => rm(output, { recursive: true, force: true })));
-});
+}, 30_000);
 
 async function outputDirectory(name: string): Promise<string> {
   const output = await mkdtemp(join(tmpdir(), `hoolypane-${name}-`));
@@ -96,7 +96,9 @@ describe("real runner", () => {
       if (process.platform === "win32") expect(exitCode).toBe(1);
       else expect(exitCode).toBe(130);
     } finally {
-      if (child.exitCode === null && !child.killed) child.kill("SIGKILL");
+      // kill() flips `killed` synchronously even while the child keeps running, so
+      // escalate whenever neither an exit code nor a fatal signal was observed yet.
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
       await exited.promise.catch(() => undefined);
     }
     const manifest = JSON.parse(await readFile(join(output, "manifest.json"), "utf8")) as { status: string; validationSuccess: boolean; durationFrames: number };

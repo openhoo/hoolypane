@@ -4,8 +4,8 @@ import { createRequire } from "node:module";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { dirname, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export interface CompiledModule {
   readonly path: string;
@@ -168,24 +168,17 @@ function playwrightEntry(specifier: string): string {
   return typeof target === "string" ? join(dir, target) : located;
 }
 
-// Emits a relative external specifier from the artifact to playwright's ESM entry, so Node loads the
-// real ESM file (named exports intact) while esbuild keeps it out of the bundle. Path separators are
-// normalized to "/" because ESM import specifiers always use forward slashes.
-function playwrightResolution(artifactPath: string): Plugin {
+// Emits playwright's ESM entry as an absolute file-URL specifier so Node loads the real ESM file
+// (named exports intact) while esbuild keeps it out of the bundle. An absolute URL is immune to
+// symlink canonicalization: Node resolves the emitted specifier against the artifact's realpath,
+// which diverges from the lexical cache path whenever /tmp, project roots, or volume mounts are
+// symlinks — a module-relative "../" sequence would then point outside the playwright install.
+function playwrightResolution(): Plugin {
   return {
     name: "playwright-resolution",
     setup(pluginBuild: PluginBuild): void {
       pluginBuild.onResolve({ filter: /^playwright(\/|$)/ }, (args) => {
-        const specifier = relative(dirname(artifactPath), playwrightEntry(args.path)).split(sep).join("/");
-        // Degenerate result of cross-drive inputs (artifact on C:, playwright on D:) is an
-        // absolute path, not a specifier; Node would fail the artifact with ERR_UNSUPPORTED_ESM_URL_SCHEME.
-        if (!specifier.startsWith(".")) {
-          throw new Error(
-            `cannot express the playwright ESM entry (${specifier}) as a module-relative specifier from ${artifactPath}: ` +
-            "cross-drive absolute paths are unsupported; keep playwright on the same drive as the runner cache",
-          );
-        }
-        return { path: specifier, external: true };
+        return { path: pathToFileURL(playwrightEntry(args.path)).href, external: true };
       });
     },
   };
@@ -201,7 +194,7 @@ export async function compileModule(entryFile: string, cacheDir: string): Promis
     entryPoints: [absoluteEntry],
     outfile: outputPath,
     bundle: true,
-    plugins: [hoolypaneResolution(), playwrightResolution(outputPath)],
+    plugins: [hoolypaneResolution(), playwrightResolution()],
     format: "esm",
     platform: "node",
     target: "node24",

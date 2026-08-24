@@ -36,6 +36,7 @@ function actionStatements(action: Action): readonly string[] {
         "  target.scrollTo({",
         "    left: ratios.horizontal * Math.max(0, target.scrollWidth - target.clientWidth),",
         "    top: ratios.vertical * Math.max(0, target.scrollHeight - target.clientHeight),",
+        '    behavior: "instant",',
         "  });",
         `}, { horizontal: ${horizontal}, vertical: ${vertical} });`,
       ];

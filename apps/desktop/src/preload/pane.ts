@@ -2,7 +2,7 @@ import { ipcRenderer } from "electron";
 import { IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, RecordFailureSchema, ReplayRequestSchema, type Action, type LocatorSpec, type ReplayRequest, type ReplayResult } from "@hoolypane/contracts";
 
 let documentGeneration = 0;
-type SuppressionEntry = { generation: number; kind: Action["kind"]; box?: { x: number; y: number; width: number; height: number } };
+type SuppressionEntry = { generation: number; kind: Action["kind"]; box?: { x: number; y: number; width: number; height: number }; confirmed?: boolean };
 const suppressed = new Map<number, SuppressionEntry>(); // actionId → replay context awaiting its trusted-input echo
 // Scroll positions written by replay-driven scrolling (apply-dom scrollTo and scrollIntoView). A
 // trusted scroll event landing exactly on such a position is our own echo, never user intent, and
@@ -22,16 +22,18 @@ function autoScrollCenter(element: Element): void {
   }
 }
 let pendingFill: { element: HTMLInputElement | HTMLTextAreaElement; timer: number } | undefined;
-// Containers awaiting their end-of-frame position read. One shared rAF drains the whole set so a
-// gesture touching several containers records every one of them, not just the first.
-const pendingScrollTargets = new Set<HTMLElement>();
+// Containers awaiting their end-of-frame position read, paired with whether the gesture that
+// queued them was a user takeover (forced past active suppression; pure echoes obey it). One
+// shared rAF drains the whole queue so a gesture touching several containers records every one
+// of them, not just the first.
+const pendingScrollTargets = new Map<HTMLElement, boolean>();
 let pendingScrollFrame = 0;
 
 function drainScrollTargets(): void {
   pendingScrollFrame = 0;
   const targets = [...pendingScrollTargets];
   pendingScrollTargets.clear();
-  for (const target of targets) {
+  for (const [target, takeover] of targets) {
     // The end position wins over the gesture that scheduled this frame: a programmatic scroll
     // landing between event and callback is our own echo and must never be mirrored.
     const programmed = programmaticScrolls.get(target);
@@ -41,7 +43,9 @@ function drainScrollTargets(): void {
     }
     const horizontalRatio = target.scrollWidth === target.clientWidth ? 0 : Math.min(1, Math.max(0, target.scrollLeft / (target.scrollWidth - target.clientWidth)));
     const verticalRatio = target.scrollHeight === target.clientHeight ? 0 : Math.min(1, Math.max(0, target.scrollTop / (target.scrollHeight - target.clientHeight)));
-    record(() => ({ kind: "scroll", locator: locatorFor(target), horizontalRatio, verticalRatio }));
+    // Takeovers emit forced so they survive active suppression; echoes queued before suppression
+    // began still fall under the guard.
+    record(() => ({ kind: "scroll", locator: locatorFor(target), horizontalRatio, verticalRatio }), takeover);
   }
 }
 
@@ -215,6 +219,7 @@ document.addEventListener("click", (event) => {
     let matchedActionId: number | undefined;
     let matchedEntry: SuppressionEntry | undefined;
     for (const [actionId, entry] of suppressed) {
+      if (entry.confirmed) continue; // a settled check entry may not acknowledge another click while its trailing echo drains
       const box = entry.box;
       // check toggles land as the same trusted click — main drives CDP mouseDown/mouseUp and
       // awaits this confirm exactly like for click. Without admitting them the confirm promise
@@ -227,13 +232,25 @@ document.addEventListener("click", (event) => {
       }
     }
     if (!matchedActionId || !matchedEntry) return; // human click during the confirm window: keep entries, send no confirm
-    suppressed.delete(matchedActionId);
+    // A mirrored check's trailing trusted input+change events fire only AFTER this click dispatch
+    // completes (the control's activation behavior runs post-dispatch), so deleting the entry here
+    // let them observe empty suppression and re-record the mirrored toggle as a fresh user check.
+    // Marking the entry confirmed keeps suppression alive for exactly one macrotask — long enough
+    // to swallow the trailing events (radio groups emit change on the deselected sibling too),
+    // while a confirmed entry can never acknowledge a second click — then the slot frees.
+    if (matchedEntry.kind === "check") {
+      matchedEntry.confirmed = true;
+      const settledActionId = matchedActionId;
+      window.setTimeout(() => { suppressed.delete(settledActionId); drainDeferredFill(); }, 0);
+    } else {
+      suppressed.delete(matchedActionId);
+      drainDeferredFill();
+    }
     if (matchedEntry.generation === documentGeneration) {
       ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId: matchedActionId, phase: "confirm", ok: true } satisfies ReplayResult);
     } else {
       ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId: matchedActionId, phase: "confirm", ok: false, reason: `stale document generation ${matchedEntry.generation}, current ${documentGeneration}` } satisfies ReplayResult);
     }
-    drainDeferredFill();
     return;
   }
   const target = event.target instanceof Element ? event.target.closest("button,a,[role],input") : null;
@@ -271,7 +288,7 @@ document.addEventListener("scroll", (event) => {
   // by suppression. Everything else queues onto the one shared frame, which reads every queued
   // container's terminal position.
   if (!takeover && suppressed.size > 0) return;
-  pendingScrollTargets.add(target);
+  pendingScrollTargets.set(target, (pendingScrollTargets.get(target) ?? false) || takeover);
   if (pendingScrollFrame) return;
   pendingScrollFrame = window.requestAnimationFrame(drainScrollTargets);
 }, true);
@@ -296,6 +313,14 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
       const matches = elementsFor(request.action.locator);
       if (matches.length !== 1) throw new Error(`locator resolved ${matches.length} elements`);
       const element = matches[0]!;
+      // A drifted locator resolving to exactly one element of the wrong kind must fail loudly:
+      // falling through reported ok:true while applying nothing, so main counted a diverging pane
+      // as in-sync and never flagged outOfSync. Validated before the suppression entry is armed,
+      // mirroring the other hard failures in this handler.
+      if (request.phase === "apply-dom") {
+        if (request.action.kind === "select" && !(element instanceof HTMLSelectElement)) throw new Error("select locator resolved a non-select element");
+        if (request.action.kind === "scroll" && !(element instanceof HTMLElement)) throw new Error("scroll locator resolved a non-HTMLElement");
+      }
       suppressed.set(request.actionId, { generation: request.documentGeneration, kind: request.action.kind });
       if (request.phase === "resolve" && (request.action.kind === "fill" || request.action.kind === "press") && element instanceof HTMLElement) {
         element.focus({ preventScroll: true });

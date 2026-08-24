@@ -132,7 +132,6 @@ describe("direct Electron surfaces", () => {
     expect(initial).toHaveLength(5);
     expect(initial.map((value) => [value.width, value.height, value.dpr])).toEqual(expect.arrayContaining([[1440, 900, 1], [1280, 800, 1], [768, 1024, 2], [390, 844, 3], [360, 800, 3]]));
     expect(initial.every((value) => value.permission === "denied")).toBe(true);
-    await fillSource("Mirrored value");
     // Mirrored native events expose completion only through page state in each independent WebContents.
     const waitForPaneState = async (predicate: (snapshots: readonly PaneSnapshot[]) => boolean, label: string): Promise<void> => {
       try {
@@ -151,28 +150,28 @@ describe("direct Electron surfaces", () => {
         throw new Error(`desktop panes did not converge after ${label}: ${JSON.stringify(await paneSnapshots().catch(() => []))}`, { cause: error });
       }
     };
-    await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.name === "Mirrored value"), "fill");
-    await clickPaneSurface(application, chrome, { port: FIXTURE_PORT, testId: "subscribe" });
-    await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.checked), "check");
-    await selectSourceDark();
-    await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.theme === "dark"), "select");
-    await clickPaneSurface(application, chrome, { port: FIXTURE_PORT, testId: "apply", expectedStatus: "applied" });
-    await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.status === "applied"), "click");
-    await pressSourceEnter();
-    await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.status === "entered"), "press");
-    // A pane renderer occasionally reloads mid-test (webContents identity change), which resets its
-    // scroll observation; retry the whole scroll action once before giving up.
-    await (async () => {
+    // A pane renderer occasionally reloads mid-test (webContents identity change), which
+    // invalidates execution contexts or drops in-flight mirrored input; retry the whole
+    // action together with its convergence poll once before giving up.
+    const withReloadRetry = async (label: string, action: () => Promise<void>, predicate: (snapshots: readonly PaneSnapshot[]) => boolean): Promise<void> => {
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        await scrollSource();
         try {
-          await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.scrollRatio > 0.95), "scroll");
+          await action();
+          await waitForPaneState(predicate, label);
           return;
         } catch (error) {
           if (attempt === 1) throw error;
         }
       }
-    })();
+    };
+    await withReloadRetry("fill", () => fillSource("Mirrored value"), (snapshots) => snapshots.every((snapshot) => snapshot.name === "Mirrored value"));
+    await clickPaneSurface(application, chrome, { port: FIXTURE_PORT, testId: "subscribe" });
+    await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.checked), "check");
+    await withReloadRetry("select", selectSourceDark, (snapshots) => snapshots.every((snapshot) => snapshot.theme === "dark"));
+    await clickPaneSurface(application, chrome, { port: FIXTURE_PORT, testId: "apply", expectedStatus: "applied" });
+    await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.status === "applied"), "click");
+    await withReloadRetry("press", pressSourceEnter, (snapshots) => snapshots.every((snapshot) => snapshot.status === "entered"));
+    await withReloadRetry("scroll", scrollSource, (snapshots) => snapshots.every((snapshot) => snapshot.scrollRatio > 0.95));
 
     await chrome.getByRole("button", { name: "Add custom" }).click();
     await pollUntil(async () => {

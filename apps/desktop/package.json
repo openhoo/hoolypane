@@ -34,7 +34,6 @@
     "@tailwindcss/vite": "4.3.3",
     "electron": "43.4.1",
     "electron-builder": "26.15.3",
-    "electron-builder-squirrel-windows": "26.15.3",
     "preact": "10.27.3",
     "vite": "7.3.5"
   }

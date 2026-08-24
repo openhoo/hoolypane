@@ -15,6 +15,7 @@ import { initialChromeState } from "./state.js";
 let mockState: ChromeState = initialChromeState();
 const listeners = new Set<(value: unknown) => void>();
 let loadingTimer: number | undefined;
+const pendingSettleIds = new Set<string>();
 
 function patch(partial: Partial<ChromeState>): void {
   const parsed = ChromeStateSchema.safeParse({ ...mockState, ...partial });
@@ -30,19 +31,35 @@ function patchPane(paneId: string, changes: Partial<PaneState>): void {
   patch({ panes: mockState.panes.map((pane) => (pane.id === paneId ? { ...pane, ...changes } : pane)) });
 }
 
+// Overlapping settles ACCUMULATE targets: clear-and-reschedule per call would drop panes not
+// named by the newest caller, wedging them in loading:true forever.
 function settleLoading(paneIds: readonly string[]): void {
-  window.clearTimeout(loadingTimer);
+  for (const id of paneIds) pendingSettleIds.add(id);
+  if (loadingTimer !== undefined) return;
   loadingTimer = window.setTimeout(() => {
-    patch({ panes: mockState.panes.map((pane) => (paneIds.includes(pane.id) ? { ...pane, loading: false } : pane)) });
+    loadingTimer = undefined;
+    const settled = new Set(pendingSettleIds);
+    pendingSettleIds.clear();
+    patch({ panes: mockState.panes.map((pane) => (settled.has(pane.id) ? { ...pane, loading: false } : pane)) });
   }, 600);
 }
 
+const ALLOWED_PROTOCOLS: Record<string, true> = { "http:": true, "https:": true };
+
+// Mirrors src/main/panes/url.ts: only http/https navigations pass; anything else THROWS so the
+// failed command surfaces as lastError (ErrorToast) exactly like the real main process instead of
+// silently dropping the whole state transition inside patch().
 function normalizeUrl(raw: string): string {
+  const value = raw.trim();
+  if (!value) throw new Error("URL must not be empty");
+  let parsed: URL;
   try {
-    return new URL(/^[a-z][a-z\d+\-.]*:/i.test(raw) ? raw : `https://${raw}`).toString();
+    parsed = new URL(/^[a-z][a-z\d+\-.]*:/i.test(value) ? value : `https://${value}`);
   } catch {
-    return mockState.sharedUrl;
+    throw new Error("Invalid URL");
   }
+  if (!ALLOWED_PROTOCOLS[parsed.protocol]) throw new Error("Only http and https URLs are allowed");
+  return parsed.toString();
 }
 
 function uniqueId(base: string): string {
@@ -56,7 +73,14 @@ function uniqueId(base: string): string {
 function apply(command: ChromeCommand): void {
   switch (command.kind) {
     case "navigate": {
-      const url = normalizeUrl(command.url);
+      let url: string;
+      try {
+        url = normalizeUrl(command.url);
+      } catch (error) {
+        // Mirror main's command .catch: rejected navigations surface via lastError, not silence.
+        patch({ lastError: error instanceof Error ? error.message : String(error) });
+        break;
+      }
       patch({
         sharedUrl: url,
         panes: mockState.panes.map((pane) => ({ ...pane, url, loading: true, canGoBack: true, canGoForward: false, failure: null })),

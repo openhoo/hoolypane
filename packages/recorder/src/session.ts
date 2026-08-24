@@ -263,6 +263,7 @@ export class RecordingSession {
         await this.pruneFailedArtifacts();
         return { kind: "diagnostics", diagnosticsPath };
       }
+      let manifestWritten = false;
       try {
         const elapsedUs = Math.max(0, monotonicUs() - (this.flowStartUs ?? monotonicUs()));
         await this.transition("post-roll");
@@ -340,13 +341,14 @@ export class RecordingSession {
           sha256: hashes,
         };
         const manifestPath = join(this.options.outputDir, "manifest.json");
-        await atomicJson(manifestPath, manifest);
         await this.transition("complete");
         const statePath = join(this.options.outputDir, "run-state.json");
         const stateKey = relative(this.options.outputDir, statePath);
         const finalManifest = { ...manifest, artifacts: { ...manifest.artifacts, "run-state.json": stateKey }, sha256: { ...manifest.sha256, [stateKey]: await sha256(statePath) } };
-        await atomicJson(manifestPath, finalManifest);
+        // Everything fallible precedes the manifest write; once it lands the manifest is durable and every artifact it certifies must survive (see pruneFailedArtifacts contract).
         await this.pruneRawBins();
+        await atomicJson(manifestPath, finalManifest);
+        manifestWritten = true;
         return { kind: "manifest", manifestPath, manifest: finalManifest };
       } catch (error) {
         try {
@@ -356,7 +358,7 @@ export class RecordingSession {
           const message = error instanceof Error ? error.message : String(error);
           await atomicJson(join(this.options.outputDir, "diagnostics.json"), { contract: CAPTURE_CONTRACT, status: input.status, failures: [...input.failures, { message: `finalize pipeline failed: ${message}` }] });
         } catch { /* the original error takes precedence */ }
-        await this.pruneFailedArtifacts();
+        if (!manifestWritten) await this.pruneFailedArtifacts();
         throw error;
       }
     } finally {

@@ -11,6 +11,9 @@ importers:
 
   .:
     devDependencies:
+      '@hoolypane/contracts':
+        specifier: workspace:*
+        version: link:packages/contracts
       '@hoolypane/runner':
         specifier: workspace:*
         version: link:packages/runner
@@ -60,9 +63,6 @@ importers:
       electron-builder:
         specifier: 26.15.3
         version: 26.15.3(electron-builder-squirrel-windows@26.15.3)
-      electron-builder-squirrel-windows:
-        specifier: 26.15.3
-        version: 26.15.3(dmg-builder@26.15.3)
       preact:
         specifier: 10.27.3
         version: 10.27.3

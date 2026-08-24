@@ -18,6 +18,17 @@ export async function verifyDirectory(path: string): Promise<number> {
   // No runtime schema for RecordingManifest exists yet (@hoolypane/recorder exports the type only); these checks mirror the fps 30|60 and durationFrames >= 1 contract by hand.
   // Geometry expectations are optional: directories recorded before the geometry contract lack the fields and still verify on the timeline contract alone.
   const manifestRecord = value as Record<string, unknown>; // JSON boundary; object shape checked above.
+  // A manifest whose own status records a non-success run must not certify: timeline and geometry
+  // can both be intact (alignFrames fills held frames) while a pane's capture ended early or
+  // tracing failed — exactly what flipped the run that wrote this manifest to "failed".
+  if (manifestRecord.status !== undefined && manifestRecord.status !== "success") {
+    const reasons = Array.isArray(manifestRecord.failures)
+      ? manifestRecord.failures
+          .map((failure) => (typeof failure === "object" && failure !== null && typeof (failure as Record<string, unknown>).message === "string" ? (failure as Record<string, unknown>).message : JSON.stringify(failure)))
+          .join("; ")
+      : "";
+    throw new Error(`${manifestPath} records status "${String(manifestRecord.status)}"${reasons ? `: ${reasons}` : ""}`);
+  }
   let tracks: Array<{ id: string; encodedWidth: number; encodedHeight: number }> = [];
   if (manifestRecord.viewports !== undefined) {
     if (!Array.isArray(manifestRecord.viewports)) throw new Error(`${manifestPath} has a malformed viewports field: expected an array`);

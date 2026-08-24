@@ -15,5 +15,8 @@ export function normalizeUrl(input: string): string {
   let parsed: URL;
   try { parsed = new URL(candidate); } catch { throw new Error("Invalid URL"); }
   if (!ALLOWED_PROTOCOLS.has(parsed.protocol)) throw new Error("Only http and https URLs are allowed");
+  // Normalized URLs persist into workspace state (sharedUrl, per-pane urls, workspace.json):
+  // strip userinfo so typed credentials never survive, matching redactUrlForMessage.
+  if (parsed.username || parsed.password) { parsed.username = ""; parsed.password = ""; }
   return parsed.toString();
 }

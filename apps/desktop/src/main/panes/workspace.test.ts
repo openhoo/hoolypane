@@ -7,6 +7,7 @@ import { addPane, defaultWorkspace, reorderPane, rotatePane } from "./workspace.
 describe("desktop pane state", () => {
   it("normalizes bare hosts and rejects unsafe protocols", () => {
     expect(normalizeUrl("example.test/path")).toBe("https://example.test/path");
+    expect(normalizeUrl("https://user:token@example.test/")).toBe("https://example.test/");
     expect(() => normalizeUrl("file:///etc/passwd")).toThrow(/http/);
   });
 

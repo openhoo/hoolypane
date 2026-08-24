@@ -68,9 +68,12 @@ export class PaneRegistry {
   markOutOfSync(paneId: string, actionId: number, actionKind: Action["kind"], reason: string): void {
     this.setPane(paneId, { outOfSync: { actionId, actionKind, reason } });
   }
-  /** Clears the out-of-sync mark only when it belongs to the given action: a newer failure must survive an older action's success. */
+  /** Clears the out-of-sync mark unless a newer failure superseded it: any action success at or
+   * after the marked one proves the pane recovered, while an older action's success must not hide
+   * a newer failure (marks carry monotonically increasing action ids). */
   clearOutOfSync(paneId: string, actionId: number): void {
-    if (this.getPaneState(paneId)?.outOfSync?.actionId !== actionId) return;
+    const mark = this.getPaneState(paneId)?.outOfSync;
+    if (!mark || mark.actionId > actionId) return;
     this.setPane(paneId, { outOfSync: null });
   }
   epochOf(paneId: string): number | undefined { return this.panes.get(paneId)?.creationEpoch; }
@@ -113,7 +116,14 @@ export class PaneRegistry {
 
   async close(paneId: string): Promise<void> {
     const record = this.panes.get(paneId);
-    if (!record || this.workspace.panes.length === 1) return;
+    if (!record) {
+      // A failed startup recreate intentionally keeps its workspace entry (rollback preserves
+      // pre-existing ones); the record-less card must stay closable: drop just the entry.
+      const next = closePane(this.workspace, paneId);
+      if (next !== this.workspace) { this.workspace = next; this.emitChange(); }
+      return;
+    }
+    if (this.workspace.panes.length === 1) return;
     this.panes.delete(paneId);
     this.workspace = closePane(this.workspace, paneId);
     this.pruneCachedBounds(paneId);
@@ -145,6 +155,11 @@ export class PaneRegistry {
     order.splice(anchor >= 0 ? anchor + 1 : order.length, 0, created);
     this.workspace = { ...this.workspace, panes, order };
     this.emitChange();
+    // create() loaded sharedUrl into the clone while the merge above stamps the source pane's
+    // current url as the clone's identity; load that url so rendered content matches label/state.
+    const dupUrl = this.workspace.panes.find((pane) => pane.id === created)?.url;
+    const dupRecord = this.panes.get(created);
+    if (dupRecord && dupUrl && dupUrl !== this.workspace.sharedUrl) await dupRecord.view.webContents.loadURL(this.restoreTarget(dupUrl)).catch(() => undefined);
     return created;
   }
 
@@ -311,7 +326,8 @@ export class PaneRegistry {
     contents.on("did-stop-loading", () => this.setPane(record.id, { loading: false, canGoBack: contents.canGoBack(), canGoForward: contents.canGoForward() }));
     contents.on("did-navigate", (_event, url) => {
       if (!isAllowedProtocol(url)) return; // ignore chrome-error://chromewebdata/, about: and other non-http(s) commits
-      this.setPane(record.id, { url: normalizeUrl(url), canGoBack: contents.canGoBack(), canGoForward: contents.canGoForward() });
+      // A committed http(s) main-frame navigation proves recovery: drop any stale failure banner.
+      this.setPane(record.id, { url: normalizeUrl(url), canGoBack: contents.canGoBack(), canGoForward: contents.canGoForward(), failure: null });
     });
     contents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => { if (isMainFrame && errorCode !== -3) this.reportFailure(record.id, `${errorDescription} (${errorCode}) at ${redactUrlForMessage(validatedURL)}`); });
     contents.on("render-process-gone", (_event, details) => this.reportFailure(record.id, `render process gone: ${details.reason}`));
