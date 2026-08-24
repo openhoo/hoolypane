@@ -48,8 +48,12 @@ if (process.platform === "linux") {
   const environment = { ...process.env, LIBGL_ALWAYS_SOFTWARE: "1" };
   delete environment.DBUS_SESSION_BUS_ADDRESS;
   delete environment.WAYLAND_DISPLAY;
-  await run("dbus-run-session", ["--", "xvfb-run", "-a", pnpm, "test:desktop"], environment);
-  await run("dbus-run-session", ["--", "xvfb-run", "-a", pnpm, "benchmark:desktop"], environment);
+  // Explicit screen geometry: xvfb-run's default 640x480 clamps the Electron window below its
+  // minimum, shrinking masonry seeds until native drag input hits the wrong card (documented
+  // phantom-drag failure mode). The same args are used everywhere desktop E2E runs locally.
+  const xvfb = ["--", "xvfb-run", "-a", "--server-args=-screen 0 1920x1080x24"];
+  await run("dbus-run-session", [...xvfb, pnpm, "test:desktop"], environment);
+  await run("dbus-run-session", [...xvfb, pnpm, "benchmark:desktop"], environment);
 } else {
   await run(pnpm, ["test:desktop"]);
   await run(pnpm, ["benchmark:desktop"]);
@@ -83,7 +87,7 @@ if (process.platform === "linux") {
   const environment = { ...process.env, LIBGL_ALWAYS_SOFTWARE: "1" };
   delete environment.DBUS_SESSION_BUS_ADDRESS;
   delete environment.WAYLAND_DISPLAY;
-  await run("dbus-run-session", ["--", "xvfb-run", "-a", pnpm, "smoke:desktop-package", "--", "dist/desktop"], environment);
+  await run("dbus-run-session", ["--", "xvfb-run", "-a", "--server-args=-screen 0 1920x1080x24", pnpm, "smoke:desktop-package", "--", "dist/desktop"], environment);
 } else {
   await run(pnpm, ["smoke:desktop-package", "--", "dist/desktop"]);
 }
