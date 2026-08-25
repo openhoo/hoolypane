@@ -39,13 +39,15 @@ done
 echo "== sync working tree → VM"
 RSYNC_SSH="ssh -p $VM_PORT -i $VM_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
 rsync -az --delete -e "$RSYNC_SSH" \
-  --exclude .git --exclude node_modules --exclude dist --exclude build \
+  --exclude .git --exclude node_modules --exclude dist \
+  --exclude build/icons --exclude build/icon.ico --exclude build/icon.icns \
   --exclude ".tmp" --exclude "*.log" --exclude ".ui-shots" \
   ./ "$VM_SSH:$VM_DIR/"
 
 echo "== install + build in VM"
 "${SSH[@]}" "set -e; cd ~/$VM_DIR;
   pnpm install --prefer-offline --frozen-lockfile >/dev/null;
+  pnpm exec playwright install chromium >/dev/null;
   # rsync-preserved mtimes can make tsc -b treat stale workspace dists as fresh — wipe dists
   # AND incremental state, then let typecheck re-emit every workspace package.
   rm -rf apps/desktop/dist packages/*/dist;

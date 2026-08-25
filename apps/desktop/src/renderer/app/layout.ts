@@ -112,7 +112,8 @@ function rowTiles(panes: readonly TileInput[], innerWidth: number, innerHeight: 
 
 /**
  * Column masonry search: tries every column count, keeps the arrangement with the best covered
- * area, and uniformly scales toward the padding origin when it overshoots the workspace height.
+ * area, and scales toward the padding origin when it overshoots the workspace height (the fixed
+ * header band stays unscaled so overscaled cards still show their full header).
  */
 function masonryTiles(panes: readonly TileInput[], innerWidth: number, innerHeight: number): PaneTile[] {
   // Column masonry (Polypane-style): cards keep their viewport aspect ratio at a shared column
@@ -145,13 +146,14 @@ function masonryTiles(panes: readonly TileInput[], innerWidth: number, innerHeig
     }, 0) / (innerWidth * innerHeight);
     if (coverage <= bestCoverage) continue;
     bestCoverage = coverage;
-    // Overshoot: scale the finished arrangement uniformly toward the padding origin.
+    // Overshoot: scale the arrangement toward the padding origin; the fixed header band is kept
+    // unscaled while the content share shrinks, so rendered headers never clip.
     bestPlacement = placement.map((tile) => ({
       ...tile,
       x: Math.round(LAYOUT_PADDING + (tile.x - LAYOUT_PADDING) * fit),
       y: Math.round(LAYOUT_PADDING + (tile.y - LAYOUT_PADDING) * fit),
       width: Math.round(tile.width * fit),
-      height: Math.round(tile.height * fit),
+      height: Math.round(PANE_HEADER_HEIGHT + (tile.height - PANE_HEADER_HEIGHT) * fit),
       zoom: tile.zoom * fit,
     }));
   }

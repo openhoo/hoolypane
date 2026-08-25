@@ -12,9 +12,16 @@ let application: ElectronApplication;
 let chrome: Page;
 let userDataDir = "";
 
-function sourcePage(path = "/"): Page {
-  const candidates = application.context().pages().filter((page) => page.url() === `http://127.0.0.1:${FIXTURE_PORT}${path}`);
-  return candidates.find((page) => page.viewportSize()?.width === 1440) ?? candidates[0]!;
+async function sourcePage(path = "/"): Promise<Page> {
+  const target = `http://127.0.0.1:${FIXTURE_PORT}${path}`;
+  try {
+    return await pollUntil(async () => {
+      const candidates = application.context().pages().filter((page) => page.url() === target);
+      return candidates[0] ?? null;
+    }, 5_000);
+  } catch (error) {
+    throw new Error(`no fixture page at ${path} for port ${FIXTURE_PORT} within 5s (${error instanceof Error ? error.message : String(error)})`);
+  }
 }
 
 async function waitForRemotePages(path: string, expected = 5): Promise<Page[]> {
@@ -82,17 +89,17 @@ describe("desktop replay and security resilience", () => {
     expect(stale.ok).toBe(false);
     expect(stale.reason).toMatch(/^stale document generation 999, current \d+$/);
 
-    await sourcePage().getByTestId("name").fill("stale-before-navigation");
+    await (await sourcePage()).getByTestId("name").fill("stale-before-navigation");
     await chrome.locator("#address").fill(`http://127.0.0.1:${FIXTURE_PORT}/next`);
     await chrome.locator("#address").press("Enter");
     await waitForRemotePages("/next");
-    await sourcePage("/next").getByTestId("name").fill("after-navigation");
+    await (await sourcePage("/next")).getByTestId("name").fill("after-navigation");
     await waitForMirroredName("after-navigation");
     await waitForNoOutOfSync();
   }, 30_000);
 
   it("denies permissions, downloads, popups, and external protocols", async () => {
-    const page = sourcePage("/next");
+    const page = await sourcePage("/next");
     expect(await page.evaluate(() => navigator.permissions.query({ name: "geolocation" }).then((permission) => permission.state))).toBe("denied");
     const pageCount = application.context().pages().length;
     await page.evaluate(() => window.open("mailto:security@example.test"));

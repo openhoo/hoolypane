@@ -10,6 +10,7 @@ import {
   RECORDABLE_PRESS_KEYS,
   RecordFailureSchema,
   ReplayResultSchema,
+  REPLAY_RESULT_TIMEOUT_MS,
   RUNTIME_PANE_DEFAULTS,
   errorMessage,
   staleGenerationMessage,
@@ -17,12 +18,14 @@ import {
   type ChromeCommand,
   type ReplayRequest,
   type ReplayResult,
+  type WorkspaceState,
 } from "@hoolypane/contracts";
+import { writeFileAtomic } from "@hoolypane/contracts/fsync";
 import { FlowDraft } from "./interactions/flow-draft.js";
 import { InteractionCoordinator } from "./interactions/interaction-coordinator.js";
 import { PaneRegistry } from "./panes/pane-registry.js";
 import { normalizeUrl } from "./panes/url.js";
-import { flushWorkspaceSaves, loadWorkspace, saveWorkspace, sweepStaleTemporaries, writeFileAtomic } from "./persistence/workspace-store.js";
+import { flushWorkspaceSaves, loadWorkspace, saveWorkspace, sweepStaleTemporaries } from "./persistence/workspace-store.js";
 import { report } from "./report.js";
 import { captureOverview, capturePane, saveViaDialog, testEnvFilePath } from "./screenshots/screenshot-service.js";
 
@@ -178,8 +181,9 @@ async function handleCommand(command: ChromeCommand): Promise<void> {
       if (flowDraft.isActive) throw new Error("a flow recording is already active");
       // Drop stale buffered actions so a previous session's leftovers never seed the new recording.
       deferredActions.length = 0;
-      const firstPane = paneRegistry.getState().order[0];
-      if (firstPane) flowDraft.start(paneRegistry.getState().sharedUrl, firstPane, nextActionId++);
+      const state = paneRegistry.getState();
+      const firstPane = state.order[0];
+      if (firstPane) flowDraft.start(state.sharedUrl, firstPane, nextActionId++);
       break;
     }
     case "record-stop": {
@@ -218,7 +222,7 @@ function waitForReplayResult(paneId: string, actionId: number, phase: ReplayResu
   const timer = setTimeout(() => {
     pendingReplay.delete(key);
     reject(new Error(`pane ${paneId} timed out during ${phase}`));
-  }, 5_000);
+  }, REPLAY_RESULT_TIMEOUT_MS);
   // Stamp the pane's creation epoch so a late result from a superseded surface is recognizable.
   pendingReplay.set(key, { resolve, reject, timer, epoch });
   return promise;
@@ -361,9 +365,9 @@ async function acceptSourceAction(sourcePaneId: string, observed: unknown): Prom
   // coordinator queues can hold a task across a close+re-add of the same pane id) so outcomes
   // are attributed to the exact surface they ran against.
   const startEpochs = new Map<string, number | undefined>();
-  const outcomes = await coordinator.dispatch(envelope, targets, async (targetPaneId, env) => {
+  const outcomes = await coordinator.dispatch(envelope, targets, async (targetPaneId) => {
     startEpochs.set(targetPaneId, paneRegistry.getPane(targetPaneId)?.creationEpoch);
-    await replayEnvelope(targetPaneId, env);
+    await replayEnvelope(targetPaneId, envelope);
   });
   for (const outcome of outcomes) {
     // An outcome describes one specific pane instance. If that instance is gone — closed and
@@ -406,7 +410,10 @@ function drainDeferredActions(): void {
   })();
 }
 
-async function createChrome(): Promise<void> {
+/** Bootstraps the persisted workspace for launch: loads (or defaults) workspace.json, applies the
+ *  --url override, and records the module-level persistence side effects (path, persistability,
+ *  lastError) in createChrome's original order. */
+async function loadWorkspaceWithArgvOverride(): Promise<WorkspaceState> {
   workspacePath = join(app.getPath("userData"), "workspace.json");
   await sweepStaleTemporaries(workspacePath);
   const loaded = await loadWorkspace(workspacePath);
@@ -422,11 +429,12 @@ async function createChrome(): Promise<void> {
     const normalized = normalizeUrl(requestedUrl);
     workspace = { ...workspace, sharedUrl: normalized, panes: workspace.panes.map((pane) => ({ ...pane, url: normalized })) };
   }
-  // The renderer document path is needed twice: as the load target and as the only URL the
-  // navigation guards below may ever see this window load.
-  const rendererPath = join(dirname(fileURLToPath(import.meta.url)), "renderer/index.html");
-  const rendererUrl = pathToFileURL(rendererPath).href;
-  chromeWindow = new BrowserWindow({
+  return workspace;
+}
+
+/** Builds the privileged shell window and its security fences. */
+function createShellWindow(rendererUrl: string): BrowserWindow {
+  const shellWindow = new BrowserWindow({
     width: 1600,
     height: 1000,
     minWidth: 720,
@@ -441,25 +449,26 @@ async function createChrome(): Promise<void> {
   // bundled renderer; only main-process loadFile() populates this window. Popups and permission
   // requests from a hostile document are refused the same way. Panes are unaffected: their
   // content lives in separate WebContentsViews with their own bindPane() guards.
-  chromeWindow.webContents.on("will-navigate", (event, url) => {
+  shellWindow.webContents.on("will-navigate", (event, url) => {
     if (url === rendererUrl) return;
     event.preventDefault();
   });
-  chromeWindow.webContents.on("will-redirect", (event) => event.preventDefault());
-  chromeWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  const shellContents = chromeWindow.webContents;
+  shellWindow.webContents.on("will-redirect", (event) => event.preventDefault());
+  shellWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  const shellContents = shellWindow.webContents;
   // Scoped to the shell webContents: every other surface keeps its session's existing behavior.
   shellContents.session.setPermissionRequestHandler((requesting, _permission, callback) => callback(requesting !== shellContents));
   shellContents.session.setPermissionCheckHandler((requesting) => requesting !== shellContents);
-  chromeWindow.on("closed", () => { commitFlowDraft(); quittingRegistry = registry; void registry?.destroy(); chromeWindow = undefined; registry = undefined; });
-  registry = new PaneRegistry({ workspace, onChange: publishState, onFailure: (failure) => report(failure.paneId, failure.message) });
-  quittingRegistry = undefined;
-  registry.attachWindow(chromeWindow);
-  chromeWindow.once("ready-to-show", () => chromeWindow?.show());
-  // Pin the singletons for the awaited restore below: the 'closed' handler may fire mid-await
-  // and clear the module-levels, so every later touch goes through these locals.
-  const shell = chromeWindow;
-  const paneRegistry = registry;
+  // Fence queued replays before teardown: macOS keeps the app alive after window close and a
+  // relaunch restores the same saved pane ids, so unfenced queued replays would run against the
+  // freshly created surfaces.
+  shellWindow.on("closed", () => { coordinator.cancelAll(); commitFlowDraft(); quittingRegistry = registry; void registry?.destroy(); chromeWindow = undefined; registry = undefined; });
+  return shellWindow;
+}
+
+/** Loads the renderer document and restores the workspace's panes; aborts silently when the shell
+ *  died mid-restore — the 'closed' handler owns singleton reset for a clean retry. */
+async function wireRegistry(shell: BrowserWindow, paneRegistry: PaneRegistry, workspace: WorkspaceState, rendererPath: string): Promise<void> {
   try {
     await shell.loadFile(rendererPath);
     for (const pane of workspace.panes) {
@@ -474,6 +483,24 @@ async function createChrome(): Promise<void> {
     shell.destroy();
     throw error;
   }
+}
+
+async function createChrome(): Promise<void> {
+  const workspace = await loadWorkspaceWithArgvOverride();
+  // The renderer document path is needed twice: as the load target and as the only URL the
+  // navigation guards in createShellWindow may ever see this window load.
+  const rendererPath = join(dirname(fileURLToPath(import.meta.url)), "renderer/index.html");
+  const rendererUrl = pathToFileURL(rendererPath).href;
+  chromeWindow = createShellWindow(rendererUrl);
+  registry = new PaneRegistry({ workspace, onChange: publishState, onFailure: (failure) => report(failure.paneId, failure.message) });
+  quittingRegistry = undefined;
+  registry.attachWindow(chromeWindow);
+  chromeWindow.once("ready-to-show", () => chromeWindow?.show());
+  // Pin the singletons for the awaited restore below: the 'closed' handler may fire mid-await
+  // and clear the module-levels, so every later touch goes through these locals.
+  const shell = chromeWindow;
+  const paneRegistry = registry;
+  await wireRegistry(shell, paneRegistry, workspace, rendererPath);
   if (shell.isDestroyed()) return;
   publishState();
 }

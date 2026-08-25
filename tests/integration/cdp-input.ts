@@ -1,5 +1,10 @@
 import type { ElectronApplication, Page } from "playwright";
-import { errorMessage } from "@hoolypane/contracts";
+import { VIEWPORT_PRESETS } from "@hoolypane/contracts";
+
+const desktopPreset = VIEWPORT_PRESETS.find((preset) => preset.id === "desktop-1440");
+if (!desktopPreset) throw new Error("desktop-1440 preset missing");
+const desktopPaneWidth = desktopPreset.width;
+const desktopPaneHeight = desktopPreset.height;
 
 /**
  * Clicks a fixture element inside the 1440px source pane through CDP input dispatch,
@@ -19,12 +24,12 @@ export async function clickPaneSurface(
   const viewport = await chrome.evaluate(() => ({ width: innerWidth, height: innerHeight }));
   const visibleWidth = Math.max(0, Math.min(viewport.width, surface.x + surface.width) - Math.max(0, surface.x));
   const visibleHeight = Math.max(0, Math.min(viewport.height, surface.y + surface.height) - Math.max(0, surface.y));
-  const scale = Math.min(1, visibleWidth / 1440, visibleHeight / 900);
+  const scale = Math.min(1, visibleWidth / desktopPaneWidth, visibleHeight / desktopPaneHeight);
   const result = await application.evaluate(async ({ webContents }, input) => {
     const candidates = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${input.port}`));
     let source: (typeof candidates)[number] | undefined;
     for (const candidate of candidates) {
-      if (await candidate.executeJavaScript("innerWidth") === 1440) { source = candidate; break; }
+      if (await candidate.executeJavaScript("innerWidth") === input.width) { source = candidate; break; }
     }
     if (!source) throw new Error("desktop source pane missing");
     let lastError: string | undefined;
@@ -47,7 +52,8 @@ export async function clickPaneSurface(
         }
       } catch (error) {
         // Transient renderer reloads invalidate execution contexts mid-attempt; retry instead of aborting.
-        lastError = errorMessage(error);
+        // errorMessage is module-scope and cannot cross the serialized evaluate boundary.
+        lastError = error instanceof Error ? error.message : String(error);
         status = undefined;
       }
       const { promise: settleDelay, resolve: settleDone } = Promise.withResolvers<void>();
@@ -55,7 +61,7 @@ export async function clickPaneSurface(
       await settleDelay;
     }
     return { status, attempts, lastAttempt: attempts, lastError };
-  }, { port: options.port, testId: options.testId, scale, expectedStatus: options.expectedStatus });
+  }, { port: options.port, testId: options.testId, scale, expectedStatus: options.expectedStatus, width: desktopPaneWidth, height: desktopPaneHeight });
   if (options.expectedStatus !== undefined && result.status !== options.expectedStatus) {
     throw new Error(`source ${options.testId} click did not activate: ${JSON.stringify({ surface, scale, result })}`);
   }

@@ -5,8 +5,11 @@ import { MAX_ENCODED_DIMENSION, ViewportListSchema } from "./viewport.js";
 /** Composite background shared by recorded-video compositing and the overview PNG so both artifact families stay visually consistent. */
 export const DEFAULT_COMPOSITE_BACKGROUND = "#111318";
 
+/** Capture rates accepted for recordings; shared by the schema below and the runner's manifest verifier so the two cannot drift. */
+export const RECORDING_FPS_VALUES = [30, 60] as const;
+
 const RecordingInputSchema = z.strictObject({
-  fps: z.union([z.literal(30), z.literal(60)]).default(60),
+  fps: z.literal(RECORDING_FPS_VALUES).default(60),
   jpegQuality: z.number().int().min(0).max(100).default(85),
   compositeMaxSize: z
     .strictObject({

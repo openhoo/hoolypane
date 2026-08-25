@@ -35,15 +35,19 @@ describe("flow API", () => {
     await pending;
   });
 
+  it("refuses the next step when the runner signal is already aborted", async () => {
+    const events: unknown[] = [];
+    const screens = ["one"].map((id, index) => ({ id, viewport: VIEWPORT_PRESETS[index]!, page: {} as never }));
+    const context = createFlowContext(screens, (event) => events.push(event), AbortSignal.abort());
+    const error = await context.all("gone", async () => undefined).then(() => null, (e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toMatch(/Flow aborted before step: gone/);
+    expect(events).toEqual([]);
+  });
+
   it("serializes deterministic Playwright locators and actions", () => {
     expect(locatorExpression({ kind: "role", role: "button", name: "Save" })).toBe('page.getByRole("button", { name: "Save", exact: true })');
-    const envelope = ActionEnvelopeSchema.parse({
-      actionId: 7,
-      documentGeneration: 2,
-      sourcePaneId: "pane-1",
-      action: { kind: "fill", locator: { kind: "label", value: "Email" }, value: "a@example.test" },
-    });
-    expect(serializeFlow([envelope])).toContain('await page.getByLabel("Email", { exact: true }).fill("a@example.test");');
+    expect(serializeFlow([envelope({ kind: "fill", locator: { kind: "label", value: "Email" }, value: "a@example.test" })])).toContain('await page.getByLabel("Email", { exact: true }).fill("a@example.test");');
   });
 
   it("emits exact matching for every name-based locator kind", () => {

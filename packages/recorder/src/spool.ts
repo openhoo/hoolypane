@@ -4,7 +4,7 @@ import type { FileHandle } from "node:fs/promises";
 import { join, relative } from "node:path";
 import type { Writable } from "node:stream";
 import type { ViewportSpec } from "@hoolypane/contracts";
-import { writeFileAtomic } from "@hoolypane/contracts/fsync";
+import { ARTIFACT_MODE, writeFileAtomic } from "@hoolypane/contracts/fsync";
 import { asError, MAX_QUEUED_BYTES, MAX_QUEUED_FRAMES, timestampSecondsToUs, type RecorderFailure, type SourceFrame } from "./capture-contract.js";
 
 export interface ScreencastFrame {
@@ -22,11 +22,7 @@ interface SpoolIndex {
   maxQueuedBytes: number;
 }
 
-const ARTIFACT_MODE = 0o600;
 const DROP_NOTE_INTERVAL_MS = 1_000;
-
-/** Durable atomic write (temp sibling 0o600 -> fsync -> rename -> parent-dir fsync), single-sourced in contracts' node-only fsync subpath. */
-export { writeFileAtomic };
 
 async function sha256File(path: string): Promise<string> {
   const handle = await fs.open(path, "r");
@@ -55,11 +51,10 @@ export async function certifyArtifact(outputDir: string, directoryName: string, 
 }
 
 /** Best-effort collection: missing directories and unreadable entries are skipped instead of failing the manifest. */
-export async function collectDirectoryArtifacts(outputDir: string, directoryName: string, artifacts: Record<string, string>, hashes: Record<string, string>, filter?: (name: string) => boolean): Promise<void> {
+export async function collectDirectoryArtifacts(outputDir: string, directoryName: string, artifacts: Record<string, string>, hashes: Record<string, string>): Promise<void> {
   let names: string[];
   try { names = await fs.readdir(join(outputDir, directoryName)); } catch { return; }
   for (const name of names) {
-    if (filter && !filter(name)) continue;
     try {
       await certifyArtifact(outputDir, directoryName, name, artifacts, hashes);
     } catch { continue; }

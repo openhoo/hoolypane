@@ -68,6 +68,12 @@ export const RECORDABLE_PRESS_KEYS = ["Enter", "Escape", "Tab"] as const;
 
 /** Fill-input debounce in the pane preload; record-stop's flush settle derives from it and must stay strictly larger so debounced fills land inside the barrier. */
 export const FILL_DEBOUNCE_MS = 300;
+
+/** Replay confirmation deadline in main: it bounds the pane preload's suppression-entry lifetime —
+ *  the entry's cleanup only fires when main rejects the waiter, so the pane preload's documented
+ *  confirm-timeout behavior (outOfSync although the toggle landed) depends on this exact bound.
+ *  Change it together with those docs. */
+export const REPLAY_RESULT_TIMEOUT_MS = 5_000;
 const REPLAY_PHASES = ["resolve", "apply-dom", "end"] as const;
 /** Result phases are the request phases plus the terminal confirmation echo. */
 export const REPLAY_RESULT_PHASES = [...REPLAY_PHASES, "confirm"] as const;

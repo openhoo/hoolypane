@@ -5,6 +5,11 @@ export function isAllowedProtocol(url: string): boolean {
   try { return ALLOWED_PROTOCOLS.has(new URL(url).protocol); } catch { return false; }
 }
 
+/** Strips userinfo in place so typed credentials never persist into URLs or leak into failure messages. */
+export function stripUrlCredentials(url: URL): void {
+  if (url.username || url.password) { url.username = ""; url.password = ""; }
+}
+
 export function normalizeUrl(input: string): string {
   const value = input.trim();
   if (!value) throw new Error("URL must not be empty");
@@ -22,8 +27,8 @@ export function normalizeUrl(input: string): string {
   let parsed: URL;
   try { parsed = new URL(candidate); } catch { throw new Error("Invalid URL"); }
   if (!ALLOWED_PROTOCOLS.has(parsed.protocol)) throw new Error("Only http and https URLs are allowed");
-  // Normalized URLs persist into workspace state (sharedUrl, per-pane urls, workspace.json):
-  // strip userinfo so typed credentials never survive, matching redactUrlForMessage.
-  if (parsed.username || parsed.password) { parsed.username = ""; parsed.password = ""; }
+  // Normalized URLs persist into workspace state (sharedUrl, per-pane urls, workspace.json);
+  // strip userinfo so typed credentials never survive.
+  stripUrlCredentials(parsed);
   return parsed.toString();
 }

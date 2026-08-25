@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { errorMessage } from "@hoolypane/contracts";
-import { CHILD_GRACE_MS, type TrackGeometry } from "./capture-contract.js";
+import { CHILD_GRACE_MS, COMPOSITE_VIDEO_NAME, trackVideoName, type TrackGeometry } from "./capture-contract.js";
 import { resolveEncoders } from "./encoder.js";
 import { certifyArtifact } from "./spool.js";
 
@@ -92,50 +92,57 @@ function idealPtsTicks(timeBase: string, fps: 30 | 60, durationFrames: number): 
   });
 }
 
+function assertArtifactSet(names: readonly string[], expected?: ExpectedArtifacts): void {
+  if (!expected) return;
+  const expectedNames = [...expected.tracks.map((track) => trackVideoName(track.id)), COMPOSITE_VIDEO_NAME].sort();
+  if (names.join("\u0000") !== expectedNames.join("\u0000")) {
+    throw new Error(`artifact set mismatch: expected ${expectedNames.join(", ")}, found ${names.join(", ")}`);
+  }
+}
+
+function assertConstantFrameRate(names: readonly string[], probed: readonly { stream: ProbeStream; packets: readonly ProbePacket[] }[], fps: 30 | 60, durationFrames: number): void {
+  const vectors = probed.map(({ stream, packets }, index) => {
+    if (packets.length !== durationFrames) throw new Error(`${names[index]}: packet frame count mismatch (${packets.length} probed, ${durationFrames} expected)`);
+    return exactPtsVector(stream, packets, fps);
+  });
+  const idealTicks = idealPtsTicks(probed[0]!.stream.time_base!, fps, durationFrames);
+  for (const [trackIndex, ticks] of vectors.entries()) {
+    for (let index = 0; index < ticks.length; index += 1) {
+      if (ticks[index] !== idealTicks[index]) {
+        throw new Error(`${names[trackIndex]}: packet ${index} pts ${ticks[index]} deviates from the ${fps} fps constant-frame-rate timeline (${idealTicks[index]} ticks)`);
+      }
+    }
+  }
+}
+
+function assertGeometry(geometry: readonly { file: string; width: number; height: number }[], expected: ExpectedArtifacts): void {
+  for (const track of expected.tracks) {
+    const entry = geometry.find((item) => item.file === trackVideoName(track.id))!;
+    if (entry.width !== track.encodedWidth || entry.height !== track.encodedHeight) {
+      throw new Error(`${entry.file} geometry ${entry.width}x${entry.height} differs from expected ${track.encodedWidth}x${track.encodedHeight}`);
+    }
+  }
+  const composite = geometry.find((item) => item.file === COMPOSITE_VIDEO_NAME)!;
+  if (composite.width !== expected.composite.width || composite.height !== expected.composite.height) {
+    throw new Error(`composite.webm geometry ${composite.width}x${composite.height} differs from expected ${expected.composite.width}x${expected.composite.height}`);
+  }
+}
+
 export async function verifyArtifacts(outputDir: string, fps: 30 | 60, durationFrames: number, expected?: ExpectedArtifacts): Promise<VerificationResult> {
   try {
     const encoders = await resolveEncoders();
     const names = (await readdir(join(outputDir, "videos"))).filter((file) => file.endsWith(".webm")).sort();
     if (names.length === 0) throw new Error("no encoded WebM artifacts");
-    if (expected) {
-      const expectedNames = [...expected.tracks.map((track) => `${track.id}.webm`), "composite.webm"].sort();
-      if (names.join("\u0000") !== expectedNames.join("\u0000")) {
-        throw new Error(`artifact set mismatch: expected ${expectedNames.join(", ")}, found ${names.join(", ")}`);
-      }
-    }
+    assertArtifactSet(names, expected);
     const probed = await Promise.all(names.map((name) => probe(encoders.ffprobe, join(outputDir, "videos", name))));
-    const vectors = probed.map(({ stream, packets }) => {
-      if (packets.length !== durationFrames) throw new Error("packet frame count mismatch");
-      return exactPtsVector(stream, packets, fps);
-    });
-    const idealTicks = idealPtsTicks(probed[0]!.stream.time_base!, fps, durationFrames);
-    for (const ticks of vectors) {
-      for (let index = 0; index < ticks.length; index += 1) {
-        if (ticks[index] !== idealTicks[index]) {
-          throw new Error(`packet ${index} pts ${ticks[index]} deviates from the ${fps} fps constant-frame-rate timeline (${idealTicks[index]} ticks)`);
-        }
-      }
-    }
+    assertConstantFrameRate(names, probed, fps, durationFrames);
     const geometry = probed.map(({ stream }, index) => {
       if (stream.width === undefined || stream.height === undefined || stream.width <= 0 || stream.height <= 0) {
         throw new Error(`ffprobe returned no dimensions for ${names[index]}`);
       }
       return { file: names[index]!, width: stream.width, height: stream.height };
     });
-    if (expected) {
-      for (const track of expected.tracks) {
-        const entry = geometry.find((item) => item.file === `${track.id}.webm`);
-        if (!entry) throw new Error(`missing encoded track ${track.id}.webm`);
-        if (entry.width !== track.encodedWidth || entry.height !== track.encodedHeight) {
-          throw new Error(`${entry.file} geometry ${entry.width}x${entry.height} differs from expected ${track.encodedWidth}x${track.encodedHeight}`);
-        }
-      }
-      const composite = geometry.find((item) => item.file === "composite.webm");
-      if (!composite) throw new Error("missing encoded composite.webm");
-      if (composite.width !== expected.composite.width || composite.height !== expected.composite.height) {
-        throw new Error(`composite.webm geometry ${composite.width}x${composite.height} differs from expected ${expected.composite.width}x${expected.composite.height}`);
-      }
-    }
+    if (expected) assertGeometry(geometry, expected);
     const artifacts: Record<string, string> = {};
     const hashes: Record<string, string> = {};
     for (const name of names) await certifyArtifact(outputDir, "videos", name, artifacts, hashes);

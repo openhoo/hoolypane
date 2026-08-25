@@ -5,7 +5,7 @@ import { join } from "node:path";
 import ffmpegStaticPath from "ffmpeg-static";
 import ffprobeStatic from "ffprobe-static";
 import { errorMessage } from "@hoolypane/contracts";
-import { asError, CHILD_GRACE_MS, compositeGeometry, type CompositeGeometry, type SlotMapping, type TrackGeometry } from "./capture-contract.js";
+import { asError, CHILD_GRACE_MS, COMPOSITE_VIDEO_NAME, compositeGeometry, trackVideoName, type CompositeGeometry, type SlotMapping, type TrackGeometry } from "./capture-contract.js";
 import type { FrameSpool } from "./spool.js";
 
 interface EncoderPaths { readonly ffmpeg: string; readonly ffprobe: string }
@@ -77,8 +77,8 @@ export async function encodeAligned(
   await mkdir(join(outputDir, "videos"), { recursive: true });
   const paths = await resolveEncoders();
   const geometry = compositeGeometry(tracks.map((track) => track.geometry), recording.compositeMaxSize);
-  const videos = tracks.map((track) => join(outputDir, "videos", `${track.id}.webm`));
-  const composite = join(outputDir, "videos", "composite.webm");
+  const videos = tracks.map((track) => join(outputDir, "videos", trackVideoName(track.id)));
+  const composite = join(outputDir, "videos", COMPOSITE_VIDEO_NAME);
   const args: string[] = ["-hide_banner", "-loglevel", "error", "-y", "-nostdin"];
   for (let index = 0; index < tracks.length; index += 1) {
     args.push("-probesize", "32", "-analyzeduration", "0", "-c:v", "mjpeg", "-f", "image2pipe", "-framerate", String(fps), "-i", `pipe:${index + 3}`);
@@ -97,9 +97,12 @@ export async function encodeAligned(
   child.once("error", completion.reject);
   child.once("close", (code: number | null) => code === 0 ? completion.resolve() : completion.reject(new Error(`ffmpeg ${paths.ffmpeg} exited ${code}: ${stderr}`)));
   let spawnError: Error | undefined;
-  completion.promise.catch((error: unknown) => {
+  child.once("error", (error: Error) => {
     spawnError ??= asError(error);
   });
+  // Sink early exit/close rejections raised while the frame-write loop below has not yet reached an
+  // await of completion.promise; spawn errors are captured by the listener above instead.
+  completion.promise.catch(() => undefined);
   const pipes = tracks.map((_track, index) => {
     const pipe = child.stdio[index + 3];
     if (!pipe || !("write" in pipe)) throw new Error(`ffmpeg input pipe ${index} unavailable`);

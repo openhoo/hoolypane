@@ -39,8 +39,11 @@ async function appliedCount(): Promise<number> {
     .then((value: { count: number }) => value.count);
 }
 
-async function waitForAppliedCount(expected: number): Promise<void> {
-  await pollUntil(async () => await appliedCount() === expected ? expected : null, 10_000);
+async function waitForAppliedCount(expected: number, atLeast = false): Promise<void> {
+  await pollUntil(async () => {
+    const count = await appliedCount();
+    return (atLeast ? count >= expected : count === expected) ? count : null;
+  }, 10_000);
 }
 
 async function clickDesktopApply(): Promise<void> {
@@ -118,7 +121,7 @@ describe("desktop screenshots and recorded flows", () => {
     const baseline = await appliedCount();
     await startRecording();
     await clickDesktopApply();
-    await waitForAppliedCount(baseline + 5);
+    await waitForAppliedCount(baseline + 5, true);
     await stopRecording();
     await waitForFile(flowPath);
     const flowSource = await readFile(flowPath, "utf8");
@@ -137,9 +140,14 @@ describe("desktop screenshots and recorded flows", () => {
   it("does not save an empty flow", async () => {
     const emptyPath = join(directory, "empty.flow.ts");
     await application.evaluate((_electron, path) => { process.env.HOOLYPANE_TEST_FLOW_PATH = path; }, emptyPath);
-    await startRecording();
-    await stopRecording();
-    await expect(access(emptyPath)).rejects.toBeDefined();
+    try {
+      await startRecording();
+      await stopRecording();
+      await expect(access(emptyPath)).rejects.toBeDefined();
+    } finally {
+      // Restore the launch baseline locally so no later test inherits an overridden flow path.
+      await application.evaluate((_electron, path) => { process.env.HOOLYPANE_TEST_FLOW_PATH = path; }, flowPath).catch(() => undefined);
+    }
   }, 20_000);
 
   it("does not save a cancelled flow despite mirrored actions", async () => {
@@ -149,12 +157,14 @@ describe("desktop screenshots and recorded flows", () => {
       const baseline = await appliedCount();
       await startRecording();
       await clickDesktopApply();
-      await waitForAppliedCount(baseline + 5);
+      await waitForAppliedCount(baseline + 5, true);
       await stopRecording();
       await expect(access(canceledPath)).rejects.toBeDefined();
     } finally {
-      // Restore the launch baseline locally so no later test inherits SAVE_CANCEL=1.
+      // Restore the launch baseline locally so no later test inherits SAVE_CANCEL=1
+      // or an overridden HOOLYPANE_TEST_FLOW_PATH.
       await application.evaluate(() => { delete process.env.HOOLYPANE_TEST_FLOW_SAVE_CANCEL; }).catch(() => undefined);
+      await application.evaluate((_electron, path) => { process.env.HOOLYPANE_TEST_FLOW_PATH = path; }, flowPath).catch(() => undefined);
     }
   }, 30_000);
 

@@ -28,9 +28,8 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test:unit
       - run: pnpm test:runner
-      - run: pnpm build
-      - run: xvfb-run -a pnpm test:desktop
-      - run: env -u DBUS_SESSION_BUS_ADDRESS -u WAYLAND_DISPLAY LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a pnpm benchmark:desktop
+      - run: pnpm test:desktop:xvfb
+      - run: pnpm benchmark:desktop:xvfb
       - run: pnpm benchmark:recording
       - run: pnpm pack:runner
 

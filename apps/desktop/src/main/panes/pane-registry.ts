@@ -3,8 +3,16 @@ import { BrowserWindow, session, type Session, type WebContents, WebContentsView
 import { DEFAULT_SHARED_URL, IPC_CHANNELS, PaneGenerationSchema, ViewportSpecSchema, errorMessage, type Action, type BoundsSnapshot, type ColorSchemeMode, type OverlayKey, type ThrottlingMode, type ViewportSpec } from "@hoolypane/contracts";
 import { report } from "../report.js";
 import { displayScale, validateBoundsSnapshot, type Bounds } from "./layout.js";
-import { isAllowedProtocol, normalizeUrl } from "./url.js";
+import { isAllowedProtocol, normalizeUrl, stripUrlCredentials } from "./url.js";
 import { addPane, closePane, defaultWorkspace, hasPane, removePane, rotatePane, uniquePaneId, updatePane, type PaneState, type WorkspaceState } from "./workspace.js";
+
+// One persisted session backs every pane view; a single constant keeps installSessionSecurity and
+// view creation on the same partition string.
+const PANE_PARTITION = "persist:hoolypane";
+
+// Hardening handlers register once per session: session.fromPartition returns the same Session for
+// the process lifetime, so registering per PaneRegistry stacks a will-download listener on every reopen.
+const hardenedSessions = new WeakSet<Session>();
 
 type PaneFailure = { paneId: string; message: string };
 type PaneRecord = { id: string; view: WebContentsView; lastBounds?: Bounds; debuggerAttached: boolean; networkEmulationReady: boolean; initialized: boolean; documentGeneration: number; overlayCssKeys: Partial<Record<OverlayKey, string>>; creationEpoch: number; settingsChain?: Promise<void> };
@@ -17,8 +25,7 @@ function redactUrlForMessage(value: string): string {
   if (!value) return value;
   try {
     const url = new URL(value);
-    url.username = "";
-    url.password = "";
+    stripUrlCredentials(url);
     url.search = "";
     url.hash = "";
     return url.toString();
@@ -45,7 +52,7 @@ export class PaneRegistry {
     this.workspace = options.workspace ?? defaultWorkspace();
     this.onChange = options.onChange;
     this.onFailure = options.onFailure;
-    this.paneSession = session.fromPartition("persist:hoolypane");
+    this.paneSession = session.fromPartition(PANE_PARTITION);
     this.installSessionSecurity();
   }
 
@@ -82,7 +89,7 @@ export class PaneRegistry {
     const id = paneId ?? uniquePaneId(new Set([...this.workspace.order, ...this.panes.keys()]), valid.id);
     if (this.panes.has(id)) throw new Error(`pane already exists: ${id}`);
     if (!this.window) throw new Error("pane registry has no window");
-    const view = new WebContentsView({ webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, partition: "persist:hoolypane", preload: this.panePreloadPath() } });
+    const view = new WebContentsView({ webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, partition: PANE_PARTITION, preload: this.panePreloadPath() } });
     view.webContents.setBackgroundThrottling(false);
     const preexistingEntry = this.workspace.panes.find((pane) => pane.id === id);
     // Track whether this call introduced the workspace entry: rollback must stay symmetric and
@@ -90,7 +97,7 @@ export class PaneRegistry {
     const record: PaneRecord = { id, view, debuggerAttached: false, networkEmulationReady: false, initialized: false, documentGeneration: this.documentEpoch, overlayCssKeys: {}, creationEpoch: nextCreationEpoch++ };
     this.panes.set(id, record);
     this.window.contentView.addChildView(view);
-    this.workspace = preexistingEntry ? this.workspace : addPane(this.workspace, valid, this.workspace.sharedUrl, id);
+    this.workspace = preexistingEntry ? this.workspace : addPane(this.workspace, valid, undefined, id);
     this.emitChange();
     try {
       await view.webContents.loadURL("about:blank");
@@ -325,6 +332,8 @@ export class PaneRegistry {
   }
 
   private installSessionSecurity(): void {
+    if (hardenedSessions.has(this.paneSession)) return;
+    hardenedSessions.add(this.paneSession);
     this.paneSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
     this.paneSession.setPermissionCheckHandler(() => false);
     this.paneSession.on("will-download", (_event, item) => item.cancel());

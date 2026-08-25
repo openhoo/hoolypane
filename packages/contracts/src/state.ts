@@ -18,17 +18,13 @@ export type ThrottlingMode = z.infer<typeof ThrottlingModeSchema>;
 export const OverlayKeySchema = z.enum(["outlines", "disableImages", "showRoles"]);
 export type OverlayKey = z.infer<typeof OverlayKeySchema>;
 
-const EmulationOverlaysSchema = z.strictObject({
-  outlines: z.boolean().default(false),
-  disableImages: z.boolean().default(false),
-  showRoles: z.boolean().default(false),
-});
+const EmulationOverlaysSchema = z.record(OverlayKeySchema, z.boolean().default(false));
 /** Global emulation and debug-overlay settings applied to every pane via CDP; every key defaults so legacy workspaces load unchanged. */
 const EmulationSettingsSchema = z.strictObject({
   colorScheme: ColorSchemeModeSchema.default("auto"),
   reducedMotion: z.boolean().default(false),
   throttling: ThrottlingModeSchema.default("none"),
-  overlays: EmulationOverlaysSchema.prefault({}),
+  overlays: EmulationOverlaysSchema.prefault({} as Record<OverlayKey, boolean | undefined>),
 });
 export type EmulationSettings = z.infer<typeof EmulationSettingsSchema>;
 

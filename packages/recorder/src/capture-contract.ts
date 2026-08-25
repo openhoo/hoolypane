@@ -29,6 +29,13 @@ const NEXT_STATES: Readonly<Record<RecordingState, readonly RecordingState[]>> =
 export interface SourceFrame { readonly offset: number; readonly length: number; readonly sequence: number; readonly width: number; readonly height: number; readonly timestampUs: number }
 export interface SlotMapping { readonly slot: number; readonly targetTimestampUs: number; readonly sourceSequence: number; readonly sourceTimestampUs: number; readonly held: boolean }
 export interface TrackGeometry { readonly id: string; readonly encodedWidth: number; readonly encodedHeight: number }
+
+// Encoded video artifact names under `<outputDir>/videos`: each track file is keyed by viewport id
+// and the grid composite reserves the id "composite"; encoder outputs and verifier expectations
+// must share these exact names.
+export function trackVideoName(id: string): string { return `${id}.webm`; }
+export const COMPOSITE_VIDEO_NAME = "composite.webm";
+
 export interface CompositeGeometry { readonly columns: number; readonly rows: number; readonly tileWidth: number; readonly tileHeight: number; readonly unscaledWidth: number; readonly unscaledHeight: number; readonly outputWidth: number; readonly outputHeight: number }
 export interface RecorderFailure { readonly message: string; readonly viewportId?: string; readonly stack?: string }
 

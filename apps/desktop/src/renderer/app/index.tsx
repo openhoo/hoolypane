@@ -35,6 +35,43 @@ function nearestSnap(pre: number, extent: number, candidates: readonly number[])
   return best;
 }
 
+/** Pure free-drag placement: padded-domain clamp, one nearest-edge snap per axis, then the post-snap re-clamp. */
+function snappedDragPosition(
+  paneId: string,
+  pointerX: number,
+  pointerY: number,
+  offsetX: number,
+  offsetY: number,
+  tiles: ReadonlyMap<string, PaneTile>,
+  width: number,
+  height: number,
+): { x: number; y: number; guideX: number | null; guideY: number | null } {
+  const dragged = tiles.get(paneId);
+  const cardWidth = dragged?.width ?? 0;
+  const cardHeight = dragged?.height ?? 0;
+  let x = clampPanePosition(Math.round(pointerX - offsetX), width, cardWidth);
+  let y = clampPanePosition(Math.round(pointerY - offsetY), height, cardHeight);
+  // Automatic alignment: snap the dragged card's edges to sibling edges within SNAP_PX.
+  // Exactly ONE candidate per axis wins — the nearest edge match judged against the PRE-snap
+  // value — so matches can no longer compound last-match-wins style.
+  const snapXs: number[] = [LAYOUT_PADDING, width - LAYOUT_PADDING - cardWidth];
+  const snapYs: number[] = [LAYOUT_PADDING, height - LAYOUT_PADDING - cardHeight];
+  for (const sibling of tiles.values()) {
+    if (sibling.id === paneId || sibling.hidden) continue;
+    snapXs.push(sibling.x, sibling.x + sibling.width);
+    snapYs.push(sibling.y, sibling.y + sibling.height);
+  }
+  const snappedX = nearestSnap(x, cardWidth, snapXs);
+  const snappedY = nearestSnap(y, cardHeight, snapYs);
+  if (snappedX) x = snappedX.value;
+  if (snappedY) y = snappedY.value;
+  // Post-snap re-clamp through the same padded clamp as restore/keyboard so committed drag
+  // positions round-trip without restoreFreePositions rewriting them on next launch.
+  x = clampPanePosition(x, width, cardWidth);
+  y = clampPanePosition(y, height, cardHeight);
+  return { x, y, guideX: snappedX?.guide ?? null, guideY: snappedY?.guide ?? null };
+}
+
 function useAddressState(initialUrl: string, send: SendCommand) {
   const [address, setAddress] = useState(initialUrl);
   const latestSharedUrl = useRef(initialUrl);
@@ -229,7 +266,6 @@ function usePaneGestures(
   tiles: Map<string, PaneTile>,
   layout: ChromeState["layout"],
   workspaceRef: RefBox<HTMLElement | null>,
-  workspaceSizeRef: RefBox<{ width: number; height: number }>,
   requestEmit: RefBox<() => void>,
 ) {
   const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null);
@@ -268,35 +304,11 @@ function usePaneGestures(
       const currentTiles = tilesRef.current;
       // The workspace extent is re-read every frame so resizes mid-drag are honored;
       // clientWidth/clientHeight is the single metric source (no border-box mix).
-      const width = workspaceRef.current?.clientWidth ?? workspaceSizeRef.current.width;
-      const height = workspaceRef.current?.clientHeight ?? workspaceSizeRef.current.height;
-      const dragged = currentTiles.get(paneId);
-      const cardWidth = dragged?.width ?? 0;
-      const cardHeight = dragged?.height ?? 0;
-      let x = clampPanePosition(Math.round(moveEvent.clientX - offsetX), width, cardWidth);
-      let y = clampPanePosition(Math.round(moveEvent.clientY - offsetY), height, cardHeight);
-      // Automatic alignment: snap the dragged card's edges to sibling edges within SNAP_PX.
-      // Exactly ONE candidate per axis wins — the nearest edge match judged against the PRE-snap
-      // value — so matches can no longer compound last-match-wins style.
-      const snapXs: number[] = [LAYOUT_PADDING, width - LAYOUT_PADDING - cardWidth];
-      const snapYs: number[] = [LAYOUT_PADDING, height - LAYOUT_PADDING - cardHeight];
-      for (const sibling of currentTiles.values()) {
-        if (sibling.id === paneId || sibling.hidden) continue;
-        snapXs.push(sibling.x, sibling.x + sibling.width);
-        snapYs.push(sibling.y, sibling.y + sibling.height);
-      }
-      const snappedX = nearestSnap(x, cardWidth, snapXs);
-      const snappedY = nearestSnap(y, cardHeight, snapYs);
-      if (snappedX) x = snappedX.value;
-      if (snappedY) y = snappedY.value;
-      // Post-snap re-clamp through the same padded clamp as restore/keyboard so committed drag
-      // positions round-trip without restoreFreePositions rewriting them on next launch.
-      x = clampPanePosition(x, width, cardWidth);
-      y = clampPanePosition(y, height, cardHeight);
-      const gx = snappedX?.guide ?? null;
-      const gy = snappedY?.guide ?? null;
-      setGuides((prev) => (prev.x === gx && prev.y === gy ? prev : { x: gx, y: gy }));
-      setDrag((prev) => (prev !== null && prev.id === paneId && prev.x === x && prev.y === y ? prev : { id: paneId, x, y }));
+      const width = workspaceRef.current?.clientWidth ?? 0;
+      const height = workspaceRef.current?.clientHeight ?? 0;
+      const placed = snappedDragPosition(paneId, moveEvent.clientX, moveEvent.clientY, offsetX, offsetY, currentTiles, width, height);
+      setGuides((prev) => (prev.x === placed.guideX && prev.y === placed.guideY ? prev : { x: placed.guideX, y: placed.guideY }));
+      setDrag((prev) => (prev !== null && prev.id === paneId && prev.x === placed.x && prev.y === placed.y ? prev : { id: paneId, x: placed.x, y: placed.y }));
       // The native WebContentsView follows the card only when main receives fresh bounds.
       // requestEmit coalesces via snapshotPending: at most one IPC per animation frame.
       requestEmit.current();
@@ -509,7 +521,6 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
     tiles,
     state.layout,
     workspaceRef,
-    workspaceSizeRef,
     requestEmit,
   );
   useBoundsEmission(

@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { hrtime } from "node:process";
 import { errorMessage, type ResolvedRecordingConfig, type ViewportSpec, type FlowEvent } from "@hoolypane/contracts";
+import { writeFileAtomic } from "@hoolypane/contracts/fsync";
 import {
   alignFrames,
   asError,
@@ -20,7 +21,7 @@ import {
   type TrackGeometry,
 } from "./capture-contract.js";
 import { encodeAligned, type EncodingResult } from "./encoder.js";
-import { CaptureSpool, collectDirectoryArtifacts, decodeScreencastData, frameMetadata, writeFileAtomic, type CaptureTarget, type FrameSpool, type ScreencastFrame } from "./spool.js";
+import { CaptureSpool, collectDirectoryArtifacts, decodeScreencastData, frameMetadata, type CaptureTarget, type FrameSpool, type ScreencastFrame } from "./spool.js";
 import { verifyArtifacts } from "./verifier.js";
 
 export type { RecorderFailure };
@@ -94,6 +95,10 @@ function serializeRunState(runId: string, state: RecordingState, contract: typeo
   return `${JSON.stringify({ runId, state, contract }, null, 2)}\n`;
 }
 
+// The manifest certifies this exact filename against transition()'s persisted bytes; writeRunState,
+// start()'s stale-output sweep, and writeFinalManifest must all share it.
+const RUN_STATE_FILE = "run-state.json";
+
 export class RecordingSession {
   private state: RecordingState = "awaiting-initial-frames";
   private readonly spools = new CaptureSpool();
@@ -111,7 +116,7 @@ export class RecordingSession {
 
 
   private async writeRunState(): Promise<void> {
-    await writeFileAtomic(join(this.options.outputDir, "run-state.json"), serializeRunState(this.runId, this.state, this.t0Us === undefined ? null : CAPTURE_CONTRACT));
+    await writeFileAtomic(join(this.options.outputDir, RUN_STATE_FILE), serializeRunState(this.runId, this.state, this.t0Us === undefined ? null : CAPTURE_CONTRACT));
   }
 
   private async transition(next: RecordingState): Promise<void> {
@@ -128,7 +133,7 @@ export class RecordingSession {
     // A rerun into the same outputDir must never inherit artifacts from a previous run.
     await Promise.all([
       ...["videos", "traces", "raw"].map((entry) => fs.rm(join(this.options.outputDir, entry), { recursive: true, force: true })),
-      ...["manifest.json", "diagnostics.json", "run-state.json"].map((file) => fs.rm(join(this.options.outputDir, file), { force: true })),
+      ...["manifest.json", "diagnostics.json", RUN_STATE_FILE].map((file) => fs.rm(join(this.options.outputDir, file), { force: true })),
     ]);
     await this.spools.create(targets, join(this.options.outputDir, "raw"));
     try {
@@ -270,14 +275,7 @@ export class RecordingSession {
           status: input.status,
           pipelineErrorMessage: `finalize pipeline failed: ${errorMessage(error)}`,
         };
-        if (manifestOnDisk && !manifestWritten) {
-          // The manifest landed but the terminal transition did not complete: unlink it so a failed
-          // exit cannot leave a success manifest certifying artifacts pruned below.
-          try {
-            await fs.unlink(manifestPath);
-          } catch { /* the original error takes precedence */ }
-        }
-        if (!manifestWritten) await this.pruneFailedArtifacts();
+        await this.discardPartialRun(manifestPath, manifestOnDisk, manifestWritten);
         throw error;
       }
     } finally {
@@ -302,15 +300,42 @@ export class RecordingSession {
     }
   }
 
+  private async discardPartialRun(manifestPath: string, manifestOnDisk: boolean, manifestWritten: boolean): Promise<void> {
+    if (manifestOnDisk && !manifestWritten) {
+      // The manifest landed but the terminal transition did not complete: unlink it so a failed
+      // exit cannot leave a success manifest certifying artifacts pruned below.
+      try {
+        await fs.unlink(manifestPath);
+      } catch { /* the original error takes precedence */ }
+    }
+    if (!manifestWritten) await this.pruneFailedArtifacts();
+  }
+
   private async finalizeWithoutFrames(input: FinalizeInput): Promise<{ readonly kind: "diagnostics"; readonly diagnosticsPath: string }> {
     await fs.mkdir(this.options.outputDir, { recursive: true });
     if (this.state !== "failed") await this.transition("failed");
     await this.stopCapture();
     const spoolNotes = this.contexts.flatMap((context) => [...context.spool.drainFailureNotes()]);
     const diagnosticsPath = join(this.options.outputDir, "diagnostics.json");
-    await atomicJson(diagnosticsPath, { contract: null, status: input.status, failures: [...input.failures, ...spoolNotes, ...this.captureCloseFailures] });
+    await atomicJson(diagnosticsPath, {
+      contract: null,
+      status: input.status,
+      failures: [
+        ...input.failures,
+        ...spoolNotes,
+        ...this.captureEndedEarlyFailures(),
+        ...this.captureCloseFailures,
+      ],
+    });
     await this.pruneFailedArtifacts();
     return { kind: "diagnostics", diagnosticsPath };
+  }
+
+  /** Shared per-context mapping so both diagnostics paths surface sibling panes' capture errors with viewport attribution. */
+  private captureEndedEarlyFailures(): readonly RecorderFailure[] {
+    return this.contexts
+      .filter((context) => context.captureError)
+      .map((context) => ({ message: `capture ended early: ${context.captureError!.message}`, viewportId: context.target.id }));
   }
 
   /** post-roll → stopping → aligning → encoding → validating; aborts and validation failures throw into finalize's catch. */
@@ -324,12 +349,7 @@ export class RecordingSession {
     input.signal?.throwIfAborted();
     await this.transition("aligning");
     const durationFrames = durationFrameCount(this.t0Us!, t1Us, this.options.recording.fps);
-    const captureFailures = [
-      ...this.contexts
-        .filter((context) => context.captureError)
-        .map((context) => ({ message: `capture ended early: ${context.captureError!.message}`, viewportId: context.target.id })),
-      ...this.captureCloseFailures,
-    ];
+    const captureFailures = [...this.captureEndedEarlyFailures(), ...this.captureCloseFailures];
     this.spoolFailureNotes = this.contexts.flatMap((context) => [...context.spool.drainFailureNotes()]);
     const aligned = this.contexts.map((context): AlignedCapture => {
       const result = alignFrames(context.spool.index.frames, this.t0Us!, durationFrames, this.options.recording.fps);
@@ -395,14 +415,14 @@ export class RecordingSession {
   }
 
   private async writeFinalManifest(manifestPath: string, manifest: RecordingManifest): Promise<RecordingManifest> {
-    const stateKey = "run-state.json";
+    const stateKey = RUN_STATE_FILE;
     // The terminal run-state write follows the manifest write: if the manifest fails to land,
     // the catch guard must still be able to mark the run failed instead of leaving a permanent
     // false "complete" record behind (see pruneFailedArtifacts contract). The manifest certifies
     // run-state.json, so hash the exact bytes transition("complete") persists below.
     const finalManifest: RecordingManifest = {
       ...manifest,
-      artifacts: { ...manifest.artifacts, "run-state.json": stateKey },
+      artifacts: { ...manifest.artifacts, [RUN_STATE_FILE]: stateKey },
       sha256: { ...manifest.sha256, [stateKey]: createHash("sha256").update(serializeRunState(this.runId, "complete", CAPTURE_CONTRACT)).digest("hex") },
     };
     await this.pruneRawBins();

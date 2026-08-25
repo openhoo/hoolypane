@@ -200,7 +200,7 @@ export function Toolbar({
           >
             Overlays
           </summary>
-          <div class="absolute right-0 top-9 z-40 flex w-36 flex-col rounded-lg border border-edge bg-elevated p-1 shadow-xl">
+          <div role="menu" aria-label="Overlays" class="absolute right-0 top-9 z-40 flex w-36 flex-col rounded-lg border border-edge bg-elevated p-1 shadow-xl">
             {OVERLAY_ITEMS.map((item) => (
               <button
                 key={item.key}
@@ -339,7 +339,7 @@ export const PaneCard = memo(function PaneCard({
     <article
       style={placement ? { position: "absolute", left: placement.x, top: placement.y, width: placement.width, height: placement.height } : undefined}
       class={`pane-card @container relative flex min-w-0 select-none flex-col overflow-hidden rounded-xl border shadow-xl shadow-black/30 transition-shadow ${
-        focused ? "focused ring-2 ring-accent ring-offset-0" : ""
+        focused ? "focused ring-2 ring-accent" : ""
       } ${dragging ? "z-30 scale-[1.01] border-accent/60 shadow-black/50" : ""} ${hidden ? "hidden" : dragging ? "" : "border-edge ring-1 ring-white/[0.04] hover:border-accent/40"}`}
     >
       {pane.loading && (

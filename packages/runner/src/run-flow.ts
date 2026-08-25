@@ -99,6 +99,168 @@ async function evaluateModule(path: string, deadlineMs: number, source: string):
   }
 }
 
+// Shared coordination state threaded through the runFlow phase helpers below: one explicit
+// owner per interrupt/teardown flag instead of a dozen closures over the same locals.
+interface FlowRunState {
+  browser?: Browser | undefined;
+  recorder?: RecordingSession | undefined;
+  readonly contexts: BrowserContext[];
+  interrupted: boolean;
+  signalDeadline?: ReturnType<typeof setTimeout>;
+  // Cooperative cancellation for the user flow itself: createFlowContext checks this between steps.
+  readonly flowAbort: AbortController;
+  readonly signal: PromiseWithResolvers<void>;
+  readonly initialFramesAbort: AbortController;
+  readonly flowEvents: FlowEvent[];
+  // Snapshotted when the race ends early so post-interrupt event pushes cannot pollute finalize.
+  finalizedEvents: FlowEvent[];
+  recorderFinalized: boolean;
+  manifestFailed: boolean;
+  traceFailed: boolean;
+  tracesStopped: boolean;
+  flowError: unknown;
+  flowFailed: boolean;
+  timedOut: boolean;
+  outcomeDecided: boolean;
+}
+
+type Screen = { id: string; viewport: ViewportSpec; page: Page };
+
+function armSignals(state: FlowRunState): () => void {
+  const onSignal = (): void => {
+    // A second SIGINT/SIGTERM means "stop now": bypass graceful teardown like the force timer below.
+    if (state.interrupted) process.exit(130);
+    state.interrupted = true;
+    state.flowAbort.abort();
+    state.signal.resolve();
+    state.signalDeadline = setTimeout(() => process.exit(130), 10_000);
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  return onSignal;
+}
+
+async function evaluateAndParseConfig(args: RunArguments, flowPath: string, configPath: string, flowCompiled: CompiledModule, configCompiled: CompiledModule): Promise<{ config: ResolvedHoolypaneConfig; flow: FlowDefinition; outputDir: string }> {
+  // The specifiers are only known at runtime: freshly compiled cache artifacts with a cache-busting query.
+  const configModule = await evaluateModule(configCompiled.path, MODULE_EVAL_TIMEOUT_MS, configPath);
+  const configCandidate = resolveExport<unknown>(configModule, ["default", "config"], configPath);
+  validateConfigExport(configCandidate, configPath);
+  const config = HoolypaneConfigSchema.parse(configCandidate);
+  const flowModule = await evaluateModule(flowCompiled.path, config.timeoutMs, flowPath);
+  const flow = resolveExport<FlowDefinition>(flowModule, ["default", "flow"], flowPath);
+  validateFlowExport(flow, flowPath);
+  const outputDir = resolve(args.outputDir ?? config.recording.outputDir);
+  await mkdir(join(outputDir, "traces"), { recursive: true });
+  return { config, flow, outputDir };
+}
+
+async function launchBrowser(args: RunArguments, interrupted: boolean): Promise<Browser | undefined> {
+  if (interrupted) return undefined;
+  try {
+    return await chromium.launch({ headless: !args.headed, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
+  } catch (error) {
+    const message = errorMessage(error);
+    if (/executable|browser.*(not|missing)|ENOENT/i.test(message)) throw new Error(`${message}\nInstall the pinned Chromium browser with: npx playwright install chromium`);
+    throw error;
+  }
+}
+
+async function runViewportLoop(config: ResolvedHoolypaneConfig, browser: Browser, state: FlowRunState): Promise<{ screens: Screen[]; targets: RecordingTarget[] }> {
+  const screens: Screen[] = [];
+  const targets: RecordingTarget[] = [];
+  for (const viewport of config.viewports) {
+    if (state.interrupted) break;
+    const context = await browser.newContext(buildContextOptions(config, viewport));
+    state.contexts.push(context);
+    await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+    const page = await context.newPage();
+    const cdp = await context.newCDPSession(page);
+    targets.push(recorderTarget(viewport.id, viewport, cdp));
+    screens.push({ id: viewport.id, viewport, page });
+  }
+  return { screens, targets };
+}
+
+// Once the execution race below picks a terminal outcome, late settlements (an orphaned flow
+// rejecting after SIGINT or timeout) must not overwrite status or failures.
+function recordFlowFailure(state: FlowRunState, error: unknown): void {
+  if (state.outcomeDecided) return;
+  state.flowFailed = true;
+  state.flowError = error;
+}
+
+async function stopTraces(config: ResolvedHoolypaneConfig, outputDir: string, state: FlowRunState): Promise<readonly RecorderFailure[]> {
+  if (state.tracesStopped) return [];
+  state.tracesStopped = true;
+  const results = await Promise.allSettled(state.contexts.map((context, index) => context.tracing.stop({ path: join(outputDir, "traces", `${config.viewports[index]!.id}.zip`) })));
+  return results.flatMap((result) => (result.status === "rejected" ? [failureFrom(result.reason)] : []));
+}
+
+// Single source of truth for run-status precedence: capture/trace failures beat interruption,
+// which beats flow failure. manifestFailed is only set after finalize, so it is false there.
+function statusFor(state: FlowRunState): RunResult["status"] {
+  return state.manifestFailed || state.traceFailed ? "failed" : state.interrupted ? "interrupted" : state.flowFailed ? "failed" : "success";
+}
+
+async function executeFlow(config: ResolvedHoolypaneConfig, flow: FlowDefinition, screens: Screen[], state: FlowRunState): Promise<void> {
+  if (state.interrupted || state.recorder === undefined) return;
+  const recorder = state.recorder;
+  const initial = recorder.awaitInitialFrames(state.initialFramesAbort.signal).then(() => "ready" as const, (error: unknown) => {
+    state.flowError = error;
+    if (!state.interrupted) state.flowFailed = true;
+    return "failed" as const;
+  });
+  const initialOutcome = await Promise.race([initial, state.signal.promise.then(() => "interrupted" as const)]);
+  if (initialOutcome === "ready" && !state.interrupted) {
+    recorder.markFlowStart();
+    const flowAbortSignal = state.flowAbort.signal;
+    const execution = Promise.resolve()
+      .then(() => flow.run(createFlowContext(screens, (event) => state.flowEvents.push(event), flowAbortSignal)))
+      .catch((error: unknown) => {
+        recordFlowFailure(state, error);
+      });
+    // config.timeoutMs bounds the OVERALL flow execution; without a winner an endless user
+    // flow would keep recording forever while artifacts stay unwritten.
+    const timeoutSettled = Promise.withResolvers<"timeout">();
+    const timeoutTimer = setTimeout(() => timeoutSettled.resolve("timeout"), config.timeoutMs);
+    const raced = await Promise.race([
+      execution.then(() => "executed" as const),
+      state.signal.promise.then(() => "interrupted" as const),
+      timeoutSettled.promise,
+    ]);
+    clearTimeout(timeoutTimer);
+    state.outcomeDecided = true;
+    if (raced === "timeout") {
+      state.timedOut = true;
+      state.flowFailed = true;
+      state.flowAbort.abort();
+      state.finalizedEvents = state.flowEvents.slice();
+    } else if (raced === "interrupted") {
+      state.finalizedEvents = state.flowEvents.slice();
+    }
+  }
+}
+
+async function finalizeRecording(recorder: RecordingSession, config: ResolvedHoolypaneConfig, outputDir: string, state: FlowRunState): Promise<void> {
+  state.initialFramesAbort.abort();
+  const traceFailures = await stopTraces(config, outputDir, state);
+  // tracing.stop failures (lost Playwright traces) must fail loudly like captureFailures do:
+  // they land in manifest.failures AND flip the manifest status and the runner exit code.
+  state.traceFailed = traceFailures.length > 0;
+  const failures: RecorderFailure[] = [...traceFailures];
+  if (state.timedOut) {
+    failures.push({ message: `flow timed out after ${config.timeoutMs}ms` });
+  } else if (state.flowFailed) {
+    failures.push(failureFrom(state.flowError));
+  }
+  if (state.interrupted) failures.push({ message: "Interrupted by SIGINT or SIGTERM" });
+  const finalizeResult = await recorder.finalize({ status: statusFor(state), failures, events: state.finalizedEvents });
+  state.recorderFinalized = true;
+  // captureFailures (a pane's screencast ending early) flip the manifest to "failed" even when the flow
+  // itself succeeded; the CLI must not exit 0 while the written manifest reports a failed recording.
+  state.manifestFailed = finalizeResult.kind === "manifest" && finalizeResult.manifest.status === "failed";
+}
+
 export async function runFlow(args: RunArguments): Promise<RunResult> {
   const flowPath = resolve(args.flowFile);
   const projectDir = dirname(flowPath);
@@ -116,164 +278,61 @@ export async function runFlow(args: RunArguments): Promise<RunResult> {
   }
   const flowCompiled = compiledModules[0]!;
   const configCompiled = compiledModules[1]!;
-  let browser: Browser | undefined;
-  const contexts: BrowserContext[] = [];
-  let interrupted = false;
-  let signalDeadline: ReturnType<typeof setTimeout> | undefined;
-  // Cooperative cancellation for the user flow itself: createFlowContext checks this between steps.
-  const flowAbort = new AbortController();
-  const signal = Promise.withResolvers<void>();
-  const onSignal = (): void => {
-    // A second SIGINT/SIGTERM means "stop now": bypass graceful teardown like the force timer below.
-    if (interrupted) process.exit(130);
-    interrupted = true;
-    flowAbort.abort();
-    signal.resolve();
-    signalDeadline = setTimeout(() => process.exit(130), 10_000);
+  const flowEvents: FlowEvent[] = [];
+  const state: FlowRunState = {
+    contexts: [],
+    interrupted: false,
+    flowAbort: new AbortController(),
+    signal: Promise.withResolvers<void>(),
+    initialFramesAbort: new AbortController(),
+    finalizedEvents: flowEvents,
+    flowEvents,
+    recorderFinalized: false,
+    manifestFailed: false,
+    traceFailed: false,
+    tracesStopped: false,
+    flowError: undefined,
+    flowFailed: false,
+    timedOut: false,
+    outcomeDecided: false,
   };
-  const initialFramesAbort = new AbortController();
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
-  let recorder: RecordingSession | undefined;
-  let recorderFinalized = false;
-  let manifestFailed = false;
-  let traceFailed = false;
+  const onSignal = armSignals(state);
   try {
-    // The specifiers are only known at runtime: freshly compiled cache artifacts with a cache-busting query.
-    const configModule = await evaluateModule(configCompiled.path, MODULE_EVAL_TIMEOUT_MS, configPath);
-    const configCandidate = resolveExport<unknown>(configModule, ["default", "config"], configPath);
-    validateConfigExport(configCandidate, configPath);
-    const config = HoolypaneConfigSchema.parse(configCandidate);
-    const flowModule = await evaluateModule(flowCompiled.path, config.timeoutMs, flowPath);
-    const flow = resolveExport<FlowDefinition>(flowModule, ["default", "flow"], flowPath);
-    validateFlowExport(flow, flowPath);
-    const outputDir = resolve(args.outputDir ?? config.recording.outputDir);
-    await mkdir(join(outputDir, "traces"), { recursive: true });
-    try {
-      browser = await chromium.launch({ headless: !args.headed, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
-    } catch (error) {
-      const message = errorMessage(error);
-      if (/executable|browser.*(not|missing)|ENOENT/i.test(message)) throw new Error(`${message}\nInstall the pinned Chromium browser with: npx playwright install chromium`);
-      throw error;
-    }
-    const screens: { id: string; viewport: ViewportSpec; page: Page }[] = [];
-    const targets: RecordingTarget[] = [];
-    let tracesStopped = false;
-    for (const viewport of config.viewports) {
-      if (interrupted) break;
-      const context = await browser.newContext(buildContextOptions(config, viewport));
-      contexts.push(context);
-      await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
-      const page = await context.newPage();
-      const cdp = await context.newCDPSession(page);
-      targets.push(recorderTarget(viewport.id, viewport, cdp));
-      screens.push({ id: viewport.id, viewport, page });
-    }
+    const { config, flow, outputDir } = await evaluateAndParseConfig(args, flowPath, configPath, flowCompiled, configCompiled);
+    state.browser = await launchBrowser(args, state.interrupted);
+    const browser = state.browser;
+    const { screens, targets } = browser ? await runViewportLoop(config, browser, state) : { screens: [], targets: [] };
     // recorder.start() wipes the output directory: a SIGINT during browser/context setup must
     // never reach it, or a rerun into the same --output dir destroys the previous recording.
-    if (!interrupted) {
-      recorder = new RecordingSession({ recording: config.recording, timeoutMs: config.timeoutMs, outputDir });
-      await recorder.start(targets);
+    if (!state.interrupted) {
+      state.recorder = new RecordingSession({ recording: config.recording, timeoutMs: config.timeoutMs, outputDir });
+      await state.recorder.start(targets);
     }
-    let flowError: unknown;
-    let flowFailed = false;
-    let timedOut = false;
-    // Single source of truth for run-status precedence: capture/trace failures beat interruption,
-    // which beats flow failure. manifestFailed is only set after finalize, so it is false there.
-    const statusFor = (): RunResult["status"] => (manifestFailed || traceFailed ? "failed" : interrupted ? "interrupted" : flowFailed ? "failed" : "success");
-    // Once the race below picks a terminal outcome, late settlements (an orphaned flow rejecting
-    // after SIGINT or timeout) must not overwrite status or failures.
-    let outcomeDecided = false;
-    const recordFlowFailure = (error: unknown): void => {
-      if (outcomeDecided) return;
-      flowFailed = true;
-      flowError = error;
-    };
-    const flowEvents: FlowEvent[] = [];
-    // Snapshotted when the race ends early so post-interrupt event pushes cannot pollute finalize.
-    let finalizedEvents: FlowEvent[] = flowEvents;
-    const stopTraces = async (): Promise<readonly RecorderFailure[]> => {
-      if (tracesStopped) return [];
-      tracesStopped = true;
-      const results = await Promise.allSettled(contexts.map((context, index) => context.tracing.stop({ path: join(outputDir, "traces", `${config.viewports[index]!.id}.zip`) })));
-      return results.flatMap((result) => (result.status === "rejected" ? [failureFrom(result.reason)] : []));
-    };
     try {
-      if (!interrupted && recorder !== undefined) {
-        const initial = recorder.awaitInitialFrames(initialFramesAbort.signal).then(() => "ready" as const, (error: unknown) => {
-          flowError = error;
-          if (!interrupted) flowFailed = true;
-          return "failed" as const;
-        });
-        const initialOutcome = await Promise.race([initial, signal.promise.then(() => "interrupted" as const)]);
-        if (initialOutcome === "ready" && !interrupted) {
-          recorder.markFlowStart();
-          const flowAbortSignal = flowAbort.signal;
-          const execution = Promise.resolve()
-            .then(() => flow.run(createFlowContext(screens, (event) => flowEvents.push(event), flowAbortSignal)))
-            .catch((error: unknown) => {
-              recordFlowFailure(error);
-            });
-          // config.timeoutMs bounds the OVERALL flow execution; without a winner an endless user
-          // flow would keep recording forever while artifacts stay unwritten.
-          const timeoutSettled = Promise.withResolvers<"timeout">();
-          const timeoutTimer = setTimeout(() => timeoutSettled.resolve("timeout"), config.timeoutMs);
-          const raced = await Promise.race([
-            execution.then(() => "executed" as const),
-            signal.promise.then(() => "interrupted" as const),
-            timeoutSettled.promise,
-          ]);
-          clearTimeout(timeoutTimer);
-          outcomeDecided = true;
-          if (raced === "timeout") {
-            timedOut = true;
-            flowFailed = true;
-            flowAbort.abort();
-            finalizedEvents = flowEvents.slice();
-          } else if (raced === "interrupted") {
-            finalizedEvents = flowEvents.slice();
-          }
-        }
-      }
-      if (recorder === undefined) {
+      await executeFlow(config, flow, screens, state);
+      if (state.recorder === undefined) {
         // Interrupted during setup: no recording started and the previous output directory
         // contents must stay intact, so discard the partial traces instead of writing them
         // over the preserved directory. context.close() below drops the unfinished buffers.
-        tracesStopped = true;
+        state.tracesStopped = true;
         return { outputDir, status: "interrupted" };
       }
-      initialFramesAbort.abort();
-      const traceFailures = await stopTraces();
-      // tracing.stop failures (lost Playwright traces) must fail loudly like captureFailures do:
-      // they land in manifest.failures AND flip the manifest status and the runner exit code.
-      traceFailed = traceFailures.length > 0;
-      const failures: RecorderFailure[] = [...traceFailures];
-      if (timedOut) {
-        failures.push({ message: `flow timed out after ${config.timeoutMs}ms` });
-      } else if (flowFailed) {
-        failures.push(failureFrom(flowError));
-      }
-      if (interrupted) failures.push({ message: "Interrupted by SIGINT or SIGTERM" });
-      const finalizeResult = await recorder.finalize({ status: statusFor(), failures, events: finalizedEvents });
-      recorderFinalized = true;
-      // captureFailures (a pane's screencast ending early) flip the manifest to "failed" even when the flow
-      // itself succeeded; the CLI must not exit 0 while the written manifest reports a failed recording.
-      manifestFailed = finalizeResult.kind === "manifest" && finalizeResult.manifest.status === "failed";
+      await finalizeRecording(state.recorder, config, outputDir, state);
     } finally {
-      for (const failure of await stopTraces()) process.stderr.write(`tracing.stop failed: ${failure.message}\n`);
+      for (const failure of await stopTraces(config, outputDir, state)) process.stderr.write(`tracing.stop failed: ${failure.message}\n`);
     }
-    return { outputDir, status: statusFor() };
+    return { outputDir, status: statusFor(state) };
   } finally {
     process.removeListener("SIGINT", onSignal);
     process.removeListener("SIGTERM", onSignal);
-    initialFramesAbort.abort();
-    await Promise.allSettled([...contexts.map((context) => context.close()), browser?.close()]);
-    if (recorder && !recorderFinalized) {
-      try { await recorder.finalize({ status: "failed", failures: [], events: [] }); } catch { /* best effort */ }
+    state.initialFramesAbort.abort();
+    await Promise.allSettled([...state.contexts.map((context) => context.close()), state.browser?.close()]);
+    if (state.recorder && !state.recorderFinalized) {
+      try { await state.recorder.finalize({ status: "failed", failures: [], events: [] }); } catch { /* best effort */ }
     }
     await Promise.allSettled([flowCompiled.cleanup(), configCompiled.cleanup()]);
     // Disarm the force-exit backstop only after every teardown await has settled: a wedged
     // close(), finalize(), or cleanup() must still be bounded by the documented 10s window.
-    clearTimeout(signalDeadline);
+    clearTimeout(state.signalDeadline);
   }
 }

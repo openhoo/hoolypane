@@ -1,8 +1,9 @@
 import { promises as fs } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { WORKSPACE_VERSION } from "@hoolypane/contracts";
+import { errorMessage, WORKSPACE_VERSION } from "@hoolypane/contracts";
 import { writeFileAtomic } from "@hoolypane/contracts/fsync";
 import { WorkspaceStateSchema, defaultWorkspace, type WorkspaceState } from "../panes/workspace.js";
+import { report } from "../report.js";
 
 type LoadedWorkspace = {
   state: WorkspaceState;
@@ -13,6 +14,8 @@ type LoadedWorkspace = {
 function defaults(persistable: boolean): LoadedWorkspace {
   return { state: defaultWorkspace(), persistable };
 }
+
+let temporarySequence = 0;
 
 /** Moves an unparseable file aside so the original bytes survive before defaults take over. */
 async function quarantine(file: string): Promise<boolean> {
@@ -30,24 +33,24 @@ export async function loadWorkspace(file: string): Promise<LoadedWorkspace> {
     raw = await fs.readFile(file, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return defaults(true);
-    console.error(`[hoolypane] workspace ${file} is unreadable, continuing with defaults`, error);
+    report("", `workspace ${file} is unreadable, continuing with defaults: ${errorMessage(error)}`);
     return defaults(false);
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
-    console.error(`[hoolypane] workspace ${file} is corrupt, quarantining it`, error);
+    report("", `workspace ${file} is corrupt, quarantining it: ${errorMessage(error)}`);
     return defaults(await quarantine(file));
   }
   const version = typeof parsed === "object" && parsed !== null && "version" in parsed ? parsed.version : undefined;
   if (typeof version === "number" && version > WORKSPACE_VERSION) {
-    console.error(`[hoolypane] workspace ${file} has unsupported version ${version}; leaving it untouched`);
+    report("", `workspace ${file} has unsupported version ${version}; leaving it untouched`);
     return defaults(false); // downgrade guard: never overwrite data written by a newer build
   }
   const result = WorkspaceStateSchema.safeParse(parsed);
   if (!result.success) {
-    console.error(`[hoolypane] workspace ${file} failed validation, quarantining it`, result.error);
+    report("", `workspace ${file} failed validation, quarantining it: ${errorMessage(result.error)}`);
     return defaults(await quarantine(file));
   }
   // Sanitize instead of rejecting: position entries for panes that no longer exist are stale
@@ -82,7 +85,6 @@ export async function sweepStaleTemporaries(file: string): Promise<void> {
 }
 
 const saveTails = new Map<string, Promise<void>>();
-let temporarySequence = 0;
 
 export async function saveWorkspace(file: string, state: WorkspaceState | (() => WorkspaceState)): Promise<void> {
   const previous = saveTails.get(file) ?? Promise.resolve();
@@ -103,7 +105,3 @@ export async function saveWorkspace(file: string, state: WorkspaceState | (() =>
 export async function flushWorkspaceSaves(): Promise<void> {
   await Promise.all([...saveTails.values()]);
 }
-
-/** Durable atomic write adopted from contracts' fsync core: same-directory temp (private-artifact
- *  0o600), content fsync, rename, parent-dir fsync — flow exports and PNG saves included. */
-export { writeFileAtomic };

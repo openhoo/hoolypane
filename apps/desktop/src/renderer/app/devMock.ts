@@ -8,7 +8,7 @@
  * against ChromeStateSchema / BoundsSnapshotSchema just like the real main
  * process, keeping the IPC contract honest during UI development.
  */
-import { BoundsSnapshotSchema, ChromeStateSchema, errorMessage } from "@hoolypane/contracts";
+import { BoundsSnapshotSchema, ChromeCommandSchema, ChromeStateSchema, errorMessage } from "@hoolypane/contracts";
 import type { BoundsSnapshot, ChromeCommand, ChromeState, PaneState } from "@hoolypane/contracts";
 import { initialChromeState } from "./state.js";
 // Imported verbatim from the main process so the mock can never drift from the real
@@ -87,9 +87,16 @@ function apply(command: ChromeCommand): void {
       if (next !== mockState) patch(next);
       break;
     }
-    case "rename":
-      patchPane(command.paneId, { name: command.name });
+    case "rename": {
+      // Mirror main's PaneRegistry.rename: whitespace-only names are rejected via lastError.
+      const name = command.name.trim();
+      if (!name) {
+        patch({ lastError: "pane name must not be empty" });
+        break;
+      }
+      patchPane(command.paneId, { name });
       break;
+    }
     case "move-pane":
       patch({ positions: { ...mockState.positions, [command.paneId]: { x: command.x, y: command.y } } });
       break;
@@ -144,7 +151,15 @@ export function installDevMock(): void {
           listeners.delete(callback);
         };
       },
-      send: apply,
+      send(command: ChromeCommand): void {
+        // Same validation the preload and main layers perform; rejections are logged and dropped.
+        const parsed = ChromeCommandSchema.safeParse(command);
+        if (!parsed.success) {
+          console.error("[hoolypane dev-mock] rejected chrome command", parsed.error.message);
+          return;
+        }
+        apply(parsed.data);
+      },
       sendBounds(bounds: BoundsSnapshot): void {
         const parsed = BoundsSnapshotSchema.safeParse(bounds);
         if (!parsed.success) console.error("[hoolypane dev-mock] rejected bounds snapshot", parsed.error.message);

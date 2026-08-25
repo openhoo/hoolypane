@@ -29,9 +29,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
 // Deadline losers (a raced-out module evaluation, a timed-out user flow) keep running
 // user-module timers/servers that nothing can dispose, so the entry point must force exit
 // once its own output is flushed or a leaked interval would hang the process forever.
+// A zero-length write callback fires once all queued bytes flushed; 'drain' never fires for
+// short writes that never returned false (macOS pipes deliver stdio asynchronously).
 async function exitAfterFlush(code: number): Promise<void> {
   const pending = [process.stdout, process.stderr].filter((stream) => stream.writableLength > 0);
-  if (pending.length > 0) await Promise.all(pending.map((stream) => new Promise<void>((resolve) => stream.once("drain", resolve))));
+  if (pending.length > 0) await Promise.all(pending.map((stream) => new Promise<void>((resolve) => stream.write("", () => resolve()))));
   process.exit(code);
 }
 

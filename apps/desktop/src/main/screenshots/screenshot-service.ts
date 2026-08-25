@@ -2,7 +2,7 @@ import { BrowserWindow, dialog } from "electron";
 import { Worker } from "node:worker_threads";
 import { extname, isAbsolute } from "node:path";
 import { DEFAULT_COMPOSITE_BACKGROUND, errorMessage } from "@hoolypane/contracts";
-import { writeFileAtomic } from "../persistence/workspace-store.js";
+import { writeFileAtomic } from "@hoolypane/contracts/fsync";
 import type { PaneRegistry } from "../panes/pane-registry.js";
 import type { OverviewInput, OverviewTileInput, OverviewWorkerResponse } from "./overview-protocol.js";
 
@@ -76,11 +76,11 @@ export async function captureOverview(window: BrowserWindow, registry: PaneRegis
   await savePng(window, png, "HOOLYPANE_TEST_OVERVIEW_PNG", "Save Hoolypane overview", "hoolypane-overview.png");
 }
 
-function composeOverview(tiles: readonly OverviewTileInput[], background: string): Promise<Buffer> {
+function composeOverview(tiles: readonly OverviewTileInput[], background: string): Promise<Uint8Array> {
   const worker = new Worker(new URL("./overview-worker.js", import.meta.url), { workerData: { tiles, background } satisfies OverviewInput });
-  const result = Promise.withResolvers<Buffer>();
+  const result = Promise.withResolvers<Uint8Array>();
   worker.once("message", (value: OverviewWorkerResponse) => {
-    if (value.ok) result.resolve(Buffer.from(value.png));
+    if (value.ok) result.resolve(value.png);
     else result.reject(new Error(value.error));
   });
   worker.once("error", result.reject);
