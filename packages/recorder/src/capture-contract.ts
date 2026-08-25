@@ -7,8 +7,8 @@ export const MAX_QUEUED_FRAMES = 8;
 export const MAX_QUEUED_BYTES = 32 * 1024 * 1024;
 
 // libvpx's VP8 encoder rejects any dimension above 16383 px ("Invalid parameter", verified against the pinned
-// ffmpeg-static build), one pixel below the 16384 config ceiling; folding the codec limit into the fit scale
-// keeps composite outputs encodable while preserving aspect ratio.
+// ffmpeg-static build); the contracts schema caps encoded dimensions at this same limit, and folding the codec
+// limit into the composite fit scale keeps grid outputs encodable while preserving aspect ratio.
 const VP8_MAX_DIMENSION = 16_383;
 
 export type RecordingState = "awaiting-initial-frames" | "recording" | "post-roll" | "stopping" | "aligning" | "encoding" | "validating" | "complete" | "failed";

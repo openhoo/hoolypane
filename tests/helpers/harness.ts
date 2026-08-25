@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -92,27 +92,35 @@ interface LaunchDesktopAppOptions {
  */
 export async function launchDesktopApp(options: LaunchDesktopAppOptions): Promise<DesktopLaunch> {
   const userDataDir = options.userDataDir ?? await mkdtemp(join(tmpdir(), "hoolypane-test-"));
-  const environment = Object.fromEntries(
-    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
-  );
-  Object.assign(environment, options.extraEnv);
-  if (process.platform === "linux") {
-    environment.XDG_SESSION_TYPE = "x11";
-    delete environment.WAYLAND_DISPLAY;
+  let application: ElectronApplication | undefined;
+  try {
+    const environment = Object.fromEntries(
+      Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+    );
+    Object.assign(environment, options.extraEnv);
+    if (process.platform === "linux") {
+      environment.XDG_SESSION_TYPE = "x11";
+      delete environment.WAYLAND_DISPLAY;
+    }
+    const graphicsArguments =
+      process.platform === "linux" ? ["--ozone-platform=x11", "--use-gl=angle", "--use-angle=swiftshader"] : [];
+    application = await electron.launch({
+      executablePath: electronExecutablePath(),
+      args: [
+        ...graphicsArguments,
+        resolve(REPO_ROOT, "apps/desktop"),
+        `--user-data-dir=${join(userDataDir, "user-data")}`,
+        "--url",
+        `http://127.0.0.1:${options.port}`,
+      ],
+      env: environment,
+    });
+    const chrome = await application.firstWindow();
+    return { application, chrome, userDataDir };
+  } catch (error) {
+    // Roll back a failed launch so no orphaned profile dir or Electron process survives.
+    await application?.close().catch(() => {});
+    if (options.userDataDir === undefined) await rm(userDataDir, { recursive: true, force: true }).catch(() => {});
+    throw error;
   }
-  const graphicsArguments =
-    process.platform === "linux" ? ["--ozone-platform=x11", "--use-gl=angle", "--use-angle=swiftshader"] : [];
-  const application = await electron.launch({
-    executablePath: electronExecutablePath(),
-    args: [
-      ...graphicsArguments,
-      resolve(REPO_ROOT, "apps/desktop"),
-      `--user-data-dir=${join(userDataDir, "user-data")}`,
-      "--url",
-      `http://127.0.0.1:${options.port}`,
-    ],
-    env: environment,
-  });
-  const chrome = await application.firstWindow();
-  return { application, chrome, userDataDir };
 }

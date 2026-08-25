@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-const MAX_ENCODED_DIMENSION = 16_384;
+// libvpx's VP8 encoder rejects any dimension above 16383 px ("Invalid parameter", verified against the pinned
+// ffmpeg-static build); per-track videos encode at exactly these dimensions, so the schema enforces the codec
+// limit itself instead of the historical 16384 surface cap.
+const MAX_ENCODED_DIMENSION = 16_383;
 const MAX_ENCODED_AREA = 67_108_864;
 const slug = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 // The encoder emits the grid video as videos/composite.webm next to videos/<id>.webm;
