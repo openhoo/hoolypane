@@ -8,7 +8,7 @@ export function clampPanePosition(value: number, areaExtent: number, size: numbe
 }
 
 const LAYOUT_GAP = 8;
-const PANE_HEADER_HEIGHT = 28;
+export const PANE_HEADER_HEIGHT = 28;
 
 export interface PaneTile {
   readonly id: string;
@@ -59,7 +59,7 @@ export function computePaneTiles(
   areaHeight: number,
   panes: readonly TileInput[],
   focusedPaneId: string | null,
-  positions: Readonly<Record<string, PanePosition>> = {},
+  positions: Readonly<Record<string, PanePosition>>,
 ): Map<string, PaneTile> {
   const tiles = new Map<string, PaneTile>();
   const innerWidth = areaWidth - LAYOUT_PADDING * 2;
@@ -131,14 +131,8 @@ function masonryTiles(panes: readonly TileInput[], innerWidth: number, innerHeig
       const zoom = widthZoom(pane);
       const width = Math.round(pane.viewportWidth * zoom);
       const height = Math.round(PANE_HEADER_HEIGHT + pane.viewportHeight * zoom);
-      let shortest = 0;
-      let shortestHeight = Number.POSITIVE_INFINITY;
-      for (const [index, current] of columnHeights.entries()) {
-        if (current < shortestHeight) {
-          shortest = index;
-          shortestHeight = current;
-        }
-      }
+      const shortest = columnHeights.indexOf(Math.min(...columnHeights));
+      const shortestHeight = columnHeights[shortest]!;
       const columnX = LAYOUT_PADDING + shortest * (cellWidth + LAYOUT_GAP);
       placement.push({ id: pane.id, x: Math.round(columnX + (cellWidth - width) / 2), y: Math.round(shortestHeight), width, height, zoom });
       columnHeights[shortest] = shortestHeight + height + LAYOUT_GAP;

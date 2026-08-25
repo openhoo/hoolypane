@@ -5,7 +5,7 @@ import { join } from "node:path";
 import ffmpegStaticPath from "ffmpeg-static";
 import ffprobeStatic from "ffprobe-static";
 import { errorMessage } from "@hoolypane/contracts";
-import { asError, compositeGeometry, type CompositeGeometry, type SlotMapping, type TrackGeometry } from "./capture-contract.js";
+import { asError, CHILD_GRACE_MS, compositeGeometry, type CompositeGeometry, type SlotMapping, type TrackGeometry } from "./capture-contract.js";
 import type { FrameSpool } from "./spool.js";
 
 interface EncoderPaths { readonly ffmpeg: string; readonly ffprobe: string }
@@ -109,14 +109,19 @@ export async function encodeAligned(
   });
   try {
     const framesByTrack = tracks.map((track) => new Map(track.spool.index.frames.map((frame) => [frame.sequence, frame])));
-    for (let slot = 0; slot < durationFrames; slot += 1) {
-      const chunks = await Promise.all(tracks.map(async (track, index) => {
-        const mapping = track.mappings[slot];
-        const frame = mapping ? framesByTrack[index]!.get(mapping.sourceSequence) : undefined;
-        if (!mapping || !frame) throw new Error(`missing source mapping for ${track.id} slot ${slot}`);
-        return track.spool.read(frame);
-      }));
-      await Promise.all(chunks.map((chunk, index) => writeChunk(pipes[index]!, chunk)));
+    try {
+      for (let slot = 0; slot < durationFrames; slot += 1) {
+        const chunks = await Promise.all(tracks.map(async (track, index) => {
+          const mapping = track.mappings[slot];
+          const frame = mapping ? framesByTrack[index]!.get(mapping.sourceSequence) : undefined;
+          if (!mapping || !frame) throw new Error(`missing source mapping for ${track.id} slot ${slot}`);
+          return track.spool.read(frame);
+        }));
+        await Promise.all(chunks.map((chunk, index) => writeChunk(pipes[index]!, chunk)));
+      }
+    } finally {
+      // Spools are closed before encoding starts, so cached read handles opened here have no other owner.
+      await Promise.allSettled(tracks.map((track) => track.spool.closeRead()));
     }
     for (const pipe of pipes) pipe.end();
     await completion.promise;
@@ -125,7 +130,7 @@ export async function encodeAligned(
     for (const pipe of pipes) pipe.destroy();
     child.kill("SIGTERM");
     const graceful = Promise.withResolvers<void>();
-    const watchdog = setTimeout(graceful.resolve, 10_000);
+    const watchdog = setTimeout(graceful.resolve, CHILD_GRACE_MS);
     try {
       await Promise.race([completion.promise.catch(() => undefined), graceful.promise]);
     } finally {
@@ -133,6 +138,6 @@ export async function encodeAligned(
     }
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     await completion.promise.catch(() => undefined);
-    throw new Error(`ffmpeg ${paths.ffmpeg} failed (ffprobe ${paths.ffprobe}): ${spawnError?.message ?? errorMessage(error)}${stderr ? `\n${stderr}` : ""}`);
+    throw new Error(`ffmpeg ${paths.ffmpeg} failed: ${spawnError?.message ?? errorMessage(error)}${spawnError ? "" : stderr ? `\n${stderr}` : ""}`);
   }
 }

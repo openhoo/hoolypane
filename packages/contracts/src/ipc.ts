@@ -65,6 +65,9 @@ export const PaneGenerationSchema = z.strictObject({
 export const staleGenerationMessage = (expected: number, current: number): string => `stale document generation ${expected}, current ${current}`;
 /** Keys the pane preload records as press actions; main's replay table must carry matching CDP params for exactly these. */
 export const RECORDABLE_PRESS_KEYS = ["Enter", "Escape", "Tab"] as const;
+
+/** Fill-input debounce in the pane preload; record-stop's flush settle derives from it and must stay strictly larger so debounced fills land inside the barrier. */
+export const FILL_DEBOUNCE_MS = 300;
 const REPLAY_PHASES = ["resolve", "apply-dom", "end"] as const;
 /** Result phases are the request phases plus the terminal confirmation echo. */
 export const REPLAY_RESULT_PHASES = [...REPLAY_PHASES, "confirm"] as const;

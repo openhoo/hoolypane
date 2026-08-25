@@ -77,7 +77,7 @@ function apply(command: ChromeCommand): void {
       settleLoading([command.paneId]);
       break;
     case "create": {
-      const next = addPane(mockState, command.viewport, mockState.sharedUrl);
+      const next = addPane(mockState, command.viewport);
       patch(next);
       break;
     }

@@ -10,7 +10,7 @@ export class InteractionCoordinator {
     const started = targetPaneIds.map((paneId) => {
       const previous = this.tails.get(paneId) ?? Promise.resolve();
       const epoch = this.epochs.get(paneId) ?? 0;
-      const task = previous.catch(() => undefined).then((): Promise<void> => {
+      const task = previous.then((): Promise<void> => {
         if ((this.epochs.get(paneId) ?? 0) !== epoch) throw new Error(`replay cancelled: pane ${paneId} was closed`);
         return replay(paneId, envelope);
       });

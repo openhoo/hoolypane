@@ -5,6 +5,13 @@ import { locatorExpression } from "./codegen.js";
 import { ActionEnvelopeSchema, VIEWPORT_PRESETS } from "@hoolypane/contracts";
 import type { Action, ActionEnvelope } from "@hoolypane/contracts";
 
+const envelope = (action: Action): ActionEnvelope => ActionEnvelopeSchema.parse({
+  actionId: 1,
+  documentGeneration: 0,
+  sourcePaneId: "pane-1",
+  action,
+});
+
 describe("flow API", () => {
   it("validates config and preserves definition identity", () => {
     expect(defineConfig({ viewports: [VIEWPORT_PRESETS[0]!] }).timeoutMs).toBe(30_000);
@@ -48,12 +55,6 @@ describe("flow API", () => {
   });
 
   it("serializes every action branch deterministically", () => {
-    const envelope = (action: Action): ActionEnvelope => ActionEnvelopeSchema.parse({
-      actionId: 1,
-      documentGeneration: 0,
-      sourcePaneId: "pane-1",
-      action,
-    });
     const source = serializeFlow([
       envelope({ kind: "navigate", url: "https://example.test/" }),
       envelope({ kind: "click", locator: { kind: "role", role: "button", name: "Go" } }),
@@ -88,15 +89,12 @@ describe("flow API", () => {
     const events: unknown[] = [];
     const screens = ["one", "two"].map((id, index) => ({ id, viewport: VIEWPORT_PRESETS[index]!, page: {} as never }));
     const context = createFlowContext(screens, (event) => events.push(event));
-    await expect(context.all("boom", async (screen) => {
+    const error = await context.all("boom", async (screen) => {
       if (screen.id === "two") throw new Error("pane two exploded");
-    })).rejects.toThrow(AggregateError);
-    await expect(context.all("boom", async (screen) => {
-      if (screen.id === "two") throw new Error("pane two exploded");
-    })).rejects.toThrow(/boom failed on two/);
+    }).then(() => null, (e: unknown) => e);
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(String(error)).toMatch(/boom failed on two/);
     expect(events).toEqual([
-      { label: "boom", phase: "start", atUnixMs: expect.any(Number) },
-      { label: "boom", phase: "failed", atUnixMs: expect.any(Number) },
       { label: "boom", phase: "start", atUnixMs: expect.any(Number) },
       { label: "boom", phase: "failed", atUnixMs: expect.any(Number) },
     ]);
@@ -111,12 +109,6 @@ describe("flow API", () => {
   });
 
   it("keeps adversarial strings intact as escaped literals in generated sources", () => {
-    const envelope = (action: Action): ActionEnvelope => ActionEnvelopeSchema.parse({
-      actionId: 1,
-      documentGeneration: 0,
-      sourcePaneId: "pane-1",
-      action,
-    });
     const adversarial = [
       'quote " terminated',
       "back\\slash",

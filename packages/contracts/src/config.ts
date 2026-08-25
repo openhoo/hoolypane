@@ -2,6 +2,9 @@ import { z } from "zod";
 import { HttpUrlSchema } from "./action.js";
 import { MAX_ENCODED_DIMENSION, ViewportListSchema } from "./viewport.js";
 
+/** Composite background shared by recorded-video compositing and the overview PNG so both artifact families stay visually consistent. */
+export const DEFAULT_COMPOSITE_BACKGROUND = "#111318";
+
 const RecordingInputSchema = z.strictObject({
   fps: z.union([z.literal(30), z.literal(60)]).default(60),
   jpegQuality: z.number().int().min(0).max(100).default(85),
@@ -11,7 +14,7 @@ const RecordingInputSchema = z.strictObject({
       height: z.number().int().min(2).max(MAX_ENCODED_DIMENSION),
     })
     .prefault({ width: 3840, height: 2160 }),
-  compositeBackground: z.string().regex(/^#[0-9a-fA-F]{6}$/).default("#111318"),
+  compositeBackground: z.string().regex(/^#[0-9a-fA-F]{6}$/).default(DEFAULT_COMPOSITE_BACKGROUND),
   outputDir: z.string().min(1).default("hoolypane-results"),
   keepRaw: z.boolean().default(false),
 });

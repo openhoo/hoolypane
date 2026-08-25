@@ -1,5 +1,5 @@
 import { ipcRenderer } from "electron";
-import { IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, RECORDABLE_PRESS_KEYS, RecordFailureSchema, ReplayRequestSchema, REPLAY_RESULT_PHASES, failureReason, staleGenerationMessage, type Action, type LocatorSpec, type ReplayRequest, type ReplayResult } from "@hoolypane/contracts";
+import { FILL_DEBOUNCE_MS, IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, RECORDABLE_PRESS_KEYS, RecordFailureSchema, ReplayRequestSchema, REPLAY_RESULT_PHASES, failureReason, staleGenerationMessage, type Action, type LocatorSpec, type ReplayRequest, type ReplayResult } from "@hoolypane/contracts";
 
 let documentGeneration = 0;
 type SuppressionEntry = { generation: number; kind: Action["kind"]; box?: { x: number; y: number; width: number; height: number }; confirmed?: boolean };
@@ -34,6 +34,29 @@ function isOwnScrollEcho(target: Element, programmed: { top: number; left: numbe
   return Math.abs(target.scrollTop - programmed.top) <= 1 && Math.abs(target.scrollLeft - programmed.left) <= 1;
 }
 
+/** Consumes the pending programmatic-scroll marker, if any: true only for our own echoes. */
+function consumeProgrammaticScroll(target: Element): boolean {
+  const programmed = programmaticScrolls.get(target);
+  if (!programmed) return false;
+  programmaticScrolls.delete(target);
+  return isOwnScrollEcho(target, programmed);
+}
+
+type ScrollAxis = "horizontal" | "vertical";
+function scrollExtent(target: HTMLElement, axis: ScrollAxis): number {
+  return axis === "horizontal" ? target.scrollWidth - target.clientWidth : target.scrollHeight - target.clientHeight;
+}
+/** Clamped 0..1 progress of a container's scroll along one axis; 0 when nothing is scrollable. */
+function scrollRatio(target: HTMLElement, axis: ScrollAxis): number {
+  const extent = scrollExtent(target, axis);
+  const offset = axis === "horizontal" ? target.scrollLeft : target.scrollTop;
+  return extent === 0 ? 0 : Math.min(1, Math.max(0, offset / extent));
+}
+/** Inverse of scrollRatio: the absolute offset a recorded ratio restores along one axis. */
+function scrollOffset(target: HTMLElement, axis: ScrollAxis, ratio: number): number {
+  return ratio * Math.max(0, scrollExtent(target, axis));
+}
+
 function drainScrollTargets(): void {
   pendingScrollFrame = 0;
   const targets = [...pendingScrollTargets];
@@ -41,13 +64,9 @@ function drainScrollTargets(): void {
   for (const [target, takeover] of targets) {
     // The end position wins over the gesture that scheduled this frame: a programmatic scroll
     // landing between event and callback is our own echo and must never be mirrored.
-    const programmed = programmaticScrolls.get(target);
-    if (programmed) {
-      programmaticScrolls.delete(target);
-      if (isOwnScrollEcho(target, programmed)) continue;
-    }
-    const horizontalRatio = target.scrollWidth === target.clientWidth ? 0 : Math.min(1, Math.max(0, target.scrollLeft / (target.scrollWidth - target.clientWidth)));
-    const verticalRatio = target.scrollHeight === target.clientHeight ? 0 : Math.min(1, Math.max(0, target.scrollTop / (target.scrollHeight - target.clientHeight)));
+    if (consumeProgrammaticScroll(target)) continue;
+    const horizontalRatio = scrollRatio(target, "horizontal");
+    const verticalRatio = scrollRatio(target, "vertical");
     // Takeovers emit forced so they survive active suppression; echoes queued before suppression
     // began still fall under the guard.
     record(() => ({ kind: "scroll", locator: locatorFor(target), horizontalRatio, verticalRatio }), takeover);
@@ -219,7 +238,7 @@ document.addEventListener("input", (event) => {
   // them like password — the gesture stays local instead of claiming a mirrored write that never lands.
   if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) || LOCAL_ONLY_FILL_TYPES.includes(element.type)) return;
   if (pendingFill) window.clearTimeout(pendingFill.timer);
-  pendingFill = { element, timer: window.setTimeout(flushFill, 300) };
+  pendingFill = { element, timer: window.setTimeout(flushFill, FILL_DEBOUNCE_MS) };
 }, true);
 document.addEventListener("blur", (event) => { if (event.target === pendingFill?.element) flushFill(); }, true);
 document.addEventListener("change", (event) => {
@@ -228,6 +247,31 @@ document.addEventListener("change", (event) => {
   if (element instanceof HTMLInputElement && ["checkbox", "radio"].includes(element.type)) record(() => ({ kind: "check", locator: locatorFor(element), checked: element.checked }));
   else if (element instanceof HTMLSelectElement) record(() => ({ kind: "select", locator: locatorFor(element), values: [...element.selectedOptions].map((option) => option.value) }));
 }, true);
+/**
+ * Names the echo-suppression invariant: a trusted click may only acknowledge the replay whose
+ * resolved box contains the click coordinates — undefined unless exactly one pending click/check
+ * qualifies. Settled check entries may not acknowledge while their trailing echo drains.
+ */
+function matchSuppressedClick(event: MouseEvent): { actionId: number; entry: SuppressionEntry } | undefined {
+  let matchedActionId: number | undefined;
+  let matchedEntry: SuppressionEntry | undefined;
+  for (const [actionId, entry] of suppressed) {
+    if (entry.confirmed) continue; // a settled check entry may not acknowledge another click while its trailing echo drains
+    const box = entry.box;
+    // check toggles land as the same trusted click — main drives CDP mouseDown/mouseUp and
+    // awaits this confirm exactly like for click. Without admitting them the confirm promise
+    // times out after 5s and marks the pane outOfSync although the toggle itself landed.
+    if (!box || (entry.kind !== "click" && entry.kind !== "check")) continue;
+    if (event.clientX >= box.x - 2 && event.clientX <= box.x + box.width + 2 && event.clientY >= box.y - 2 && event.clientY <= box.y + box.height + 2) {
+      matchedActionId = actionId;
+      matchedEntry = entry;
+      break;
+    }
+  }
+  if (!matchedActionId || !matchedEntry) return undefined;
+  return { actionId: matchedActionId, entry: matchedEntry };
+}
+
 document.addEventListener("click", (event) => {
   if (!event.isTrusted) return;
   // A trusted click inside the confirm window may only acknowledge the replay whose resolved
@@ -235,22 +279,9 @@ document.addEventListener("click", (event) => {
   // is kept and no confirm is sent, so a stray click can never ack the wrong actionId while the
   // real CDP click would fall through unconfirmed as a phantom.
   if (suppressed.size > 0) {
-    let matchedActionId: number | undefined;
-    let matchedEntry: SuppressionEntry | undefined;
-    for (const [actionId, entry] of suppressed) {
-      if (entry.confirmed) continue; // a settled check entry may not acknowledge another click while its trailing echo drains
-      const box = entry.box;
-      // check toggles land as the same trusted click — main drives CDP mouseDown/mouseUp and
-      // awaits this confirm exactly like for click. Without admitting them the confirm promise
-      // times out after 5s and marks the pane outOfSync although the toggle itself landed.
-      if (!box || (entry.kind !== "click" && entry.kind !== "check")) continue;
-      if (event.clientX >= box.x - 2 && event.clientX <= box.x + box.width + 2 && event.clientY >= box.y - 2 && event.clientY <= box.y + box.height + 2) {
-        matchedActionId = actionId;
-        matchedEntry = entry;
-        break;
-      }
-    }
-    if (!matchedActionId || !matchedEntry) return; // human click during the confirm window: keep entries, send no confirm
+    const matched = matchSuppressedClick(event);
+    if (!matched) return; // human click during the confirm window: keep entries, send no confirm
+    const { actionId: matchedActionId, entry: matchedEntry } = matched;
     // A mirrored check's trailing trusted input+change events fire only AFTER this click dispatch
     // completes (the control's activation behavior runs post-dispatch), so deleting the entry here
     // let them observe empty suppression and re-record the mirrored toggle as a fresh user check.
@@ -293,14 +324,10 @@ document.addEventListener("scroll", (event) => {
   // linger past the suppression window and later swallow a genuine user scroll landing exactly
   // on the recorded position.
   let takeover = false;
-  if (target instanceof Element) {
-    const programmed = programmaticScrolls.get(target);
-    if (programmed) {
-      programmaticScrolls.delete(target);
-      // An echo lands exactly where the replay scrolled; a diverging position means the user moved it.
-      takeover = !isOwnScrollEcho(target, programmed);
-      if (!takeover) return;
-    }
+  if (target instanceof Element && programmaticScrolls.has(target)) {
+    // An echo lands exactly where the replay scrolled; a diverging position means the user moved it.
+    if (consumeProgrammaticScroll(target)) return;
+    takeover = true;
   }
   // Document-level scrolls are viewport management, and replay-driven auto-scrolls are our own
   // doing — recording either would mirror them back into all other panes as phantom user actions.
@@ -313,6 +340,25 @@ document.addEventListener("scroll", (event) => {
   if (pendingScrollFrame) return;
   pendingScrollFrame = window.requestAnimationFrame(drainScrollTargets);
 }, true);
+
+/** Fails loudly when a drifted apply-dom locator resolved to an element of the wrong kind. */
+function assertApplyDomTarget(request: ReplayRequest, element: Element): void {
+  if (request.action.kind === "select" && !(element instanceof HTMLSelectElement)) throw new Error("select locator resolved a non-select element");
+  if (request.action.kind === "scroll" && !(element instanceof HTMLElement)) throw new Error("scroll locator resolved a non-HTMLElement");
+}
+
+function applyDomWrite(request: ReplayRequest, element: Element): void {
+  if (request.action.kind === "select" && element instanceof HTMLSelectElement) {
+    const selected = new Set(request.action.values);
+    for (const option of element.options) option.selected = selected.has(option.value);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  } else if (request.action.kind === "scroll" && element instanceof HTMLElement) {
+    element.scrollTo({ left: scrollOffset(element, "horizontal", request.action.horizontalRatio), top: scrollOffset(element, "vertical", request.action.verticalRatio), behavior: "instant" });
+    recordProgrammaticScroll(element);
+    element.dispatchEvent(new Event("scroll", { bubbles: true }));
+  }
+}
 
 ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
   let request: ReplayRequest;
@@ -338,27 +384,13 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
       // falling through reported ok:true while applying nothing, so main counted a diverging pane
       // as in-sync and never flagged outOfSync. Validated before the suppression entry is armed,
       // mirroring the other hard failures in this handler.
-      if (request.phase === "apply-dom") {
-        if (request.action.kind === "select" && !(element instanceof HTMLSelectElement)) throw new Error("select locator resolved a non-select element");
-        if (request.action.kind === "scroll" && !(element instanceof HTMLElement)) throw new Error("scroll locator resolved a non-HTMLElement");
-      }
+      if (request.phase === "apply-dom") assertApplyDomTarget(request, element);
       const entry: SuppressionEntry = { generation: request.documentGeneration, kind: request.action.kind };
       suppressed.set(request.actionId, entry);
       if (request.phase === "resolve" && (request.action.kind === "fill" || request.action.kind === "press") && element instanceof HTMLElement) {
         element.focus({ preventScroll: true });
       }
-      if (request.phase === "apply-dom") {
-        if (request.action.kind === "select" && element instanceof HTMLSelectElement) {
-          const selected = new Set(request.action.values);
-          for (const option of element.options) option.selected = selected.has(option.value);
-          element.dispatchEvent(new Event("input", { bubbles: true }));
-          element.dispatchEvent(new Event("change", { bubbles: true }));
-        } else if (request.action.kind === "scroll" && element instanceof HTMLElement) {
-          element.scrollTo({ left: request.action.horizontalRatio * Math.max(0, element.scrollWidth - element.clientWidth), top: request.action.verticalRatio * Math.max(0, element.scrollHeight - element.clientHeight), behavior: "instant" });
-          recordProgrammaticScroll(element);
-          element.dispatchEvent(new Event("scroll", { bubbles: true }));
-        }
-      }
+      if (request.phase === "apply-dom") applyDomWrite(request, element);
       // Mirrored native input is routed at viewport coordinates: bring the target into view first,
       // exactly like a real user (or Playwright's auto-scroll) would, before measuring its box.
       // Only click/check/fill/press qualify: select/scroll apply via DOM writes alone, and

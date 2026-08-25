@@ -53,7 +53,7 @@ describe("interaction coordinator", () => {
   it("maps a rejecting replay to a failed outcome, including non-Error throws", async () => {
     const coordinator = new InteractionCoordinator();
     const outcomes = await coordinator.dispatch(envelope, ["one"], async () => {
-      throw "locator exploded"; // eslint-disable-line no-throw-literal
+      throw "locator exploded";
     });
     expect(outcomes).toEqual([{ paneId: "one", ok: false, reason: "locator exploded" }]);
   });
@@ -160,5 +160,24 @@ describe("flow draft", () => {
     draft.commit();
     expect(draft.isActive).toBe(false);
     expect(draft.stop()).toEqual({ kind: "empty" });
+  });
+
+  it("a recorded success on a pane clears that pane's stale blocking reasons", () => {
+    const draft = new FlowDraft();
+    draft.start("https://example.test", "source", 1);
+    draft.block(2, "phone", "locator resolved 0 elements");
+    expect(draft.stop()).toEqual({ kind: "blocked", reasons: ["action 2 (phone): locator resolved 0 elements"] });
+    draft.append({ ...envelope, actionId: 3, sourcePaneId: "phone" }, draft.sessionGeneration);
+    expect(draft.stop()).toEqual({ kind: "saved", source: expect.any(String) });
+  });
+
+  it("discardPane drops a closed pane's reasons so a later stop exports", () => {
+    const draft = new FlowDraft();
+    draft.start("https://example.test", "source", 1);
+    draft.append({ ...envelope, actionId: 2 }, draft.sessionGeneration);
+    draft.block(2, "phone", "replay lost a navigation race");
+    expect(draft.stop()).toEqual({ kind: "blocked", reasons: ["action 2 (phone): replay lost a navigation race"] });
+    draft.discardPane("phone");
+    expect(draft.stop()).toEqual({ kind: "saved", source: expect.any(String) });
   });
 });

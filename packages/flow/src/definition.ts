@@ -35,7 +35,7 @@ export function createFlowContext(screens: readonly Screen[], onEvent?: (event: 
         try { return action(screen); } catch (error) { return Promise.reject(error); }
       });
       const settled = await Promise.allSettled(pending);
-      const failures = settled.flatMap((result, index) => result.status === "rejected" ? [{ screenId: immutableScreens[index]?.id ?? "unknown", reason: result.reason }] : []);
+      const failures = settled.flatMap((result, index) => result.status === "rejected" ? [{ screenId: immutableScreens[index]!.id, reason: result.reason }] : []);
       if (failures.length > 0) {
         onEvent?.({ label, phase: "failed", atUnixMs: Date.now() });
         throw new AggregateError(failures.map((failure) => failure.reason), `${label} failed on ${failures.map((failure) => failure.screenId).join(", ")}`);

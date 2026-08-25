@@ -1,4 +1,4 @@
-import type { Action, ActionEnvelope, LocatorSpec } from "@hoolypane/contracts";
+import { SCROLL_RATIO_MAX, SCROLL_RATIO_MIN, type Action, type ActionEnvelope, type LocatorSpec } from "@hoolypane/contracts";
 
 function literal(value: unknown): string {
   return JSON.stringify(value);
@@ -27,7 +27,7 @@ function actionStatements(action: Action): readonly string[] {
     case "scroll": {
       const horizontal = Number(action.horizontalRatio);
       const vertical = Number(action.verticalRatio);
-      if (!Number.isFinite(horizontal) || !Number.isFinite(vertical) || horizontal < 0 || horizontal > 1 || vertical < 0 || vertical > 1) {
+      if (!Number.isFinite(horizontal) || !Number.isFinite(vertical) || horizontal < SCROLL_RATIO_MIN || horizontal > SCROLL_RATIO_MAX || vertical < SCROLL_RATIO_MIN || vertical > SCROLL_RATIO_MAX) {
         throw new Error(`Invalid scroll ratios: ${String(action.horizontalRatio)}, ${String(action.verticalRatio)}`);
       }
       return [

@@ -80,7 +80,7 @@ describe("desktop replay and security resilience", () => {
       }
     }, { replay: IPC_CHANNELS.replay, replayResult: IPC_CHANNELS.replayResult, port: `http://127.0.0.1:${FIXTURE_PORT}` }) as { ok: boolean; reason?: string };
     expect(stale.ok).toBe(false);
-    expect(stale.reason).toMatch(/stale document generation/);
+    expect(stale.reason).toMatch(/^stale document generation 999, current \d+$/);
 
     await sourcePage().getByTestId("name").fill("stale-before-navigation");
     await chrome.locator("#address").fill(`http://127.0.0.1:${FIXTURE_PORT}/next`);
@@ -135,5 +135,21 @@ describe("desktop replay and security resilience", () => {
     await chrome.getByText(/render process gone/).first().waitFor({ state: "attached", timeout: 10_000 });
     const healthy = await Promise.all(application.context().pages().filter((page) => page.url().startsWith(`http://127.0.0.1:${FIXTURE_PORT}`)).map((page) => page.title().catch(() => "crashed")));
     expect(healthy.filter((title) => title.startsWith("Nimbus Analytics")).length).toBeGreaterThanOrEqual(4);
+  }, 20_000);
+
+  it("blocks main-frame navigation to disallowed protocols", async () => {
+    let target: Page | undefined;
+    for (const candidate of application.context().pages().filter((page) => page.url().startsWith(`http://127.0.0.1:${FIXTURE_PORT}`))) {
+      if ((await candidate.title().catch(() => "")).startsWith("Nimbus Analytics")) { target = candidate; break; }
+    }
+    if (!target) throw new Error("no healthy fixture pane for the protocol guard test");
+    const page = target;
+    const before = page.url();
+    // file: is reliably navigable yet absent from the http(s)-only allowlist, so this deterministically
+    // exercises the registry's will-navigate guard; a wiring regression would commit the navigation.
+    await page.evaluate(() => window.location.assign("file:///etc/hostname"));
+    await pollUntil(async () => page.url() === before ? before : null, 5_000);
+    await page.getByTestId("name").fill("file-guard-probe");
+    expect(await page.getByTestId("name").inputValue()).toBe("file-guard-probe");
   }, 20_000);
 });

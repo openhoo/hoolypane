@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { open, readdir } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { readdir } from "node:fs/promises";
+import { join } from "node:path";
 import { errorMessage } from "@hoolypane/contracts";
-import type { TrackGeometry } from "./capture-contract.js";
+import { CHILD_GRACE_MS, type TrackGeometry } from "./capture-contract.js";
 import { resolveEncoders } from "./encoder.js";
+import { certifyArtifact } from "./spool.js";
 
 interface VerificationResult {
   readonly success: boolean;
@@ -22,8 +22,6 @@ interface ExpectedArtifacts {
 interface ProbePacket { readonly pts?: number | string; readonly duration?: number | string }
 interface ProbeStream { readonly time_base?: string; readonly width?: number; readonly height?: number }
 interface PacketOutput { readonly streams?: readonly ProbeStream[]; readonly packets?: readonly ProbePacket[] }
-
-const CHILD_GRACE_MS = 10_000;
 
 async function ffprobeJson(executable: string, args: readonly string[]): Promise<unknown> {
   const child = spawn(executable, args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -53,22 +51,6 @@ async function probe(executable: string, file: string): Promise<{ stream: ProbeS
   return { stream, packets: data.packets ?? [] };
 }
 
-export async function sha256File(path: string): Promise<string> {
-  const handle = await open(path, "r");
-  try {
-    const hash = createHash("sha256");
-    const buffer = Buffer.allocUnsafe(4 * 1024 * 1024);
-    for (;;) {
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
-      if (bytesRead === 0) break;
-      hash.update(bytesRead === buffer.length ? buffer : buffer.subarray(0, bytesRead));
-    }
-    return hash.digest("hex");
-  } finally {
-    await handle.close();
-  }
-}
-
 function timeBaseTicks(timeBase: string): { numerator: bigint; denominator: bigint } {
   const [numeratorText, denominatorText] = timeBase.split("/");
   const numerator = BigInt(numeratorText ?? "");
@@ -87,9 +69,8 @@ function exactPtsVector(stream: ProbeStream, packets: readonly ProbePacket[], fp
     const inferred = next === undefined ? previous === undefined ? undefined : BigInt(packet.pts) - BigInt(previous) : BigInt(next) - BigInt(packet.pts);
     let duration = packet.duration === undefined ? inferred : BigInt(packet.duration);
     if (duration === undefined) {
-      // A lone packet has no neighbor to infer from and the pinned container stores no durations;
+      // Only a lone packet can lack both neighbors to infer from when the pinned container stores no durations;
       // accept it at the ideal constant-frame-rate slot duration instead of rejecting a valid artifact.
-      if (packets.length !== 1) throw new Error(`packet ${index} lacks positive duration`);
       const [firstTick, secondTick] = idealPtsTicks(stream.time_base!, fps, 2);
       duration = secondTick! - firstTick!;
     }
@@ -100,8 +81,8 @@ function exactPtsVector(stream: ProbeStream, packets: readonly ProbePacket[], fp
 }
 
 // Constant-frame-rate expectation: slot k sits at k·(1e6/fps) µs, expressed in the stream time base with
-// nearest-tick rounding (matches the libwebm rescale of setpts=N/(fps*TB)). Durations are not stored by the
-// pinned container and are verified via consecutive PTS deltas inside exactPtsVector.
+// nearest-tick rounding (matches the libwebm rescale of setpts=N/(fps*TB)). verifyArtifacts checks each
+// probed packet PTS against this slot vector; exactPtsVector only guards per-packet duration positivity.
 function idealPtsTicks(timeBase: string, fps: 30 | 60, durationFrames: number): bigint[] {
   const { numerator, denominator } = timeBaseTicks(timeBase);
   const divisor = BigInt(fps) * denominator;
@@ -157,12 +138,7 @@ export async function verifyArtifacts(outputDir: string, fps: 30 | 60, durationF
     }
     const artifacts: Record<string, string> = {};
     const hashes: Record<string, string> = {};
-    for (const name of names) {
-      const path = join(outputDir, "videos", name);
-      const key = relative(outputDir, path);
-      hashes[key] = await sha256File(path);
-      artifacts[key] = key;
-    }
+    for (const name of names) await certifyArtifact(outputDir, "videos", name, artifacts, hashes);
     return {
       success: true,
       geometry,

@@ -4,6 +4,9 @@ import { errorMessage } from "@hoolypane/contracts";
 import type { OverviewInput, OverviewWorkerResponse } from "./overview-protocol.js";
 
 
+/** Error-tile background shared with the desktop-artifacts pixel-count gate, which asserts this exact RGB triplet survives compositing. */
+export const OVERVIEW_ERROR_TILE_COLOR = "#3a171b";
+
 function escapeXml(value: string): string {
   return value.replace(/[<>&"']/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" })[character] ?? character);
 }
@@ -26,7 +29,7 @@ async function render(input: OverviewInput): Promise<Buffer> {
       const image = await sharp(tile.png).resize(tileWidth, imageHeight, { fit: "contain", background: input.background }).png().toBuffer();
       overlays.push({ input: image, left, top: top + headerHeight });
     } else {
-      const error = Buffer.from(`<svg width="${tileWidth}" height="${imageHeight}" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="#3a171b"/><text x="24" y="48" fill="#ffb4b8" font-family="sans-serif" font-size="16">Capture failed</text><text x="24" y="78" fill="#ffd9dc" font-family="sans-serif" font-size="13">${escapeXml(tile.error ?? "unknown error")}</text></svg>`);
+      const error = Buffer.from(`<svg width="${tileWidth}" height="${imageHeight}" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="${OVERVIEW_ERROR_TILE_COLOR}"/><text x="24" y="48" fill="#ffb4b8" font-family="sans-serif" font-size="16">Capture failed</text><text x="24" y="78" fill="#ffd9dc" font-family="sans-serif" font-size="13">${escapeXml(tile.error ?? "unknown error")}</text></svg>`);
       overlays.push({ input: error, left, top: top + headerHeight });
     }
   }

@@ -20,6 +20,10 @@ const LocatorSpecSchema = z.discriminatedUnion("kind", [
 export type LocatorSpec = z.infer<typeof LocatorSpecSchema>;
 
 const target = { locator: LocatorSpecSchema };
+/** Shared scroll-ratio bounds: enforced by ActionSchema and mirrored by flow codegen's serializer guard. */
+export const SCROLL_RATIO_MIN = 0;
+export const SCROLL_RATIO_MAX = 1;
+
 export const ActionSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("navigate"),
@@ -33,8 +37,8 @@ export const ActionSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("scroll"),
     ...target,
-    horizontalRatio: z.number().min(0).max(1),
-    verticalRatio: z.number().min(0).max(1),
+    horizontalRatio: z.number().min(SCROLL_RATIO_MIN).max(SCROLL_RATIO_MAX),
+    verticalRatio: z.number().min(SCROLL_RATIO_MIN).max(SCROLL_RATIO_MAX),
   }),
 ]);
 export type Action = z.infer<typeof ActionSchema>;

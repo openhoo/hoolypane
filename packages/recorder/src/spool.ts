@@ -1,9 +1,10 @@
-import { randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { createWriteStream, promises as fs } from "node:fs";
-import { join } from "node:path";
+import type { FileHandle } from "node:fs/promises";
+import { join, relative } from "node:path";
 import type { Writable } from "node:stream";
 import type { ViewportSpec } from "@hoolypane/contracts";
-import { syncParentDirectory } from "@hoolypane/contracts/fsync";
+import { writeFileAtomic } from "@hoolypane/contracts/fsync";
 import { asError, MAX_QUEUED_BYTES, MAX_QUEUED_FRAMES, timestampSecondsToUs, type RecorderFailure, type SourceFrame } from "./capture-contract.js";
 
 export interface ScreencastFrame {
@@ -24,21 +25,45 @@ interface SpoolIndex {
 const ARTIFACT_MODE = 0o600;
 const DROP_NOTE_INTERVAL_MS = 1_000;
 
-/** Writes `data` durably: temp file (0o600) -> fsync -> rename -> parent-dir fsync. */
-export async function writeFileAtomic(path: string, data: string): Promise<void> {
-  const temporary = `${path}.${randomBytes(8).toString("hex")}.tmp`;
-  const handle = await fs.open(temporary, "wx", ARTIFACT_MODE);
+/** Durable atomic write (temp sibling 0o600 -> fsync -> rename -> parent-dir fsync), single-sourced in contracts' node-only fsync subpath. */
+export { writeFileAtomic };
+
+async function sha256File(path: string): Promise<string> {
+  const handle = await fs.open(path, "r");
   try {
-    await handle.writeFile(data);
-    await handle.sync();
-    await fs.rename(temporary, path);
-  } catch (error) {
-    await fs.rm(temporary, { force: true }).catch(() => undefined);
-    throw error;
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(4 * 1024 * 1024);
+    for (;;) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      hash.update(bytesRead === buffer.length ? buffer : buffer.subarray(0, bytesRead));
+    }
+    return hash.digest("hex");
   } finally {
     await handle.close();
   }
-  await syncParentDirectory(path);
+}
+
+/** Certifies one artifact file into the manifest key/hash maps under the shared `<directory>/<name>` key scheme. */
+export async function certifyArtifact(outputDir: string, directoryName: string, name: string, artifacts: Record<string, string>, hashes: Record<string, string>): Promise<void> {
+  const path = join(outputDir, directoryName, name);
+  const metadata = await fs.stat(path);
+  if (!metadata.isFile()) return;
+  const key = relative(outputDir, path);
+  hashes[key] = await sha256File(path);
+  artifacts[key] = key;
+}
+
+/** Best-effort collection: missing directories and unreadable entries are skipped instead of failing the manifest. */
+export async function collectDirectoryArtifacts(outputDir: string, directoryName: string, artifacts: Record<string, string>, hashes: Record<string, string>, filter?: (name: string) => boolean): Promise<void> {
+  let names: string[];
+  try { names = await fs.readdir(join(outputDir, directoryName)); } catch { return; }
+  for (const name of names) {
+    if (filter && !filter(name)) continue;
+    try {
+      await certifyArtifact(outputDir, directoryName, name, artifacts, hashes);
+    } catch { continue; }
+  }
 }
 
 export interface CaptureTarget {
@@ -52,6 +77,7 @@ export interface CaptureTarget {
 export class FrameSpool {
   readonly index: SpoolIndex;
   private stream: Writable | undefined;
+  private readHandle: FileHandle | undefined;
   private queuedFrames = 0;
   private queuedBytes = 0;
   private nextOffset = 0;
@@ -134,6 +160,7 @@ export class FrameSpool {
   }
 
   async close(): Promise<void> {
+    await this.closeRead();
     if (this.closed) return;
     this.closed = true;
     await this.writeChain;
@@ -162,6 +189,7 @@ export class FrameSpool {
   }
 
   async dispose(): Promise<void> {
+    await this.closeRead();
     if (this.closed) return;
     this.closed = true;
     await this.writeChain.catch(() => undefined);
@@ -170,16 +198,26 @@ export class FrameSpool {
     stream?.destroy();
   }
 
+  /** Reads always target the immutable finalized bin, so one cached handle serves the whole encode loop. */
   async read(frame: SourceFrame): Promise<Buffer> {
-    const handle = await fs.open(join(this.directory, `${this.viewportId}.jpeg.bin`), "r");
+    const handle = this.readHandle ??= await fs.open(join(this.directory, `${this.viewportId}.jpeg.bin`), "r");
     try {
       const data = Buffer.allocUnsafe(frame.length);
       const { bytesRead } = await handle.read(data, 0, frame.length, frame.offset);
       if (bytesRead !== frame.length) throw new Error(`frame truncated for ${this.viewportId}: read ${bytesRead} of ${frame.length} bytes at offset ${frame.offset}`);
       return data;
-    } finally {
-      await handle.close();
+    } catch (error) {
+      // A failed handle must not poison later reads: drop the cache entry so the next read reopens.
+      this.readHandle = undefined;
+      await handle.close().catch(() => undefined);
+      throw error;
     }
+  }
+  /** Closes the cached read handle; safe to call any time, including before or after close()/dispose(). */
+  async closeRead(): Promise<void> {
+    const readHandle = this.readHandle;
+    this.readHandle = undefined;
+    if (readHandle) await readHandle.close().catch(() => undefined);
   }
 }
 
@@ -225,10 +263,11 @@ export function decodeScreencastData(frame: ScreencastFrame): Buffer {
 
 export function frameMetadata(frame: ScreencastFrame, sequence: number): Omit<SourceFrame, "offset" | "length"> {
   const metadata = frame.metadata;
+  if (metadata?.deviceWidth === undefined || metadata.deviceHeight === undefined) throw new Error("screencast frame is missing valid device metrics");
   return {
     sequence,
-    width: metadata?.deviceWidth ?? 0,
-    height: metadata?.deviceHeight ?? 0,
-    timestampUs: timestampSecondsToUs(metadata?.timestamp),
+    width: metadata.deviceWidth,
+    height: metadata.deviceHeight,
+    timestampUs: timestampSecondsToUs(metadata.timestamp),
   };
 }

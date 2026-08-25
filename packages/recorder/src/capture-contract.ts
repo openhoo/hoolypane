@@ -6,6 +6,10 @@ export const POST_ROLL_US = 250_000;
 export const MAX_QUEUED_FRAMES = 8;
 export const MAX_QUEUED_BYTES = 32 * 1024 * 1024;
 
+// Shared grace period before SIGKILL for spawned ffmpeg-family children; the encoder shutdown
+// watchdog and the verifier probe watchdog must stay tuned together.
+export const CHILD_GRACE_MS = 10_000;
+
 // Folding the shared codec limit (MAX_ENCODED_DIMENSION from @hoolypane/contracts) into the composite
 // fit scale keeps grid outputs encodable while preserving aspect ratio.
 

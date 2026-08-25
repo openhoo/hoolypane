@@ -14,25 +14,34 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
+interface RecordedTrackSpec { readonly id: string; readonly width: number; readonly height: number; readonly frames: number; readonly strideUs: number }
+
+async function recordedTracks(directory: string, specs: readonly RecordedTrackSpec[], t0Us: number, durationFrames: number, fps: 30 | 60) {
+  return Promise.all(specs.map(async (spec) => {
+    const jpeg = await sharp({ create: { width: spec.width, height: spec.height, channels: 3, background: "#ff0000" } }).jpeg().toBuffer();
+    const spool = new FrameSpool(spec.id, join(directory, "raw"));
+    await spool.open();
+    try {
+      for (let sequence = 0; sequence < spec.frames; sequence += 1) {
+        await spool.append(jpeg, { sequence, width: spec.width, height: spec.height, timestampUs: sequence * spec.strideUs });
+      }
+    } finally {
+      await spool.close().catch(() => undefined);
+    }
+    const alignment = alignFrames(spool.index.frames, t0Us, durationFrames, fps);
+    return { id: spec.id, spool, mappings: alignment.mappings, geometry: { id: spec.id, encodedWidth: spec.width, encodedHeight: spec.height } };
+  }));
+}
+
 describe("multi-viewport encoder", () => {
   it("produces identical complete frame timelines", async () => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-encoder-"));
     directories.push(directory);
-    const tracks = await Promise.all(["one", "two", "three"].map(async (id, trackIndex) => {
-      const geometry = [{ width: 320, height: 240 }, { width: 240, height: 320 }, { width: 180, height: 320 }][trackIndex]!;
-      const jpeg = await sharp({ create: { width: geometry.width, height: geometry.height, channels: 3, background: "#ff0000" } }).jpeg().toBuffer();
-      const spool = new FrameSpool(id, join(directory, "raw"));
-      await spool.open();
-      try {
-        for (let sequence = 0; sequence < 10; sequence += 1) {
-          await spool.append(jpeg, { sequence, width: geometry.width, height: geometry.height, timestampUs: sequence * (trackIndex + 1) * 20_000 });
-        }
-      } finally {
-        await spool.close().catch(() => undefined);
-      }
-      const alignment = alignFrames(spool.index.frames, 0, 22, 30);
-      return { id, spool, mappings: alignment.mappings, geometry: { id, encodedWidth: geometry.width, encodedHeight: geometry.height } };
-    }));
+    const tracks = await recordedTracks(directory, [
+      { id: "one", width: 320, height: 240, frames: 10, strideUs: 20_000 },
+      { id: "two", width: 240, height: 320, frames: 10, strideUs: 40_000 },
+      { id: "three", width: 180, height: 320, frames: 10, strideUs: 60_000 },
+    ], 0, 22, 30);
     await encodeAligned(directory, tracks, 30, 22, { compositeMaxSize: { width: 640, height: 480 }, compositeBackground: "#111318" });
     const expectedComposite = compositeGeometry(tracks.map(({ geometry }) => geometry), { width: 640, height: 480 });
     const verification = await verifyArtifacts(directory, 30, 22, {
@@ -54,18 +63,7 @@ describe("multi-viewport encoder", () => {
   it("rejects artifacts that disagree with the declared timeline or geometry", async () => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-verifier-reject-"));
     directories.push(directory);
-    const jpeg = await sharp({ create: { width: 64, height: 64, channels: 3, background: "#00ff00" } }).jpeg().toBuffer();
-    const spool = new FrameSpool("solo", join(directory, "raw"));
-    await spool.open();
-    try {
-      for (let sequence = 0; sequence < 22; sequence += 1) {
-        await spool.append(jpeg, { sequence, width: 64, height: 64, timestampUs: sequence * 33_333 });
-      }
-    } finally {
-      await spool.close().catch(() => undefined);
-    }
-    const alignment = alignFrames(spool.index.frames, 0, 22, 30);
-    const tracks = [{ id: "solo", spool, mappings: alignment.mappings, geometry: { id: "solo", encodedWidth: 64, encodedHeight: 64 } }];
+    const tracks = await recordedTracks(directory, [{ id: "solo", width: 64, height: 64, frames: 22, strideUs: 33_333 }], 0, 22, 30);
     await encodeAligned(directory, tracks, 30, 22, { compositeMaxSize: { width: 128, height: 128 }, compositeBackground: "#111318" });
     const expected = {
       tracks: [{ id: "solo", encodedWidth: 64, encodedHeight: 64 }],

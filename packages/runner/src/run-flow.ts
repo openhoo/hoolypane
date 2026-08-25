@@ -79,15 +79,15 @@ function recorderTarget(id: string, viewport: ViewportSpec, cdp: CDPSession): Re
 }
 
 function failureFrom(error: unknown): RecorderFailure {
-  if (error instanceof Error) return { message: error.message, ...(error.stack === undefined ? {} : { stack: error.stack }) };
-  return { message: String(error) };
+  const message = errorMessage(error);
+  return error instanceof Error && error.stack !== undefined ? { message, stack: error.stack } : { message };
 }
 
 // User config/flow modules are user code: their top-level evaluation is bounded like the flow
 // phase so a never-settling top-level await cannot hang the CLI before any deadline, output
-// directory, or artifact exists. The config deadline matches the schema default for timeoutMs
-// (the config itself defines the real flow deadline and is not known yet).
-const MODULE_EVAL_TIMEOUT_MS = 30_000;
+// directory, or artifact exists. Derived straight from the schema default for timeoutMs so the
+// two cannot drift (the config itself defines the real flow deadline and is not known yet).
+const MODULE_EVAL_TIMEOUT_MS = HoolypaneConfigSchema.pick({ timeoutMs: true }).parse({}).timeoutMs;
 
 async function evaluateModule(path: string, deadlineMs: number, source: string): Promise<Record<string, unknown>> {
   const deadline = Promise.withResolvers<never>();
@@ -100,8 +100,8 @@ async function evaluateModule(path: string, deadlineMs: number, source: string):
 }
 
 export async function runFlow(args: RunArguments): Promise<RunResult> {
-  const projectDir = dirname(resolve(args.flowFile));
   const flowPath = resolve(args.flowFile);
+  const projectDir = dirname(flowPath);
   if (!(await exists(flowPath))) throw new Error(`Flow file not found: ${flowPath}`);
   const configPath = resolve(args.configFile);
   const cacheDir = resolve(projectDir, ".hoolypane/cache");
@@ -237,7 +237,9 @@ export async function runFlow(args: RunArguments): Promise<RunResult> {
       }
       if (recorder === undefined) {
         // Interrupted during setup: no recording started and the previous output directory
-        // contents are intact, so there is nothing to finalize.
+        // contents must stay intact, so discard the partial traces instead of writing them
+        // over the preserved directory. context.close() below drops the unfinished buffers.
+        tracesStopped = true;
         return { outputDir, status: "interrupted" };
       }
       initialFramesAbort.abort();
@@ -264,12 +266,14 @@ export async function runFlow(args: RunArguments): Promise<RunResult> {
   } finally {
     process.removeListener("SIGINT", onSignal);
     process.removeListener("SIGTERM", onSignal);
-    clearTimeout(signalDeadline);
     initialFramesAbort.abort();
     await Promise.allSettled([...contexts.map((context) => context.close()), browser?.close()]);
     if (recorder && !recorderFinalized) {
       try { await recorder.finalize({ status: "failed", failures: [], events: [] }); } catch { /* best effort */ }
     }
     await Promise.allSettled([flowCompiled.cleanup(), configCompiled.cleanup()]);
+    // Disarm the force-exit backstop only after every teardown await has settled: a wedged
+    // close(), finalize(), or cleanup() must still be bounded by the documented 10s window.
+    clearTimeout(signalDeadline);
   }
 }

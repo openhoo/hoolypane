@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, session, type Session, type WebContents, WebContentsView } from "electron";
-import { IPC_CHANNELS, PaneGenerationSchema, ViewportSpecSchema, errorMessage, type Action, type BoundsSnapshot, type ColorSchemeMode, type OverlayKey, type ThrottlingMode, type ViewportSpec } from "@hoolypane/contracts";
+import { DEFAULT_SHARED_URL, IPC_CHANNELS, PaneGenerationSchema, ViewportSpecSchema, errorMessage, type Action, type BoundsSnapshot, type ColorSchemeMode, type OverlayKey, type ThrottlingMode, type ViewportSpec } from "@hoolypane/contracts";
 import { report } from "../report.js";
 import { displayScale, validateBoundsSnapshot, type Bounds } from "./layout.js";
 import { isAllowedProtocol, normalizeUrl } from "./url.js";
@@ -345,7 +345,7 @@ export class PaneRegistry {
 
   private restoreTarget(value: string): string {
     try { return normalizeUrl(value); } catch { /* corrupt persisted URL: fall through to sharedUrl */ }
-    try { return normalizeUrl(this.workspace.sharedUrl); } catch { return defaultWorkspace().sharedUrl; }
+    try { return normalizeUrl(this.workspace.sharedUrl); } catch { return DEFAULT_SHARED_URL; }
   }
 
   private async rollbackCreate(record: PaneRecord, addedWorkspaceEntry: boolean): Promise<void> {

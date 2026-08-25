@@ -51,8 +51,11 @@ const PaneStateSchema = z.strictObject({
 });
 export type PaneState = z.infer<typeof PaneStateSchema>;
 
+/** Persisted-workspace format version: pinned by WorkspaceStateSchema and read by the desktop store's downgrade guard. */
+export const WORKSPACE_VERSION = 1;
+
 export const WorkspaceStateSchema = z.strictObject({
-  version: z.literal(1),
+  version: z.literal(WORKSPACE_VERSION),
   panes: z.array(PaneStateSchema).min(1),
   order: z.array(z.string().min(1)).min(1),
   layout: LayoutModeSchema,
@@ -88,9 +91,12 @@ export function paneFromViewport(viewport: ViewportSpec, id: string, url: string
   return { id, name: viewport.name, viewport, url, ...RUNTIME_PANE_DEFAULTS };
 }
 
+/** Terminal fallback shared URL when both a persisted pane URL and the stored sharedUrl are unparsable. */
+export const DEFAULT_SHARED_URL = "https://example.com/";
+
 export function defaultWorkspace(): WorkspaceState {
-  const url = "https://example.com/";
+  const url = DEFAULT_SHARED_URL;
   const viewports = VIEWPORT_PRESETS;
   const panes = viewports.map((viewport) => paneFromViewport(viewport, viewport.id, url));
-  return { version: 1, panes, order: panes.map((pane) => pane.id), layout: "free", positions: {}, emulation: EmulationSettingsSchema.parse({}), focusedPaneId: null, syncEnabled: true, sharedUrl: url };
+  return { version: WORKSPACE_VERSION, panes, order: panes.map((pane) => pane.id), layout: "free", positions: {}, emulation: EmulationSettingsSchema.parse({}), focusedPaneId: null, syncEnabled: true, sharedUrl: url };
 }

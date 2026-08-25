@@ -205,7 +205,6 @@ export async function compileModule(entryFile: string, cacheDir: string): Promis
     path: outputPath,
     cleanup: async () => {
       await rm(outputPath, { force: true });
-      await rm(`${outputPath}.map`, { force: true });
     },
   };
 }

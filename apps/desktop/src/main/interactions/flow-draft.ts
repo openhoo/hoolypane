@@ -48,7 +48,7 @@ export class FlowDraft {
   }
 
   private clearBlockingForPane(paneId: string): void {
-    for (const [key, entry] of [...this.blocking]) {
+    for (const [key, entry] of this.blocking) {
       if (entry.paneId === paneId) this.blocking.delete(key);
     }
   }

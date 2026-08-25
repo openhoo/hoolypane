@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import type { ChromeCommand, ChromeState, EmulationSettings as EmulationState, LayoutMode, PaneState } from "@hoolypane/contracts";
 import { customViewport } from "./state.js";
+import { PANE_HEADER_HEIGHT } from "./layout.js";
 import {
   IconAlertTriangle,
   IconArrowLeft,
@@ -32,6 +33,8 @@ const fieldTone = (active: boolean): string => (active ? "border-accent/70 bg-ac
 
 const dotTone = (on: boolean): string => `size-1.5 shrink-0 rounded-full ${on ? "bg-accent" : "bg-edge"}`;
 
+const focusRing = "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
+
 function IconButton({
   label,
   onClick,
@@ -57,7 +60,7 @@ function IconButton({
       title={label}
       disabled={disabled}
       onClick={onClick}
-      class={`${narrow ? "hidden @[200px]:inline-flex" : "inline-flex"} size-5 shrink-0 items-center justify-center rounded transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent disabled:pointer-events-none disabled:text-mute/60 disabled:bg-transparent ${
+      class={`${narrow ? "hidden @[200px]:inline-flex" : "inline-flex"} size-5 shrink-0 items-center justify-center rounded transition-colors ${focusRing} disabled:pointer-events-none disabled:text-mute/60 disabled:bg-transparent ${
         danger
           ? "text-mute hover:bg-danger/15 hover:text-danger"
           : active
@@ -101,7 +104,7 @@ export function Toolbar({
         <select
           id="layout"
           value={state.layout}
-          onChange={(event) => send({ kind: "set-layout", layout: (event.currentTarget as HTMLSelectElement).value as LayoutMode })}
+          onChange={(event) => send({ kind: "set-layout", layout: event.currentTarget.value as LayoutMode })}
           class={selectClass(false, "px-1.5")}
         >
           <option value="free">Free</option>
@@ -121,14 +124,14 @@ export function Toolbar({
           placeholder="https://example.com"
           onFocus={onAddressFocus}
           onBlur={onAddressBlur}
-          onInput={(event) => onAddressInput((event.currentTarget as HTMLInputElement).value)}
+          onInput={(event) => onAddressInput(event.currentTarget.value)}
           class="h-8 w-full rounded-lg border border-edge bg-field px-3 text-[13px] text-ink outline-none transition-colors placeholder:text-mute/60 focus:border-accent/70"
         />
       </form>
       <button
         type="button"
         onClick={() => send({ kind: "create", viewport: customViewport(960, 720) })}
-        class="flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-edge bg-elevated px-2 text-xs font-medium text-ink hover:bg-field focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
+        class={`flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-edge bg-elevated px-2 text-xs font-medium text-ink hover:bg-field ${focusRing}`}
       >
         <IconPlus class="text-accent" />
         Add custom
@@ -142,7 +145,7 @@ export function Toolbar({
         aria-checked={state.syncEnabled}
         aria-label="Sync"
         onClick={() => send({ kind: "set-sync", enabled: !state.syncEnabled })}
-        class={`flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent hover:bg-ink/10 ${
+        class={`flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs ${focusRing} hover:bg-ink/10 ${
           state.syncEnabled ? "text-ink" : "text-mute"
         }`}
       >
@@ -157,7 +160,7 @@ export function Toolbar({
           <select
             aria-label="Color scheme"
             value={state.emulation.colorScheme}
-            onChange={(event) => send({ kind: "set-color-scheme", value: (event.currentTarget as HTMLSelectElement).value as EmulationState["colorScheme"] })}
+            onChange={(event) => send({ kind: "set-color-scheme", value: event.currentTarget.value as EmulationState["colorScheme"] })}
             class={selectClass(state.emulation.colorScheme !== "auto")}
           >
             <option value="auto">Auto</option>
@@ -171,7 +174,7 @@ export function Toolbar({
           aria-label="Reduced motion"
           title="Reduced motion"
           onClick={() => send({ kind: "set-reduced-motion", enabled: !state.emulation.reducedMotion })}
-          class={`h-8 shrink-0 whitespace-nowrap rounded-lg border px-2 text-xs transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent ${fieldTone(state.emulation.reducedMotion)}`}
+          class={`h-8 shrink-0 whitespace-nowrap rounded-lg border px-2 text-xs transition-colors ${focusRing} ${fieldTone(state.emulation.reducedMotion)}`}
         >
           Motion
         </button>
@@ -180,7 +183,7 @@ export function Toolbar({
           <select
             aria-label="Throttling"
             value={state.emulation.throttling}
-            onChange={(event) => send({ kind: "set-throttling", mode: (event.currentTarget as HTMLSelectElement).value as EmulationState["throttling"] })}
+            onChange={(event) => send({ kind: "set-throttling", mode: event.currentTarget.value as EmulationState["throttling"] })}
             class={selectClass(state.emulation.throttling !== "none")}
           >
             <option value="none">No throttling</option>
@@ -206,7 +209,7 @@ export function Toolbar({
                 aria-checked={state.emulation.overlays[item.key]}
                 onClick={(event) => {
                   send({ kind: "set-overlay", key: item.key, enabled: !state.emulation.overlays[item.key] });
-                  (event.currentTarget.closest("details") as HTMLDetailsElement | null)?.removeAttribute("open");
+                  event.currentTarget.closest("details")?.removeAttribute("open");
                 }}
                 class="flex items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs text-ink hover:bg-field"
               >
@@ -221,7 +224,7 @@ export function Toolbar({
         type="button"
         aria-pressed={state.recording}
         onClick={() => send({ kind: state.recording ? "record-stop" : "record-start" })}
-        class={`flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-xs font-semibold focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent ${
+        class={`flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-xs font-semibold ${focusRing} ${
           state.recording
             ? "border border-danger/60 bg-danger/15 text-danger hover:bg-danger/25"
             : "border border-edge bg-field text-ink hover:border-accent/50 hover:bg-elevated"
@@ -271,13 +274,13 @@ function PaneName({ pane, onRename }: { pane: PaneState; onRename(name: string):
           // header and arm sticky keyboard-move state (the pointer path excludes us at the
           // header via closest("button, input, select") — keyboard must behave the same).
           event.stopPropagation();
-          const key = (event as KeyboardEvent).key;
+          const key = event.key;
           if (key === "Enter" || key === "F2") {
             event.preventDefault();
             setEditing(true);
           }
         }}
-        class="min-w-4 flex-1 cursor-text truncate rounded px-0.5 text-xs font-semibold text-ink hover:bg-ink/5 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
+        class={`min-w-4 flex-1 cursor-text truncate rounded px-0.5 text-xs font-semibold text-ink hover:bg-ink/5 ${focusRing}`}
       >
         {pane.name}
       </span>
@@ -293,16 +296,16 @@ function PaneName({ pane, onRename }: { pane: PaneState; onRename(name: string):
         // Same ownership rule as the name span: rename keys must never reach the header
         // delegate or the global keyboard-move listener.
         event.stopPropagation();
-        if ((event as KeyboardEvent).key === "Enter") {
+        if (event.key === "Enter") {
           restoreFocusRef.current = true;
-          (event.currentTarget as HTMLInputElement).blur();
+          event.currentTarget.blur();
         }
-        if ((event as KeyboardEvent).key === "Escape") {
+        if (event.key === "Escape") {
           restoreFocusRef.current = true;
           setEditing(false);
         }
       }}
-      onInput={(event) => setDraft((event.currentTarget as HTMLInputElement).value)}
+      onInput={(event) => setDraft(event.currentTarget.value)}
       class="min-w-6 max-w-36 shrink rounded border border-edge bg-field px-0.5 text-xs font-semibold text-ink outline-none focus:border-accent"
     />
   );
@@ -337,7 +340,7 @@ export const PaneCard = memo(function PaneCard({
       style={placement ? { position: "absolute", left: placement.x, top: placement.y, width: placement.width, height: placement.height } : undefined}
       class={`pane-card @container relative flex min-w-0 select-none flex-col overflow-hidden rounded-xl border shadow-xl shadow-black/30 transition-shadow ${
         focused ? "focused ring-2 ring-accent ring-offset-0" : ""
-      } ${dragging ? "z-30 scale-[1.01] border-accent/60 shadow-black/50" : ""} ${hidden ? "hidden" : dragging ? "border-accent/60" : "border-edge ring-1 ring-white/[0.04] hover:border-accent/40"}`}
+      } ${dragging ? "z-30 scale-[1.01] border-accent/60 shadow-black/50" : ""} ${hidden ? "hidden" : dragging ? "" : "border-edge ring-1 ring-white/[0.04] hover:border-accent/40"}`}
     >
       {pane.loading && (
         <div aria-hidden="true" class="absolute inset-x-0 top-0 z-10 h-0.5 animate-pulse bg-accent" />
@@ -348,8 +351,9 @@ export const PaneCard = memo(function PaneCard({
         tabIndex={0}
         aria-label={`${pane.name} pane header`}
         onPointerDown={(event) => { const target = event.target as HTMLElement; if (target.closest("button, input, select")) return; event.preventDefault(); onHeaderPointerDown?.(event); }}
-        onKeyDown={(event) => { const target = event.target as HTMLElement; if (target.closest("button, input, select")) return; onHeaderKeyDown?.(event as KeyboardEvent); }}
-        class={`flex h-7 shrink-0 cursor-grab items-center gap-0.5 border-b border-edge bg-elevated pl-1 pr-1 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent active:cursor-grabbing ${dragging ? "bg-field" : ""}`}
+        onKeyDown={(event) => { const target = event.target as HTMLElement; if (target.closest("button, input, select")) return; onHeaderKeyDown?.(event); }}
+        style={{ height: PANE_HEADER_HEIGHT }}
+        class={`flex shrink-0 cursor-grab items-center gap-0.5 border-b border-edge bg-elevated pl-1 pr-1 ${focusRing} active:cursor-grabbing ${dragging ? "bg-field" : ""}`}
       >
         <PaneName pane={pane} onRename={(name) => send({ kind: "rename", paneId: pane.id, name })} />
         {pane.failure && (

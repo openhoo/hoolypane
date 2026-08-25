@@ -6,6 +6,7 @@ import type { ElectronApplication, Page } from "playwright";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { runFlow } from "../../packages/runner/src/run-flow.js";
+import { OVERVIEW_ERROR_TILE_COLOR } from "../../apps/desktop/src/main/screenshots/overview-worker.js";
 import { launchDesktopApp, pollUntil, startFixtureServer, waitForFixturePanes, type FixtureServer } from "../helpers/harness.js";
 import { clickPaneSurface } from "./cdp-input.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
@@ -135,7 +136,7 @@ describe("desktop screenshots and recorded flows", () => {
 
   it("does not save an empty flow", async () => {
     const emptyPath = join(directory, "empty.flow.ts");
-    await application.evaluate((_electron, path) => { process.env.HOOLYPANE_TEST_FLOW_PATH = path; delete process.env.HOOLYPANE_TEST_FLOW_SAVE_CANCEL; }, emptyPath);
+    await application.evaluate((_electron, path) => { process.env.HOOLYPANE_TEST_FLOW_PATH = path; }, emptyPath);
     await startRecording();
     await stopRecording();
     await expect(access(emptyPath)).rejects.toBeDefined();
@@ -144,16 +145,21 @@ describe("desktop screenshots and recorded flows", () => {
   it("does not save a cancelled flow despite mirrored actions", async () => {
     const canceledPath = join(directory, "canceled.flow.ts");
     await application.evaluate((_electron, path) => { process.env.HOOLYPANE_TEST_FLOW_PATH = path; process.env.HOOLYPANE_TEST_FLOW_SAVE_CANCEL = "1"; }, canceledPath);
-    const baseline = await appliedCount();
-    await startRecording();
-    await clickDesktopApply();
-    await waitForAppliedCount(baseline + 5);
-    await stopRecording();
-    await expect(access(canceledPath)).rejects.toBeDefined();
+    try {
+      const baseline = await appliedCount();
+      await startRecording();
+      await clickDesktopApply();
+      await waitForAppliedCount(baseline + 5);
+      await stopRecording();
+      await expect(access(canceledPath)).rejects.toBeDefined();
+    } finally {
+      // Restore the launch baseline locally so no later test inherits SAVE_CANCEL=1.
+      await application.evaluate(() => { delete process.env.HOOLYPANE_TEST_FLOW_SAVE_CANCEL; }).catch(() => undefined);
+    }
   }, 30_000);
 
   it("marks missing panes in the overview export", async () => {
-    await application.evaluate((_electron, path) => { process.env.HOOLYPANE_TEST_OVERVIEW_PNG = path; delete process.env.HOOLYPANE_TEST_FLOW_SAVE_CANCEL; }, errorOverviewPng);
+    await application.evaluate((_electron, path) => { process.env.HOOLYPANE_TEST_OVERVIEW_PNG = path; }, errorOverviewPng);
     await application.evaluate(({ webContents }, port) => {
       const pane = webContents.getAllWebContents().find((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`));
       if (!pane) throw new Error("pane missing for error-overview test");
@@ -163,8 +169,9 @@ describe("desktop screenshots and recorded flows", () => {
     await chrome.getByRole("button", { name: "Save Overview PNG" }).click();
     await waitForFile(errorOverviewPng);
     const errorPixels = await sharp(errorOverviewPng).ensureAlpha().raw().toBuffer();
+    const [errorRed, errorGreen, errorBlue] = [1, 3, 5].map((index) => Number.parseInt(OVERVIEW_ERROR_TILE_COLOR.slice(index, index + 2), 16));
     let errorBackgroundPixels = 0;
-    for (let offset = 0; offset < errorPixels.length; offset += 4) if (errorPixels[offset] === 58 && errorPixels[offset + 1] === 23 && errorPixels[offset + 2] === 27) errorBackgroundPixels += 1;
+    for (let offset = 0; offset < errorPixels.length; offset += 4) if (errorPixels[offset] === errorRed && errorPixels[offset + 1] === errorGreen && errorPixels[offset + 2] === errorBlue) errorBackgroundPixels += 1;
     expect(errorBackgroundPixels).toBeGreaterThan(1_000);
     expect(await readFile(errorOverviewPng)).not.toEqual(await readFile(overviewPng));
   }, 30_000);

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { hrtime } from "node:process";
 import { errorMessage, type ResolvedRecordingConfig, type ViewportSpec, type FlowEvent } from "@hoolypane/contracts";
 import {
@@ -20,8 +20,8 @@ import {
   type TrackGeometry,
 } from "./capture-contract.js";
 import { encodeAligned, type EncodingResult } from "./encoder.js";
-import { CaptureSpool, decodeScreencastData, frameMetadata, writeFileAtomic, type CaptureTarget, type FrameSpool, type ScreencastFrame } from "./spool.js";
-import { sha256File, verifyArtifacts } from "./verifier.js";
+import { CaptureSpool, collectDirectoryArtifacts, decodeScreencastData, frameMetadata, writeFileAtomic, type CaptureTarget, type FrameSpool, type ScreencastFrame } from "./spool.js";
+import { verifyArtifacts } from "./verifier.js";
 
 export type { RecorderFailure };
 export type RecordingTarget = CaptureTarget;
@@ -94,27 +94,12 @@ function serializeRunState(runId: string, state: RecordingState, contract: typeo
   return `${JSON.stringify({ runId, state, contract }, null, 2)}\n`;
 }
 
-async function collectDirectoryArtifacts(outputDir: string, directoryName: string, artifacts: Record<string, string>, hashes: Record<string, string>): Promise<void> {
-  const directory = join(outputDir, directoryName);
-  let names: string[];
-  try { names = await fs.readdir(directory); } catch { return; }
-  for (const name of names) {
-    const path = join(directory, name);
-    try {
-      const metadata = await fs.stat(path);
-      if (!metadata.isFile()) continue;
-      const key = relative(outputDir, path);
-      hashes[key] = await sha256File(path);
-      artifacts[key] = key;
-    } catch { continue; }
-  }
-}
-
 export class RecordingSession {
   private state: RecordingState = "awaiting-initial-frames";
   private readonly spools = new CaptureSpool();
   private readonly contexts: Context[] = [];
   private readonly captureCloseFailures: RecorderFailure[] = [];
+  private spoolFailureNotes: readonly RecorderFailure[] = [];
   private started = false;
   private finalized = false;
   private captureStopped = false;
@@ -166,8 +151,7 @@ export class RecordingSession {
         });
       }
     } catch (error) {
-      await Promise.allSettled(this.contexts.map((context) => context.target.send("Page.stopScreencast")));
-      for (const context of this.contexts) context.target.off("Page.screencastFrame", context.listener);
+      await this.detachCapture();
       await this.spools.close().catch(() => undefined);
       throw error;
     }
@@ -218,11 +202,16 @@ export class RecordingSession {
     this.flowStartUs = monotonicUs();
   }
 
+  /** Shared screencast detach pair; stopCapture() additionally closes spools, start()'s failure path swallows close errors. */
+  private async detachCapture(): Promise<void> {
+    await Promise.allSettled(this.contexts.map((context) => context.target.send("Page.stopScreencast")));
+    for (const context of this.contexts) context.target.off("Page.screencastFrame", context.listener);
+  }
+
   private async stopCapture(): Promise<void> {
     if (this.captureStopped) return;
     this.captureStopped = true;
-    await Promise.allSettled(this.contexts.map((context) => context.target.send("Page.stopScreencast")));
-    for (const context of this.contexts) context.target.off("Page.screencastFrame", context.listener);
+    await this.detachCapture();
     await this.spools.close((viewportId, error) => {
       this.captureCloseFailures.push({ message: `capture spool close failed: ${error.message}`, viewportId });
     }).catch(() => undefined);
@@ -256,6 +245,7 @@ export class RecordingSession {
   async finalize(input: FinalizeInput): Promise<RecordingFinalizeResult> {
     if (this.finalized) throw new Error("recording session already finalized");
     this.finalized = true;
+    let failureDiagnostics: { readonly contract: typeof CAPTURE_CONTRACT; readonly status: FinalizeInput["status"]; readonly pipelineErrorMessage: string } | undefined;
     try {
       if (this.t0Us === undefined) return await this.finalizeWithoutFrames(input);
       const manifestPath = join(this.options.outputDir, "manifest.json");
@@ -273,10 +263,13 @@ export class RecordingSession {
         try {
           if (this.state !== "complete" && this.state !== "failed") await this.transition("failed");
         } catch { /* the original error takes precedence */ }
-        try {
-          const message = errorMessage(error);
-          await atomicJson(join(this.options.outputDir, "diagnostics.json"), { contract: CAPTURE_CONTRACT, status: input.status, failures: [...input.failures, { message: `finalize pipeline failed: ${message}` }] });
-        } catch { /* the original error takes precedence */ }
+        // Only the error facts are frozen here; the failures array is composed in the finally
+        // AFTER stopCapture() so close-time spool notes and captureCloseFailures are included.
+        failureDiagnostics = {
+          contract: CAPTURE_CONTRACT,
+          status: input.status,
+          pipelineErrorMessage: `finalize pipeline failed: ${errorMessage(error)}`,
+        };
         if (manifestOnDisk && !manifestWritten) {
           // The manifest landed but the terminal transition did not complete: unlink it so a failed
           // exit cannot leave a success manifest certifying artifacts pruned below.
@@ -291,6 +284,21 @@ export class RecordingSession {
       try {
         await this.stopCapture();
       } catch { /* cleanup errors must not mask the original failure */ }
+      if (failureDiagnostics !== undefined) {
+        try {
+          await atomicJson(join(this.options.outputDir, "diagnostics.json"), {
+            contract: failureDiagnostics.contract,
+            status: failureDiagnostics.status,
+            failures: [
+              ...input.failures,
+              ...this.spoolFailureNotes,
+              ...this.contexts.flatMap((context) => [...context.spool.drainFailureNotes()]),
+              ...this.captureCloseFailures,
+              { message: failureDiagnostics.pipelineErrorMessage },
+            ],
+          });
+        } catch { /* cleanup errors must not mask the original failure */ }
+      }
     }
   }
 
@@ -322,7 +330,7 @@ export class RecordingSession {
         .map((context) => ({ message: `capture ended early: ${context.captureError!.message}`, viewportId: context.target.id })),
       ...this.captureCloseFailures,
     ];
-    const spoolFailureNotes = this.contexts.flatMap((context) => [...context.spool.drainFailureNotes()]);
+    this.spoolFailureNotes = this.contexts.flatMap((context) => [...context.spool.drainFailureNotes()]);
     const aligned = this.contexts.map((context): AlignedCapture => {
       const result = alignFrames(context.spool.index.frames, this.t0Us!, durationFrames, this.options.recording.fps);
       return { context, result, geometry: geometryForViewport(context.target.viewport) };
@@ -344,7 +352,7 @@ export class RecordingSession {
       await this.transition("failed");
       throw new Error(`artifact validation failed: ${verification.error ?? "unknown error"}`);
     }
-    return { t1Us, durationFrames, captureFailures, spoolFailureNotes, aligned, encoding, verifiedArtifacts: verification.artifacts, verifiedHashes: verification.sha256 };
+    return { t1Us, durationFrames, captureFailures, spoolFailureNotes: this.spoolFailureNotes, aligned, encoding, verifiedArtifacts: verification.artifacts, verifiedHashes: verification.sha256 };
   }
 
   private async buildManifest(input: FinalizeInput, pipeline: CapturePipelineResult): Promise<RecordingManifest> {

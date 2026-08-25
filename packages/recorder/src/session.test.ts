@@ -13,10 +13,9 @@ import { RecordingSession, type RecordingTarget } from "./session.js";
 class FakeTarget implements RecordingTarget {
   readonly id = "phone";
   readonly viewport: ViewportSpec = { id: "phone", name: "Phone", width: 64, height: 64, deviceScaleFactor: 1, isMobile: true, hasTouch: true };
-  readonly commands: string[] = [];
   private listener: ((params: unknown) => void) | undefined;
 
-  async send(method: string): Promise<unknown> { this.commands.push(method); return {}; }
+  async send(_method: string): Promise<unknown> { return {}; }
   on(_event: string, listener: (params: unknown) => void): void { this.listener = listener; }
   off(): void { this.listener = undefined; }
   emit(params: unknown): void { this.listener?.(params); }
@@ -123,5 +122,17 @@ describe("recording session", () => {
     expect(result.kind).toBe("diagnostics");
     expect(existsSync(join(outputDir, "raw"))).toBe(false);
     expect(existsSync(join(outputDir, "videos"))).toBe(false);
+  });
+});
+
+describe("recording session guards", () => {
+  it("rejects a duplicate start", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "hoolypane-session-start-"));
+    directories.push(directory);
+    const target = new FakeTarget();
+    const session = new RecordingSession(options(directory));
+    await session.start([target]);
+    await expect(session.start([target])).rejects.toThrow(/already started/);
+    await session.finalize({ status: "failed", failures: [] }).catch(() => undefined);
   });
 });

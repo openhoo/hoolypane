@@ -2,9 +2,9 @@ import { app, BrowserWindow, ipcMain, type IpcMainEvent } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
-  ActionEnvelopeSchema,
   BoundsSnapshotSchema,
   ChromeCommandSchema,
+  FILL_DEBOUNCE_MS,
   IPC_CHANNELS,
   PaneObservedActionSchema,
   RECORDABLE_PRESS_KEYS,
@@ -46,6 +46,10 @@ let activeDrain: Promise<void> | null = null;
 
 /** Deadline for the before-quit command drain so a stuck command can never hold the app hostage. */
 const QUIT_FLUSH_DEADLINE_MS = 10_000;
+
+/** Record-stop flush settle: must exceed the pane preload's FILL_DEBOUNCE_MS so a straggler trusted
+ *  input re-arming the debounce right after the flush send still lands inside this barrier. */
+const STOP_FLUSH_SETTLE_MS = FILL_DEBOUNCE_MS + 25;
 
 function trustedChrome(event: IpcMainEvent): boolean {
   return chromeWindow !== undefined && event.sender === chromeWindow.webContents && event.senderFrame === chromeWindow.webContents.mainFrame;
@@ -107,7 +111,7 @@ async function stopAndSaveFlow(): Promise<StopFlowOutcome> {
   if (!paneRegistry || !chrome) return { kind: "handled" };
   await runWithFlushBarrier(paneRegistry, async () => {
     const { promise: flushed, resolve: flushSettled } = Promise.withResolvers<void>();
-    setTimeout(flushSettled, 325);
+    setTimeout(flushSettled, STOP_FLUSH_SETTLE_MS);
     await flushed;
   });
   // The drain spawned by the barrier lift runs asynchronously: let it finish so every buffered action is
@@ -342,12 +346,14 @@ async function acceptSourceAction(sourcePaneId: string, observed: unknown): Prom
   // construction: strict equality downstream would fail it on every target, mass-flagging panes
   // out of sync and recording an envelope no pane can ever replay.
   if (sourceRecord && sourceRecord.documentGeneration !== source.documentGeneration) return;
-  const envelope = ActionEnvelopeSchema.parse({
+  // Fields are already-valid by construction (source.action passed PaneObservedActionSchema.parse);
+  // FlowDraft.append's internal parse stays the single validation point.
+  const envelope: ActionEnvelope = {
     actionId: nextActionId++,
     documentGeneration: source.documentGeneration,
     sourcePaneId,
     action: source.action,
-  });
+  };
   flowDraft.append(envelope, draftGeneration);
   if (!paneRegistry.getState().syncEnabled) return;
   const targets = paneRegistry.getState().order.filter((paneId) => paneId !== sourcePaneId);
@@ -445,7 +451,7 @@ async function createChrome(): Promise<void> {
   // Scoped to the shell webContents: every other surface keeps its session's existing behavior.
   shellContents.session.setPermissionRequestHandler((requesting, _permission, callback) => callback(requesting !== shellContents));
   shellContents.session.setPermissionCheckHandler((requesting) => requesting !== shellContents);
-  chromeWindow.on("closed", () => { flowDraft.commit(); quittingRegistry = registry; void registry?.destroy(); chromeWindow = undefined; registry = undefined; });
+  chromeWindow.on("closed", () => { commitFlowDraft(); quittingRegistry = registry; void registry?.destroy(); chromeWindow = undefined; registry = undefined; });
   registry = new PaneRegistry({ workspace, onChange: publishState, onFailure: (failure) => report(failure.paneId, failure.message) });
   quittingRegistry = undefined;
   registry.attachWindow(chromeWindow);
@@ -477,7 +483,7 @@ app.commandLine.appendSwitch("disable-background-timer-throttling");
 // fall back to quitting when no window exists to show anything in.
 const handleLaunchFailure = (error: unknown): void => {
   const message = errorMessage(error);
-  console.error(message);
+  report("", message);
   if (chromeWindow && !chromeWindow.isDestroyed()) {
     lastError = `failed to (re)open the Hoolypane window: ${message}`;
     publishState();

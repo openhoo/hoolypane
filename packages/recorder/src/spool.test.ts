@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ViewportSpec } from "@hoolypane/contracts";
 import { MAX_QUEUED_BYTES, MAX_QUEUED_FRAMES } from "./capture-contract.js";
 import { CaptureSpool, FrameSpool } from "./spool.js";
-import { RecordingSession, type RecordingTarget } from "./session.js";
+import type { RecordingTarget } from "./session.js";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -99,27 +99,5 @@ describe("frame spool", () => {
     expect(capture.spools.size).toBe(0);
     const files = await readdir(directory);
     expect(files.filter((file) => file.endsWith(".index.json"))).toEqual([]);
-  });
-});
-
-describe("recording session guards", () => {
-  it("rejects a duplicate start", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "hoolypane-session-start-"));
-    directories.push(directory);
-    const target: RecordingTarget = {
-      id: "phone",
-      viewport: { id: "phone", name: "Phone", width: 64, height: 64, deviceScaleFactor: 1, isMobile: true, hasTouch: true },
-      send: async () => undefined,
-      on: () => undefined,
-      off: () => undefined,
-    };
-    const session = new RecordingSession({
-      recording: { fps: 30, jpegQuality: 85, compositeMaxSize: { width: 128, height: 128 }, compositeBackground: "#111318", keepRaw: false },
-      timeoutMs: 100,
-      outputDir: directory,
-    });
-    await session.start([target]);
-    await expect(session.start([target])).rejects.toThrow(/already started/);
-    await session.finalize({ status: "failed", failures: [] }).catch(() => undefined);
   });
 });

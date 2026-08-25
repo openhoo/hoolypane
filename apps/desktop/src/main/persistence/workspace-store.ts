@@ -1,9 +1,8 @@
 import { promises as fs } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { syncParentDirectory } from "@hoolypane/contracts/fsync";
+import { WORKSPACE_VERSION } from "@hoolypane/contracts";
+import { writeFileAtomic } from "@hoolypane/contracts/fsync";
 import { WorkspaceStateSchema, defaultWorkspace, type WorkspaceState } from "../panes/workspace.js";
-
-const SUPPORTED_WORKSPACE_VERSION = 1;
 
 type LoadedWorkspace = {
   state: WorkspaceState;
@@ -18,7 +17,7 @@ function defaults(persistable: boolean): LoadedWorkspace {
 /** Moves an unparseable file aside so the original bytes survive before defaults take over. */
 async function quarantine(file: string): Promise<boolean> {
   try {
-    await fs.rename(file, `${file}.corrupt-${Date.now()}`);
+    await fs.rename(file, `${file}.corrupt-${process.pid}.${Date.now()}-${++temporarySequence}`);
     return true;
   } catch {
     return false; // could not move aside: treat as unpersistable rather than clobbering
@@ -42,7 +41,7 @@ export async function loadWorkspace(file: string): Promise<LoadedWorkspace> {
     return defaults(await quarantine(file));
   }
   const version = typeof parsed === "object" && parsed !== null && "version" in parsed ? parsed.version : undefined;
-  if (typeof version === "number" && version > SUPPORTED_WORKSPACE_VERSION) {
+  if (typeof version === "number" && version > WORKSPACE_VERSION) {
     console.error(`[hoolypane] workspace ${file} has unsupported version ${version}; leaving it untouched`);
     return defaults(false); // downgrade guard: never overwrite data written by a newer build
   }
@@ -89,7 +88,7 @@ export async function saveWorkspace(file: string, state: WorkspaceState | (() =>
   const previous = saveTails.get(file) ?? Promise.resolve();
   // A provider is evaluated when the tail executes, not when it is enqueued, so mutations
   // landing while earlier writes settle are still included.
-  const task = previous.then(() => writeWorkspace(file, typeof state === "function" ? state() : state));
+  const task = previous.then(() => writeFileAtomic(file, JSON.stringify(typeof state === "function" ? state() : state)));
   saveTails.set(
     file,
     task.then(
@@ -105,34 +104,6 @@ export async function flushWorkspaceSaves(): Promise<void> {
   await Promise.all([...saveTails.values()]);
 }
 
-/** Shared atomic-replace core: writes via a callback into a unique same-directory temporary,
- *  renames over `path`, and removes the temporary on any failure. The temp naming keeps the
- *  `${basename}.….tmp` shape sweepStaleTemporaries matches, so crash orphans stay reclaimable. */
-async function writeAtomic(path: string, write: (temporaryPath: string) => Promise<void>): Promise<void> {
-  const temporaryPath = `${path}.${process.pid}.${Date.now()}-${++temporarySequence}.tmp`;
-  try {
-    await write(temporaryPath);
-    await fs.rename(temporaryPath, path);
-  } catch (error) {
-    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
-    throw error;
-  }
-}
-
-async function writeWorkspace(file: string, state: WorkspaceState): Promise<void> {
-  await writeAtomic(file, async (temporary) => {
-    const handle = await fs.open(temporary, "w", 0o600);
-    try {
-      await handle.writeFile(JSON.stringify(state));
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-  });
-  await syncParentDirectory(file);
-}
-
-/** Writes via a same-directory temp file + rename so a mid-write failure never leaves a torn file behind. */
-export async function writeFileAtomic(path: string, contents: string | Uint8Array): Promise<void> {
-  await writeAtomic(path, (temporaryPath) => fs.writeFile(temporaryPath, contents));
-}
+/** Durable atomic write adopted from contracts' fsync core: same-directory temp (private-artifact
+ *  0o600), content fsync, rename, parent-dir fsync — flow exports and PNG saves included. */
+export { writeFileAtomic };

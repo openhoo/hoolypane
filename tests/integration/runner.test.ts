@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -69,9 +69,10 @@ describe("real runner", () => {
     const result = await runFlow({ flowFile: resolve("tests/fixtures/failing.flow.ts"), configFile: resolve("tests/fixtures/hoolypane.config.ts"), outputDir: output, headed: false });
     expect(result.status).toBe("failed");
     const manifest = JSON.parse(await readFile(join(output, "manifest.json"), "utf8")) as { failures: Array<{ message: string }> };
-    expect(manifest.failures[0]?.message).toMatch(/desktop/);
-    expect(manifest.failures[0]?.message).toMatch(/tablet/);
-    expect(manifest.failures[0]?.message).toMatch(/phone/);
+    // Match by content instead of index: runFlow() lists trace-stop failures ahead of the flow
+    // failure, so the barrier entry's array position is incidental.
+    const barrierMessage = manifest.failures.map((failure) => failure.message).find((message) => ["desktop", "tablet", "phone"].every((viewport) => message.includes(viewport)));
+    expect(barrierMessage).toBeDefined();
   }, 60_000);
 
   it("SIGINT after T0 produces a validated aligned partial run", async () => {
@@ -105,4 +106,21 @@ describe("real runner", () => {
     expect(manifest).toMatchObject({ status: "interrupted", validationSuccess: true });
     expect(manifest.durationFrames).toBeGreaterThan(0);
   }, 30_000);
+
+  it("fails a flow that exceeds timeoutMs with the exact timeout failure", async () => {
+    const output = await outputDirectory("timeout");
+    const scratch = await outputDirectory("timeout-config");
+    const timeoutMs = 5_000;
+    // Inline config written beside (never inside) the wiped output directory, mirroring the
+    // inline-config pattern in desktop-artifacts.test.ts; slow.flow waits 30s, so a 5s deadline
+    // trips the timeout branch deterministically (the timer starts only after initial frames).
+    const configPath = join(scratch, "hoolypane.config.ts");
+    await writeFile(configPath, `import { defineConfig } from "@hoolypane/runner"; export default defineConfig({ baseURL: "http://127.0.0.1:${FIXTURE_PORT}", timeoutMs: ${timeoutMs}, viewports: [{ id: "desktop", name: "Desktop", width: 320, height: 240, deviceScaleFactor: 1, isMobile: false, hasTouch: false }], recording: { fps: 30, compositeMaxSize: { width: 640, height: 480 } } });`);
+    const result = await runFlow({ flowFile: resolve("tests/fixtures/slow.flow.ts"), configFile: configPath, outputDir: output, headed: false });
+    expect(result.status).toBe("failed");
+    const manifest = JSON.parse(await readFile(join(output, "manifest.json"), "utf8")) as { status: string; failures: Array<{ message: string }> };
+    expect(manifest.status).toBe("failed");
+    // Content-matched rather than index-matched, consistent with the barrier test above.
+    expect(manifest.failures.map((failure) => failure.message)).toContain(`flow timed out after ${timeoutMs}ms`);
+  }, 60_000);
 });

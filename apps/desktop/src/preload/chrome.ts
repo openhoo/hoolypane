@@ -1,16 +1,21 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { BoundsSnapshotSchema, ChromeCommandSchema, type BoundsSnapshot, type ChromeCommand, IPC_CHANNELS } from "@hoolypane/contracts";
 
-const send = (command: ChromeCommand): void => {
-  const parsed = ChromeCommandSchema.safeParse(command);
-  if (!parsed.success) { console.error("[hoolypane] rejected chrome command", parsed.error.message); return; }
-  ipcRenderer.send(IPC_CHANNELS.command, parsed.data);
-};
-const sendBounds = (bounds: BoundsSnapshot): void => {
-  const parsed = BoundsSnapshotSchema.safeParse(bounds);
-  if (!parsed.success) { console.error("[hoolypane] rejected bounds snapshot", parsed.error.message); return; }
-  ipcRenderer.send(IPC_CHANNELS.bounds, parsed.data);
-};
+interface HoolypaneChromeBridge {
+  send(command: ChromeCommand): void;
+  sendBounds(bounds: BoundsSnapshot): void;
+  subscribe(callback: (state: unknown) => void): () => void;
+}
+
+// One safeParse→log→drop guard shared by all outbound messages: a payload violating its schema
+// is dropped locally instead of crossing the IPC boundary.
+function validatedSend<T>(schema: { safeParse(value: unknown): { success: true; data: T } | { success: false; error: { message: string } } }, channel: string, label: string, payload: T): void {
+  const parsed = schema.safeParse(payload);
+  if (!parsed.success) { console.error(`[hoolypane] rejected ${label}`, parsed.error.message); return; }
+  ipcRenderer.send(channel, parsed.data);
+}
+const send = (command: ChromeCommand): void => validatedSend(ChromeCommandSchema, IPC_CHANNELS.command, "chrome command", command);
+const sendBounds = (bounds: BoundsSnapshot): void => validatedSend(BoundsSnapshotSchema, IPC_CHANNELS.bounds, "bounds snapshot", bounds);
 const subscribe = (callback: (state: unknown) => void): (() => void) => {
   const listener = (_event: Electron.IpcRendererEvent, state: unknown) => callback(state);
   ipcRenderer.on(IPC_CHANNELS.state, listener);
@@ -19,6 +24,6 @@ const subscribe = (callback: (state: unknown) => void): (() => void) => {
   ipcRenderer.send(IPC_CHANNELS.stateRequest);
   return () => ipcRenderer.removeListener(IPC_CHANNELS.state, listener);
 };
-contextBridge.exposeInMainWorld("hoolypaneChrome", Object.freeze({ send, sendBounds, subscribe }));
+contextBridge.exposeInMainWorld("hoolypaneChrome", Object.freeze({ send, sendBounds, subscribe }) satisfies HoolypaneChromeBridge);
 
-declare global { interface Window { hoolypaneChrome: { send(command: ChromeCommand): void; sendBounds(bounds: BoundsSnapshot): void; subscribe(callback: (state: unknown) => void): () => void } } }
+declare global { interface Window { hoolypaneChrome: HoolypaneChromeBridge } }
