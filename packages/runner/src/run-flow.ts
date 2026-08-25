@@ -195,7 +195,7 @@ export async function runFlow(args: RunArguments): Promise<RunResult> {
     const stopTraces = async (): Promise<readonly RecorderFailure[]> => {
       if (tracesStopped) return [];
       tracesStopped = true;
-      const results = await Promise.allSettled(contexts.map((context, index) => context.tracing.stop({ path: join(outputDir, "traces", `${config.viewports[index]?.id ?? index}.zip`) })));
+      const results = await Promise.allSettled(contexts.map((context, index) => context.tracing.stop({ path: join(outputDir, "traces", `${config.viewports[index]!.id}.zip`) })));
       return results.flatMap((result) => (result.status === "rejected" ? [failureFrom(result.reason)] : []));
     };
     try {
@@ -259,7 +259,6 @@ export async function runFlow(args: RunArguments): Promise<RunResult> {
       manifestFailed = finalizeResult.kind === "manifest" && finalizeResult.manifest.status === "failed";
     } finally {
       for (const failure of await stopTraces()) process.stderr.write(`tracing.stop failed: ${failure.message}\n`);
-      clearTimeout(signalDeadline);
     }
     return { outputDir, status: statusFor() };
   } finally {

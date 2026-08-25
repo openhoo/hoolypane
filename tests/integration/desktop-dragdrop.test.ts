@@ -1,10 +1,10 @@
 import { cpSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, it } from "vitest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { launchDesktopApp, pollUntil, startFixtureServer, waitForFixturePanes, type FixtureServer } from "../helpers/harness.js";
+import { launchDesktopApp, pollUntil, startFixtureServer, teardownDesktopSuite, waitForFixturePanes, type FixtureServer } from "../helpers/harness.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
 
 const FIXTURE_PORT = FIXTURE_PORTS.dragdrop;
@@ -14,11 +14,7 @@ let application!: ElectronApplication;
 let chrome!: Page;
 let userDataDir = "";
 
-afterAll(async () => {
-  await application?.close().catch(() => undefined);
-  await fixture?.close();
-  if (userDataDir) await rm(userDataDir, { recursive: true, force: true });
-}, 30_000);
+afterAll(() => teardownDesktopSuite(application, fixture, userDataDir), 30_000);
 
 interface CardBox {
   readonly x: number;
@@ -52,16 +48,11 @@ it("drag and drop moves a pane and persists the position", async () => {
     const surface = document.querySelector('[data-pane-surface="desktop-1440"]');
     const card = surface?.parentElement;
     const headerElement = card?.querySelector("header");
-    if (!surface || !card || !headerElement) return { error: "missing" };
+    if (!surface || !card || !headerElement) return;
     const rect = headerElement.getBoundingClientRect();
     headerElement.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: rect.x + 30, clientY: rect.y + 10 }));
     window.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: rect.x + 150, clientY: rect.y + 60 }));
     window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
-    return {
-      dragX: card.getAttribute("data-drag-x"),
-      left: (card.getAttribute("style") ?? "").match(/left:\s*(\d+)px/)?.[1] ?? "?",
-      guides: document.querySelectorAll('[aria-hidden="true"][class*="bg-accent"]').length,
-    };
   });
   await pollUntil(async () => {
     const boxes = await cardBoxes(chrome);

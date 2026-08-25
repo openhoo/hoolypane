@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { FAILURE_REASON_MAX_LENGTH } from "./errors.js";
 import { ActionSchema } from "./action.js";
 import { ColorSchemeModeSchema, LayoutModeSchema, OverlayKeySchema, ThrottlingModeSchema } from "./state.js";
 import { ViewportSpecSchema } from "./viewport.js";
@@ -54,7 +55,7 @@ export const PaneObservedActionSchema = z.strictObject({
 });
 
 export const RecordFailureSchema = z.strictObject({
-  reason: z.string().max(512),
+  reason: z.string().max(FAILURE_REASON_MAX_LENGTH),
 });
 export const PaneGenerationSchema = z.strictObject({
   documentGeneration: z.number().int().nonnegative(),
@@ -62,7 +63,11 @@ export const PaneGenerationSchema = z.strictObject({
 
 /** Single source for the user-visible staleness reason shared by main-process replay enforcement and pane preloads. */
 export const staleGenerationMessage = (expected: number, current: number): string => `stale document generation ${expected}, current ${current}`;
+/** Keys the pane preload records as press actions; main's replay table must carry matching CDP params for exactly these. */
+export const RECORDABLE_PRESS_KEYS = ["Enter", "Escape", "Tab"] as const;
 const REPLAY_PHASES = ["resolve", "apply-dom", "end"] as const;
+/** Result phases are the request phases plus the terminal confirmation echo. */
+export const REPLAY_RESULT_PHASES = [...REPLAY_PHASES, "confirm"] as const;
 export const ReplayRequestSchema = z.strictObject({
   actionId: z.number().int().positive(),
   documentGeneration: z.number().int().nonnegative(),
@@ -71,9 +76,9 @@ export const ReplayRequestSchema = z.strictObject({
 });
 export const ReplayResultSchema = z.strictObject({
   actionId: z.number().int().positive(),
-  phase: z.enum([...REPLAY_PHASES, "confirm"]),
+  phase: z.enum(REPLAY_RESULT_PHASES),
   ok: z.boolean(),
-  reason: z.string().max(512).optional(),
+  reason: z.string().max(FAILURE_REASON_MAX_LENGTH).optional(),
   box: z.strictObject({ x: z.number(), y: z.number(), width: z.number().nonnegative(), height: z.number().nonnegative() }).optional(),
   checked: z.boolean().optional(),
 });

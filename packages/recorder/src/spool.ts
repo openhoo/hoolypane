@@ -1,9 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { createWriteStream, promises as fs } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { Writable } from "node:stream";
 import type { ViewportSpec } from "@hoolypane/contracts";
-import { MAX_QUEUED_BYTES, MAX_QUEUED_FRAMES, timestampSecondsToUs, type SourceFrame } from "./capture-contract.js";
+import { syncParentDirectory } from "@hoolypane/contracts/fsync";
+import { asError, MAX_QUEUED_BYTES, MAX_QUEUED_FRAMES, timestampSecondsToUs, type RecorderFailure, type SourceFrame } from "./capture-contract.js";
 
 export interface ScreencastFrame {
   readonly data: string;
@@ -20,18 +21,8 @@ interface SpoolIndex {
   maxQueuedBytes: number;
 }
 
-interface SpoolFailureNote { readonly message: string; readonly viewportId?: string }
-
 const ARTIFACT_MODE = 0o600;
 const DROP_NOTE_INTERVAL_MS = 1_000;
-
-/** Best-effort fsync of the parent directory so a completed rename survives power loss. */
-async function syncParentDirectory(path: string): Promise<void> {
-  try {
-    const handle = await fs.open(dirname(path), "r");
-    try { await handle.sync(); } finally { await handle.close(); }
-  } catch { /* directory fsync is unsupported on some platforms */ }
-}
 
 /** Writes `data` durably: temp file (0o600) -> fsync -> rename -> parent-dir fsync. */
 export async function writeFileAtomic(path: string, data: string): Promise<void> {
@@ -67,7 +58,7 @@ export class FrameSpool {
   private writeChain = Promise.resolve();
   private closed = false;
   private failure: Error | undefined;
-  private failureNotes: SpoolFailureNote[] = [];
+  private failureNotes: RecorderFailure[] = [];
   private lastDropNoteAt = 0;
   private notedDrops = 0;
 
@@ -78,7 +69,7 @@ export class FrameSpool {
   async open(): Promise<void> {
     await fs.mkdir(this.directory, { recursive: true });
     const stream = createWriteStream(join(this.directory, `${this.viewportId}.jpeg.bin`), { flags: "w", mode: ARTIFACT_MODE });
-    stream.on("error", (error) => { this.failure ??= error instanceof Error ? error : new Error(String(error)); });
+    stream.on("error", (error) => { this.failure ??= asError(error); });
     this.stream = stream;
   }
 
@@ -112,7 +103,7 @@ export class FrameSpool {
     this.writeChain = this.writeChain
       .then(() => new Promise<void>((resolve) => {
         this.stream!.write(data, (error) => {
-          if (error) this.failure ??= error instanceof Error ? error : new Error(String(error));
+          if (error) this.failure ??= asError(error);
           resolve();
         });
       }))
@@ -123,7 +114,7 @@ export class FrameSpool {
         }
       })
       .catch((error: unknown) => {
-        this.failure ??= error instanceof Error ? error : new Error(String(error));
+        this.failure ??= asError(error);
       })
       .then(() => {
         if (this.failure) completion.reject(this.failure);
@@ -138,7 +129,7 @@ export class FrameSpool {
   }
 
   /** Pops accumulated non-fatal failure notes (drop tallies); consumed by the session manifest. */
-  drainFailureNotes(): readonly SpoolFailureNote[] {
+  drainFailureNotes(): readonly RecorderFailure[] {
     return this.failureNotes.splice(0);
   }
 
@@ -160,7 +151,7 @@ export class FrameSpool {
       const handle = await fs.open(binPath, "r+");
       try { await handle.sync(); } finally { await handle.close(); }
     } catch (error) {
-      this.failure ??= error instanceof Error ? error : new Error(String(error));
+      this.failure ??= asError(error);
     }
     if (this.index.droppedFrames > this.notedDrops) {
       this.failureNotes.push({ message: `capture queue saturated for ${this.viewportId}: dropped ${this.index.droppedFrames} over-cap frame(s) in total`, viewportId: this.viewportId });
@@ -217,12 +208,12 @@ export class CaptureSpool {
       try {
         await spool.close();
       } catch (error) {
-        onFailure?.(spool.viewportId, error instanceof Error ? error : new Error(String(error)));
+        onFailure?.(spool.viewportId, asError(error));
         throw error;
       }
     }));
     const failure = settled.find((entry): entry is PromiseRejectedResult => entry.status === "rejected")?.reason;
-    if (failure !== undefined) throw failure instanceof Error ? failure : new Error(String(failure));
+    if (failure !== undefined) throw asError(failure);
   }
 }
 

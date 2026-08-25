@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./dist/index.js" },
+  "exports": { ".": "./dist/index.js", "./fsync": "./dist/fsync.js" },
   "types": "./dist/index.d.ts",
   "scripts": { "build": "tsc -b" },
   "dependencies": { "zod": "4.1.5" }

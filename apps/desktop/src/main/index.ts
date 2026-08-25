@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, type IpcMainEvent } from "electron";
+import { app, BrowserWindow, ipcMain, type IpcMainEvent } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -7,6 +7,7 @@ import {
   ChromeCommandSchema,
   IPC_CHANNELS,
   PaneObservedActionSchema,
+  RECORDABLE_PRESS_KEYS,
   RecordFailureSchema,
   ReplayResultSchema,
   RUNTIME_PANE_DEFAULTS,
@@ -23,7 +24,7 @@ import { PaneRegistry } from "./panes/pane-registry.js";
 import { normalizeUrl } from "./panes/url.js";
 import { flushWorkspaceSaves, loadWorkspace, saveWorkspace, sweepStaleTemporaries, writeFileAtomic } from "./persistence/workspace-store.js";
 import { report } from "./report.js";
-import { captureOverview, capturePane, testEnvFilePath } from "./screenshots/screenshot-service.js";
+import { captureOverview, capturePane, saveViaDialog, testEnvFilePath } from "./screenshots/screenshot-service.js";
 
 let chromeWindow: BrowserWindow | undefined;
 let registry: PaneRegistry | undefined;
@@ -128,13 +129,12 @@ async function stopAndSaveFlow(): Promise<StopFlowOutcome> {
       await writeFileAtomic(directPath, stopped.source);
       return finish({ kind: "handled" });
     }
-    const selection = await dialog.showSaveDialog(chrome, {
+    await saveViaDialog(chrome, stopped.source, {
       title: "Save Hoolypane flow",
       defaultPath: "hoolypane-flow.ts",
-      filters: [{ name: "TypeScript", extensions: ["ts"] }],
+      filterName: "TypeScript",
+      extension: "ts",
     });
-    if (selection.canceled || !selection.filePath) return finish({ kind: "handled" });
-    await writeFileAtomic(selection.filePath, stopped.source);
     return finish({ kind: "handled" });
   } finally {
     publishState();
@@ -234,12 +234,17 @@ function requestReplay(paneId: string, request: ReplayRequest): Promise<ReplayRe
  *  Playwright's own press() of the same recorded flow. */
 type KeyEventParams = { type: "rawKeyDown" | "keyDown" | "keyUp"; key: string; code?: string | undefined; windowsVirtualKeyCode?: number | undefined; text?: string | undefined; unmodifiedText?: string | undefined };
 
-// The only keys the pane preload records (preload/pane.ts restricts press to this set).
+// Compile-typed against RECORDABLE_PRESS_KEYS: a key added there without replay params here fails
+// typecheck instead of silently replaying a bare rawKeyDown.
 const PRESS_KEY_EVENTS: Record<string, Pick<KeyEventParams, "code" | "windowsVirtualKeyCode" | "text">> = {
   Enter: { code: "Enter", windowsVirtualKeyCode: 13, text: "\r" },
   Escape: { code: "Escape", windowsVirtualKeyCode: 27 },
   Tab: { code: "Tab", windowsVirtualKeyCode: 9 },
-};
+} satisfies Record<(typeof RECORDABLE_PRESS_KEYS)[number], Pick<KeyEventParams, "code" | "windowsVirtualKeyCode" | "text">>;
+
+// Select-all preceding every fill: Chromium keys the editing command off the Windows virtual key
+// code plus the Ctrl (2) / Cmd (4 on darwin) modifier, never the key name.
+const SELECT_ALL_KEY = { key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: process.platform === "darwin" ? 4 : 2 };
 
 function pressKeyDownEvent(key: string): KeyEventParams {
   const spec = PRESS_KEY_EVENTS[key];
@@ -279,8 +284,8 @@ async function applyCdp(paneId: string, envelope: ActionEnvelope, resolved: Repl
   else if (action.kind === "check") {
     if (resolved.checked !== action.checked) await click();
   } else if (action.kind === "fill") {
-    await cdp.sendCommand("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: process.platform === "darwin" ? 4 : 2 });
-    await cdp.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: process.platform === "darwin" ? 4 : 2 });
+    await cdp.sendCommand("Input.dispatchKeyEvent", { type: "rawKeyDown", ...SELECT_ALL_KEY });
+    await cdp.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", ...SELECT_ALL_KEY });
     await cdp.sendCommand("Input.insertText", { text: action.value });
   } else if (action.kind === "press") {
     await cdp.sendCommand("Input.dispatchKeyEvent", pressKeyDownEvent(action.key));
@@ -381,8 +386,7 @@ function drainDeferredActions(): void {
   activeDrain = (async () => {
     try {
       while (!flushBarrier && registry && deferredActions.length > 0) {
-        const next = deferredActions.shift();
-        if (!next) break;
+        const next = deferredActions.shift()!;
         try {
           await acceptSourceAction(next.paneId, next.observed);
         } catch (error) {
@@ -453,7 +457,7 @@ async function createChrome(): Promise<void> {
   try {
     await shell.loadFile(rendererPath);
     for (const pane of workspace.panes) {
-      if (shell.isDestroyed() || !paneRegistry) return;
+      if (shell.isDestroyed()) return;
       if (!paneRegistry.panes.has(pane.id)) await paneRegistry.create(pane.viewport, pane.id);
     }
   } catch (error) {
@@ -592,7 +596,7 @@ ipcMain.on(IPC_CHANNELS.replayResult, (event, value: unknown) => {
     pendingReplay.delete(key);
     // A result authored by a superseded surface (pane closed and recreated with the same id)
     // belongs to no live waiter: drop it and let the requester's timeout clean up.
-    if (registry?.epochOf(paneId) !== pending.epoch) return;
+    if (registry?.getPane(paneId)?.creationEpoch !== pending.epoch) return;
     pending.resolve(parsed);
   } catch (error) { report(paneId, errorMessage(error)); }
 });

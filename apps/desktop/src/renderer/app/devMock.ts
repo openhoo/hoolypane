@@ -78,13 +78,13 @@ function apply(command: ChromeCommand): void {
       break;
     case "create": {
       const next = addPane(mockState, command.viewport, mockState.sharedUrl);
-      patch({ panes: next.panes, order: next.order });
+      patch(next);
       break;
     }
     case "close": {
       // Same reference for last-pane/unknown-id no-ops, so the guard skips pointless republishes.
       const next = closePane(mockState, command.paneId);
-      if (next !== mockState) patch({ ...next });
+      if (next !== mockState) patch(next);
       break;
     }
     case "rename":
@@ -95,7 +95,7 @@ function apply(command: ChromeCommand): void {
       break;
     case "rotate": {
       const next = rotatePane(mockState, command.paneId);
-      if (next !== mockState) patch({ ...next });
+      if (next !== mockState) patch(next);
       break;
     }
     case "focus":

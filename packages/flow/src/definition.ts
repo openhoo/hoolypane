@@ -8,7 +8,7 @@ interface Screen {
   readonly page: Page;
 }
 
-export interface FlowContext {
+interface FlowContext {
   all(label: string, action: (screen: Screen) => Promise<void>): Promise<void>;
 }
 

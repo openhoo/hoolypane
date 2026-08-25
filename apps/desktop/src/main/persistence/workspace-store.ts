@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { syncParentDirectory } from "@hoolypane/contracts/fsync";
 import { WorkspaceStateSchema, defaultWorkspace, type WorkspaceState } from "../panes/workspace.js";
 
 const SUPPORTED_WORKSPACE_VERSION = 1;
@@ -119,7 +120,6 @@ async function writeAtomic(path: string, write: (temporaryPath: string) => Promi
 }
 
 async function writeWorkspace(file: string, state: WorkspaceState): Promise<void> {
-  const directory = dirname(file);
   await writeAtomic(file, async (temporary) => {
     const handle = await fs.open(temporary, "w", 0o600);
     try {
@@ -129,17 +129,7 @@ async function writeWorkspace(file: string, state: WorkspaceState): Promise<void
       await handle.close();
     }
   });
-  // Best-effort directory fsync so the rename itself survives a crash; unsupported platforms are ignored.
-  try {
-    const directoryHandle = await fs.open(directory, "r");
-    try {
-      await directoryHandle.sync();
-    } finally {
-      await directoryHandle.close();
-    }
-  } catch {
-    /* directory fsync unavailable */
-  }
+  await syncParentDirectory(file);
 }
 
 /** Writes via a same-directory temp file + rename so a mid-write failure never leaves a torn file behind. */

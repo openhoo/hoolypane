@@ -25,7 +25,7 @@ describe("ten-second recording contract", () => {
     const tracks = await Promise.all(specifications.map(async (specification) => {
       const spool = new FrameSpool(specification.id, resolve(OUTPUT, "raw"));
       await spool.open();
-      const frames = specification.sourceFps * 10;
+      const frames = Math.round(DURATION_FRAMES / FPS * specification.sourceFps);
       try {
         for (let sequence = 0; sequence < frames; sequence += 1) {
           const jpeg = await sharp({ create: { width: specification.width, height: specification.height, channels: 3, background: specification.color } })

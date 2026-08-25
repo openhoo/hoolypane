@@ -1,9 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { rm } from "node:fs/promises";
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { IPC_CHANNELS } from "@hoolypane/contracts";
-import { launchDesktopApp, pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
+import { launchDesktopApp, pollUntil, startFixtureServer, teardownDesktopSuite, type FixtureServer } from "../helpers/harness.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
 
 const FIXTURE_PORT = FIXTURE_PORTS.resilience;
@@ -57,11 +56,7 @@ beforeAll(async () => {
   await waitForRemotePages("/");
 }, 30_000);
 
-afterAll(async () => {
-  await application?.close().catch(() => undefined);
-  await fixture?.close();
-  if (userDataDir) await rm(userDataDir, { recursive: true, force: true });
-}, 30_000);
+afterAll(() => teardownDesktopSuite(application, fixture, userDataDir), 30_000);
 
 describe("desktop replay and security resilience", () => {
   it("rejects stale generations and converges after navigation with pending replay", async () => {

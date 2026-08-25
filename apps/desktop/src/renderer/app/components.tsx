@@ -1,7 +1,7 @@
 import { memo } from "preact/compat";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
-import type { ChromeCommand, ChromeState, PaneState } from "@hoolypane/contracts";
+import type { ChromeCommand, ChromeState, EmulationSettings as EmulationState, LayoutMode, PaneState } from "@hoolypane/contracts";
 import { customViewport } from "./state.js";
 import {
   IconAlertTriangle,
@@ -18,7 +18,6 @@ import {
 } from "./icons.js";
 
 export type SendCommand = (command: ChromeCommand) => void;
-import type { EmulationSettings as EmulationState, LayoutMode } from "@hoolypane/contracts";
 
 const OVERLAY_ITEMS = [
   { key: "outlines", label: "Outlines" },

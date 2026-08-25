@@ -5,6 +5,7 @@ import { hrtime } from "node:process";
 import { errorMessage, type ResolvedRecordingConfig, type ViewportSpec, type FlowEvent } from "@hoolypane/contracts";
 import {
   alignFrames,
+  asError,
   assertStateTransition,
   CAPTURE_CONTRACT,
   durationFrameCount,
@@ -14,6 +15,7 @@ import {
   type AlignmentResult,
   type CompositeGeometry,
   type RecordingState,
+  type RecorderFailure,
   type SlotMapping,
   type TrackGeometry,
 } from "./capture-contract.js";
@@ -21,7 +23,7 @@ import { encodeAligned, type EncodingResult } from "./encoder.js";
 import { CaptureSpool, decodeScreencastData, frameMetadata, writeFileAtomic, type CaptureTarget, type FrameSpool, type ScreencastFrame } from "./spool.js";
 import { sha256File, verifyArtifacts } from "./verifier.js";
 
-export interface RecorderFailure { readonly message: string; readonly viewportId?: string; readonly stack?: string }
+export type { RecorderFailure };
 export type RecordingTarget = CaptureTarget;
 type RecordingFinalizeResult = { readonly kind: "manifest"; readonly manifestPath: string; readonly manifest: RecordingManifest } | { readonly kind: "diagnostics"; readonly diagnosticsPath: string };
 
@@ -80,12 +82,6 @@ interface CapturePipelineResult {
 
 function monotonicUs(): number {
   return Number(hrtime.bigint() / 1000n);
-}
-
-function delay(milliseconds: number): Promise<void> {
-  const completion = Promise.withResolvers<void>();
-  setTimeout(completion.resolve, milliseconds);
-  return completion.promise;
 }
 
 async function atomicJson(path: string, value: unknown): Promise<void> {
@@ -193,7 +189,7 @@ export class RecordingSession {
       if (frame.sessionId === undefined) throw new Error(`screencast frame for ${context.target.id} has no session id`);
       await context.target.send("Page.screencastFrameAck", { sessionId: frame.sessionId });
     } catch (error) {
-      context.captureError = error instanceof Error ? error : new Error(String(error));
+      context.captureError = asError(error);
     }
   }
 
@@ -205,7 +201,7 @@ export class RecordingSession {
       signal?.aborted !== true &&
       this.contexts.some((context) => context.initialTimestampUs === undefined && context.captureError === undefined) &&
       Date.now() < deadline
-    ) await delay(10);
+    ) await this.cancellableDelay(10);
     if (this.state !== "awaiting-initial-frames") throw new Error("recording session was finalized while waiting for initial frames");
     if (signal?.aborted) throw new Error("waiting for initial screencast frames was aborted");
     const failure = this.contexts.find((context) => context.captureError)?.captureError;

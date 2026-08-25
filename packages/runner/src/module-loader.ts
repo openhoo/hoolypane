@@ -163,9 +163,8 @@ function playwrightEntry(specifier: string): string {
   if (!(subpath in exportRecord)) return degrade();
   const exportValue: unknown = exportRecord[subpath];
   if (exportValue === null || typeof exportValue !== "object" || Array.isArray(exportValue)) return located;
-  // Conditional map object: guarded member access via in-narrowing.
-  const conditions = exportValue as Record<string, unknown>;
-  const target: unknown = "import" in conditions ? conditions.import : "default" in conditions ? conditions.default : undefined;
+  // Conditional map object: exportTarget applies the shared import/default preference rule.
+  const target = exportTarget(exportValue);
   return typeof target === "string" ? join(dir, target) : located;
 }
 

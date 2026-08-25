@@ -40,15 +40,14 @@ export async function startFixtureServer(port: number): Promise<FixtureServer> {
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
+  const ready = Promise.withResolvers<void>();
   child.stdout?.on("data", (chunk: Buffer) => {
-    output += chunk.toString();
+    const text = chunk.toString();
+    output += text;
+    if (text.includes("fixture ready")) ready.resolve();
   });
   child.stderr?.on("data", (chunk: Buffer) => {
     output += chunk.toString();
-  });
-  const ready = Promise.withResolvers<void>();
-  child.stdout?.on("data", (data: Buffer) => {
-    if (data.toString().includes("fixture ready")) ready.resolve();
   });
   child.once("error", ready.reject);
   child.once("exit", (code) => ready.reject(new Error(`fixture server failed before readiness (code ${code}): ${output.trim()}`)));
@@ -136,4 +135,20 @@ export async function launchDesktopApp(options: LaunchDesktopAppOptions): Promis
     if (options.userDataDir === undefined) await rm(userDataDir, { recursive: true, force: true }).catch(() => {});
     throw error;
   }
+}
+
+
+/**
+ * Shared integration-suite teardown: closes the app (tolerating a failed or
+ * already-closed launch), stops the fixture server, and removes the temporary
+ * app profile directory when one was created.
+ */
+export async function teardownDesktopSuite(
+  application: ElectronApplication | undefined,
+  fixture: FixtureServer | undefined,
+  userDataDir: string,
+): Promise<void> {
+  await application?.close().catch(() => undefined);
+  await fixture?.close();
+  if (userDataDir) await rm(userDataDir, { recursive: true, force: true });
 }

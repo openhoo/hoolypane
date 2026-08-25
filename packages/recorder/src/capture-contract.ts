@@ -26,6 +26,12 @@ export interface SourceFrame { readonly offset: number; readonly length: number;
 export interface SlotMapping { readonly slot: number; readonly targetTimestampUs: number; readonly sourceSequence: number; readonly sourceTimestampUs: number; readonly held: boolean }
 export interface TrackGeometry { readonly id: string; readonly encodedWidth: number; readonly encodedHeight: number }
 export interface CompositeGeometry { readonly columns: number; readonly rows: number; readonly tileWidth: number; readonly tileHeight: number; readonly unscaledWidth: number; readonly unscaledHeight: number; readonly outputWidth: number; readonly outputHeight: number }
+export interface RecorderFailure { readonly message: string; readonly viewportId?: string; readonly stack?: string }
+
+/** Single normalization point for unknown catch values; mirrors the errorMessage() convention from @hoolypane/contracts. */
+export function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
 
 export function assertStateTransition(from: RecordingState, to: RecordingState): void {
   if (!NEXT_STATES[from].includes(to)) throw new Error(`invalid recorder state transition: ${from} -> ${to}`);

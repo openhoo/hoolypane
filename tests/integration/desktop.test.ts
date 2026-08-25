@@ -1,7 +1,6 @@
-import { rm } from "node:fs/promises";
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { launchDesktopApp, pollUntil, startFixtureServer, waitForFixturePanes, type FixtureServer } from "../helpers/harness.js";
+import { launchDesktopApp, pollUntil, startFixtureServer, teardownDesktopSuite, waitForFixturePanes, type FixtureServer } from "../helpers/harness.js";
 import { IPC_CHANNELS } from "@hoolypane/contracts";
 import { clickPaneSurface } from "./cdp-input.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
@@ -65,11 +64,7 @@ beforeAll(async () => {
   userDataDir = launch.userDataDir;
 }, 30_000);
 
-afterAll(async () => {
-  await application?.close().catch(() => undefined);
-  await fixture?.close();
-  if (userDataDir) await rm(userDataDir, { recursive: true, force: true });
-}, 30_000);
+afterAll(() => teardownDesktopSuite(application, fixture, userDataDir), 30_000);
 
 describe("direct Electron surfaces", () => {
   it("receives published state through the preload stateRequest pull handshake", async () => {

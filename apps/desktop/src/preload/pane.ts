@@ -1,5 +1,5 @@
 import { ipcRenderer } from "electron";
-import { IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, RecordFailureSchema, ReplayRequestSchema, errorMessage, staleGenerationMessage, type Action, type LocatorSpec, type ReplayRequest, type ReplayResult } from "@hoolypane/contracts";
+import { IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, RECORDABLE_PRESS_KEYS, RecordFailureSchema, ReplayRequestSchema, REPLAY_RESULT_PHASES, failureReason, staleGenerationMessage, type Action, type LocatorSpec, type ReplayRequest, type ReplayResult } from "@hoolypane/contracts";
 
 let documentGeneration = 0;
 type SuppressionEntry = { generation: number; kind: Action["kind"]; box?: { x: number; y: number; width: number; height: number }; confirmed?: boolean };
@@ -163,7 +163,7 @@ function record(action: () => Action, force = false): void {
     console.error("[hoolypane] failed to record action", error);
     // Recording used to fail silently (locator resolution throws routinely); surface it to main.
     // Truncated before parse so the payload is always schema-valid and the send can never throw.
-    const reason = errorMessage(error).slice(0, 512);
+    const reason = failureReason(error);
     ipcRenderer.send(IPC_CHANNELS.recordFailure, RecordFailureSchema.parse({ reason }));
   }
 }
@@ -279,7 +279,7 @@ document.addEventListener("click", (event) => {
   record(() => ({ kind: "click", locator: locatorFor(target) }));
 }, true);
 document.addEventListener("keydown", (event) => {
-  if (!event.isTrusted || suppressed.size > 0 || !["Enter", "Escape", "Tab"].includes(event.key)) return;
+  if (!event.isTrusted || suppressed.size > 0 || !(RECORDABLE_PRESS_KEYS as readonly string[]).includes(event.key)) return;
   flushFill();
   const target = event.target instanceof Element ? event.target : null;
   if (!target) return;
@@ -321,8 +321,8 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
   } catch (error) {
     const raw = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
     const actionId = typeof raw.actionId === "number" && Number.isInteger(raw.actionId) && raw.actionId > 0 ? raw.actionId : 1;
-    const phase = raw.phase === "resolve" || raw.phase === "apply-dom" || raw.phase === "end" || raw.phase === "confirm" ? raw.phase : "resolve";
-    ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId, phase, ok: false, reason: errorMessage(error).slice(0, 512) } satisfies ReplayResult);
+    const phase = REPLAY_RESULT_PHASES.find((candidate) => candidate === raw.phase) ?? "resolve";
+    ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId, phase, ok: false, reason: failureReason(error) } satisfies ReplayResult);
     return;
   }
   if (request.phase === "end") releaseSuppression(request.actionId);
@@ -367,11 +367,12 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
         autoScrollCenter(element);
       }
       const box = element.getBoundingClientRect();
-      entry.box = { x: box.x, y: box.y, width: box.width, height: box.height };
-      result = { ...result, box: { x: box.x, y: box.y, width: box.width, height: box.height }, ...(element instanceof HTMLInputElement ? { checked: element.checked } : {}) };
+      const rect = { x: box.x, y: box.y, width: box.width, height: box.height };
+      entry.box = rect;
+      result = { ...result, box: rect, ...(element instanceof HTMLInputElement ? { checked: element.checked } : {}) };
     }
   } catch (error) {
-    result = { ...result, ok: false, reason: errorMessage(error).slice(0, 512) };
+    result = { ...result, ok: false, reason: failureReason(error) };
   }
   ipcRenderer.send(IPC_CHANNELS.replayResult, result);
 });

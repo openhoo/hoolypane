@@ -5,13 +5,15 @@ export interface RunArguments {
   readonly headed: boolean;
 }
 
-const USAGE = "Usage: hoolypane run <flow-file> [--config <path>] [--output <dir>] [--headed]";
+const RUN_OPTIONS = "[--config <path>] [--output <dir>] [--headed]";
+
+const USAGE = `Usage: hoolypane run <flow-file> ${RUN_OPTIONS}`;
 
 export const TOP_LEVEL_USAGE = [
   "Usage: hoolypane <command>",
   "",
   "Commands:",
-  "  run <flow-file> [--config <path>] [--output <dir>] [--headed]",
+  `  run <flow-file> ${RUN_OPTIONS}`,
   "      Record a flow across all configured viewports.",
   "  verify <output-dir>",
   "      Verify the manifest and encoded frames of a finished recording.",
@@ -27,7 +29,6 @@ export function parseCliArguments(argv: readonly string[]): RunArguments {
   let outputDir: string | undefined;
   let headed = false;
   let configSeen = false;
-  let outputSeen = false;
 
   for (let index = 2; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -44,8 +45,7 @@ export function parseCliArguments(argv: readonly string[]): RunArguments {
         configSeen = true;
         configFile = value;
       } else {
-        if (outputSeen) throw new Error("--output may be specified only once");
-        outputSeen = true;
+        if (outputDir !== undefined) throw new Error("--output may be specified only once");
         outputDir = value;
       }
       index += 1;

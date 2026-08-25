@@ -15,6 +15,20 @@ export function testEnvFilePath(variable: string, extension: string, label: stri
   return value;
 }
 
+/** Shared dialog-save tail: show a native save dialog and write on acceptance; cancellation collapses silently. */
+export async function saveViaDialog(
+  window: BrowserWindow,
+  contents: string | Uint8Array,
+  options: { title: string; defaultPath: string; filterName: string; extension: string },
+): Promise<void> {
+  const selection = await dialog.showSaveDialog(window, {
+    title: options.title,
+    defaultPath: options.defaultPath,
+    filters: [{ name: options.filterName, extensions: [options.extension] }],
+  });
+  if (!selection.canceled && selection.filePath) await writeFileAtomic(selection.filePath, contents);
+}
+
 /** Shared screenshot tail: test-override path first, else a save dialog; encodes exactly once upstream. */
 async function savePng(
   window: BrowserWindow,
@@ -28,12 +42,7 @@ async function savePng(
     await writeFileAtomic(directPath, png);
     return;
   }
-  const selection = await dialog.showSaveDialog(window, {
-    title,
-    defaultPath,
-    filters: [{ name: "PNG image", extensions: ["png"] }],
-  });
-  if (!selection.canceled && selection.filePath) await writeFileAtomic(selection.filePath, png);
+  await saveViaDialog(window, png, { title, defaultPath, filterName: "PNG image", extension: "png" });
 }
 
 export async function capturePane(window: BrowserWindow, registry: PaneRegistry, paneId: string): Promise<void> {
@@ -51,11 +60,12 @@ export async function captureOverview(window: BrowserWindow, registry: PaneRegis
     const state = registry.getPaneState(paneId);
     if (!pane || !state) return { name: paneId, dimensions: "0×0@1", error: "pane closed before capture" };
     const name = state.name;
+    const dimensions = `${state.viewport.width}×${state.viewport.height} @${state.viewport.deviceScaleFactor}`;
     try {
       const image = await pane.view.webContents.capturePage();
-      return { name, dimensions: `${state.viewport.width}×${state.viewport.height} @${state.viewport.deviceScaleFactor}`, png: image.toPNG() };
+      return { name, dimensions, png: image.toPNG() };
     } catch (error) {
-      return { name, dimensions: `${state.viewport.width}×${state.viewport.height}@${state.viewport.deviceScaleFactor}`, error: errorMessage(error) };
+      return { name, dimensions, error: errorMessage(error) };
     }
   }));
   const png = await composeOverview(tiles, "#111318");

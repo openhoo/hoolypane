@@ -8,7 +8,7 @@ import { resolveEncoders } from "./encoder.js";
 
 interface VerificationResult {
   readonly success: boolean;
-  readonly geometry: readonly { file: string; width: number; height: number; timeBase: string }[];
+  readonly geometry: readonly { file: string; width: number; height: number }[];
   readonly artifacts: Record<string, string>;
   readonly sha256: Record<string, string>;
   readonly error?: string;
@@ -20,7 +20,7 @@ interface ExpectedArtifacts {
 }
 
 interface ProbePacket { readonly pts?: number | string; readonly duration?: number | string }
-interface ProbeStream { readonly time_base?: string; readonly width?: number; readonly height?: number; readonly duration_ts?: number | string }
+interface ProbeStream { readonly time_base?: string; readonly width?: number; readonly height?: number }
 interface PacketOutput { readonly streams?: readonly ProbeStream[]; readonly packets?: readonly ProbePacket[] }
 
 const CHILD_GRACE_MS = 10_000;
@@ -47,7 +47,7 @@ async function ffprobeJson(executable: string, args: readonly string[]): Promise
 }
 
 async function probe(executable: string, file: string): Promise<{ stream: ProbeStream; packets: readonly ProbePacket[] }> {
-  const data = await ffprobeJson(executable, ["-v", "error", "-select_streams", "v:0", "-show_streams", "-show_packets", "-show_entries", "stream=time_base,width,height,duration_ts:packet=pts,duration", "-of", "json", file]) as PacketOutput;
+  const data = await ffprobeJson(executable, ["-v", "error", "-select_streams", "v:0", "-show_streams", "-show_packets", "-show_entries", "stream=time_base,width,height:packet=pts,duration", "-of", "json", file]) as PacketOutput;
   const stream = data.streams?.[0];
   if (!stream?.time_base) throw new Error(`ffprobe returned no video time base for ${file}`);
   return { stream, packets: data.packets ?? [] };
@@ -139,7 +139,7 @@ export async function verifyArtifacts(outputDir: string, fps: 30 | 60, durationF
       if (stream.width === undefined || stream.height === undefined || stream.width <= 0 || stream.height <= 0) {
         throw new Error(`ffprobe returned no dimensions for ${names[index]}`);
       }
-      return { file: names[index]!, width: stream.width, height: stream.height, timeBase: stream.time_base! };
+      return { file: names[index]!, width: stream.width, height: stream.height };
     });
     if (expected) {
       for (const track of expected.tracks) {

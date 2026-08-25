@@ -2,10 +2,13 @@ import { ActionEnvelopeSchema, type ActionEnvelope } from "@hoolypane/contracts"
 import { serializeFlow } from "@hoolypane/flow";
 
 type FlowStopResult = { kind: "saved"; source: string } | { kind: "empty" } | { kind: "blocked"; reasons: string[] };
+type BlockingEntry = { actionId: number; paneId: string; reasons: string[] };
+
 export class FlowDraft {
   private envelopes: ActionEnvelope[] = [];
-  // Keyed by `${actionId}:${paneId}`: one pane's success must not erase another pane's failure reasons.
-  private blocking = new Map<string, string[]>();
+  // Composite blocking key is built only in keyFor(); entries carry actionId/paneId so stop() never
+  // re-parses keys. One pane's success must not erase another pane's failure reasons.
+  private blocking = new Map<string, BlockingEntry>();
   private active = false;
   // Bumped by every start(): envelopes captured under an older session are ignored on append,
   // so a drain that outlives its recording cannot pollute the next one.
@@ -27,22 +30,26 @@ export class FlowDraft {
     this.clearBlockingForPane(envelope.sourcePaneId);
   }
 
+  /** Sole encoder of the composite blocking key; no code path decodes keys back into parts. */
+  private keyFor(actionId: number, paneId: string): string {
+    return `${actionId}:${paneId}`;
+  }
+
   block(actionId: number, paneId: string, reason: string): void {
     if (!this.active) return;
-    const key = `${actionId}:${paneId}`;
-    const reasons = this.blocking.get(key) ?? [];
-    reasons.push(reason);
-    this.blocking.set(key, reasons);
+    const key = this.keyFor(actionId, paneId);
+    const entry = this.blocking.get(key) ?? { actionId, paneId, reasons: [] };
+    entry.reasons.push(reason);
+    this.blocking.set(key, entry);
   }
 
   unblock(actionId: number, paneId: string): void {
-    this.blocking.delete(`${actionId}:${paneId}`);
+    this.blocking.delete(this.keyFor(actionId, paneId));
   }
 
   private clearBlockingForPane(paneId: string): void {
-    const suffix = `:${paneId}`;
-    for (const key of [...this.blocking.keys()]) {
-      if (key.endsWith(suffix)) this.blocking.delete(key);
+    for (const [key, entry] of [...this.blocking]) {
+      if (entry.paneId === paneId) this.blocking.delete(key);
     }
   }
 
@@ -55,12 +62,9 @@ export class FlowDraft {
   /** Computes the export outcome without mutating the draft; callers commit only after a successful save. */
   stop(): FlowStopResult {
     if (this.blocking.size > 0) {
-      const reasons = [...this.blocking.entries()].flatMap(([key, values]) => {
-        const separator = key.indexOf(":");
-        const actionId = Number(key.slice(0, separator));
-        const paneId = key.slice(separator + 1);
-        return values.map((value) => `action ${actionId} (${paneId}): ${value}`);
-      });
+      const reasons = [...this.blocking.values()].flatMap((entry) =>
+        entry.reasons.map((value) => `action ${entry.actionId} (${entry.paneId}): ${value}`),
+      );
       return { kind: "blocked", reasons };
     }
     if (this.envelopes.length <= 1) return { kind: "empty" };

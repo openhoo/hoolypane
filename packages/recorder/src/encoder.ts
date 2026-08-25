@@ -5,7 +5,7 @@ import { join } from "node:path";
 import ffmpegStaticPath from "ffmpeg-static";
 import ffprobeStatic from "ffprobe-static";
 import { errorMessage } from "@hoolypane/contracts";
-import { compositeGeometry, type CompositeGeometry, type SlotMapping, type TrackGeometry } from "./capture-contract.js";
+import { asError, compositeGeometry, type CompositeGeometry, type SlotMapping, type TrackGeometry } from "./capture-contract.js";
 import type { FrameSpool } from "./spool.js";
 
 interface EncoderPaths { readonly ffmpeg: string; readonly ffprobe: string }
@@ -32,7 +32,7 @@ export async function resolveEncoders(): Promise<EncoderPaths> {
     if (typeof candidate !== "string" || !ffprobeStatic.path) throw new Error("static encoder paths unavailable");
     return { ffmpeg: await executable(candidate), ffprobe: await executable(ffprobeStatic.path) };
   } catch (error) {
-    throw new Error(`unable to resolve ffmpeg/ffprobe: ${String(error)}`);
+    throw new Error(`unable to resolve ffmpeg/ffprobe: ${errorMessage(error)}`);
   }
 }
 
@@ -98,7 +98,7 @@ export async function encodeAligned(
   child.once("close", (code: number | null) => code === 0 ? completion.resolve() : completion.reject(new Error(`ffmpeg ${paths.ffmpeg} exited ${code}: ${stderr}`)));
   let spawnError: Error | undefined;
   completion.promise.catch((error: unknown) => {
-    spawnError ??= error instanceof Error ? error : new Error(String(error));
+    spawnError ??= asError(error);
   });
   const pipes = tracks.map((_track, index) => {
     const pipe = child.stdio[index + 3];

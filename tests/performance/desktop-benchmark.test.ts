@@ -1,8 +1,8 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { launchDesktopApp, pollUntil, startFixtureServer, fixturePaneCount, type FixtureServer } from "../helpers/harness.js";
+import { launchDesktopApp, pollUntil, startFixtureServer, fixturePaneCount, teardownDesktopSuite, type FixtureServer } from "../helpers/harness.js";
 import { clickPaneSurface } from "../integration/cdp-input.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
 
@@ -38,9 +38,6 @@ async function waitForMirrorCount(expected: number): Promise<void> {
   }, 5_000, 5);
 }
 
-async function clickDesktopSource(): Promise<void> {
-  await clickPaneSurface(application, chrome, { port: FIXTURE_PORT, testId: "apply", expectedStatus: "applied" });
-}
 
 async function waitForFinalInput(expected: string): Promise<boolean> {
   try {
@@ -76,11 +73,7 @@ beforeAll(async () => {
   userDataDir = launch.userDataDir;
 }, 30_000);
 
-afterAll(async () => {
-  await application?.close().catch(() => undefined);
-  await fixture?.close();
-  if (userDataDir) await rm(userDataDir, { recursive: true, force: true });
-}, 30_000);
+afterAll(() => teardownDesktopSuite(application, fixture, userDataDir), 30_000);
 
 describe("six-pane direct compositor", () => {
   it("meets animation, mirrored-action, final-state, long-task, and RSS gates", async () => {
@@ -107,7 +100,7 @@ describe("six-pane direct compositor", () => {
     });
 
     for (let sample = 1; sample <= MIRROR_SAMPLES; sample += 1) {
-      await clickDesktopSource();
+      await clickPaneSurface(application, chrome, { port: FIXTURE_PORT, testId: "apply", expectedStatus: "applied" });
       await waitForMirrorCount(sample);
     }
     const clickTimes = await Promise.all(pages.map((page) => page.evaluate(() => (globalThis as typeof globalThis & { __mirrorTimes: number[] }).__mirrorTimes)));

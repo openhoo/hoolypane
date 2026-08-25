@@ -77,7 +77,6 @@ export class PaneRegistry {
     if (!mark || mark.actionId > actionId) return;
     this.setPane(paneId, { outOfSync: null });
   }
-  epochOf(paneId: string): number | undefined { return this.panes.get(paneId)?.creationEpoch; }
   async create(viewport: ViewportSpec, paneId?: string): Promise<string> {
     const valid = ViewportSpecSchema.parse(viewport);
     const id = paneId ?? uniquePaneId(new Set([...this.workspace.order, ...this.panes.keys()]), valid.id);
@@ -109,7 +108,7 @@ export class PaneRegistry {
       this.bindPane(record);
       const pane = this.getPaneState(id);
       // Content-load failures are reported per pane via did-fail-load; creation must not fail on network problems.
-      await Promise.allSettled([view.webContents.loadURL(this.restoreTarget(pane?.url ?? this.workspace.sharedUrl))]);
+      await view.webContents.loadURL(this.restoreTarget(pane?.url ?? this.workspace.sharedUrl)).catch(() => {});
     } catch (error) {
       // A destroyed window means the registry is going away anyway; a rollback would fight destroy().
       if (this.window && !this.window.isDestroyed()) await this.rollbackCreate(record, !preexistingEntry);
@@ -159,13 +158,11 @@ export class PaneRegistry {
     this.emitChange();
   }
   setSync(enabled: boolean): void { this.workspace = { ...this.workspace, syncEnabled: enabled }; this.emitChange(); }
-  setColorScheme(value: ColorSchemeMode): void { this.workspace = { ...this.workspace, emulation: { ...this.workspace.emulation, colorScheme: value } }; this.applyEmulation(); }
-  setReducedMotion(enabled: boolean): void { this.workspace = { ...this.workspace, emulation: { ...this.workspace.emulation, reducedMotion: enabled } }; this.applyEmulation(); }
-  setThrottling(mode: ThrottlingMode): void { this.workspace = { ...this.workspace, emulation: { ...this.workspace.emulation, throttling: mode } }; this.applyEmulation(); }
-  setOverlay(key: OverlayKey, enabled: boolean): void {
-    this.workspace = { ...this.workspace, emulation: { ...this.workspace.emulation, overlays: { ...this.workspace.emulation.overlays, [key]: enabled } } };
-    this.applyEmulation();
-  }
+  setColorScheme(value: ColorSchemeMode): void { this.patchEmulation({ colorScheme: value }); }
+  setReducedMotion(enabled: boolean): void { this.patchEmulation({ reducedMotion: enabled }); }
+  setThrottling(mode: ThrottlingMode): void { this.patchEmulation({ throttling: mode }); }
+  setOverlay(key: OverlayKey, enabled: boolean): void { this.patchEmulation({ overlays: { ...this.workspace.emulation.overlays, [key]: enabled } }); }
+  private patchEmulation(patch: Partial<WorkspaceState["emulation"]>): void { this.workspace = { ...this.workspace, emulation: { ...this.workspace.emulation, ...patch } }; this.applyEmulation(); }
 
   /** Fans the current global emulation state out to every live pane; never throws. */
   private applyEmulation(): void {
@@ -256,9 +253,8 @@ export class PaneRegistry {
 
   /** Re-applies the latest renderer-measured entry for a record created after that measurement. */
   private applyBoundsIfCached(record: PaneRecord): void {
-    const snapshot = this.lastBoundsSnapshot;
-    const item = snapshot?.panes.find((entry) => entry.paneId === record.id);
-    if (snapshot && item) this.applyBoundsEntry(record, item);
+    const item = this.lastBoundsSnapshot?.panes.find((entry) => entry.paneId === record.id);
+    if (item) this.applyBoundsEntry(record, item);
   }
 
   private applyBoundsEntry(record: PaneRecord, item: BoundsSnapshot["panes"][number]): void {
