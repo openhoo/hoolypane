@@ -33,7 +33,7 @@ async function waitForPaneCount(expected: number): Promise<void> {
 
 async function waitForMirrorCount(expected: number): Promise<void> {
   await pollUntil(async () => {
-    const counts = await Promise.all(remotePages().map((page) => page.evaluate(() => (globalThis as typeof globalThis & { __mirrorTimes?: number[] }).__mirrorTimes?.length ?? 0)));
+    const counts = await Promise.all(remotePages().map((page) => page.evaluate(() => (globalThis as typeof globalThis & { __mirrorTimes?: number[] }).__mirrorTimes?.length ?? 0).catch(() => -1)));
     return counts.length === 6 && counts.every((count) => count >= expected);
   }, 5_000, 5);
 }
@@ -42,7 +42,7 @@ async function waitForMirrorCount(expected: number): Promise<void> {
 async function waitForFinalInput(expected: string): Promise<boolean> {
   try {
     return await pollUntil(async () => {
-      const values = await Promise.all(remotePages().map((page) => page.getByTestId("name").inputValue()));
+      const values = await Promise.all(remotePages().map((page) => page.getByTestId("name").inputValue().catch(() => null)));
       return values.length === 6 && values.every((value) => value === expected);
     }, 10_000);
   } catch {

@@ -38,7 +38,13 @@ it("drag and drop moves a pane and persists the position", async () => {
   chrome = launched.chrome;
   userDataDir = launched.userDataDir;
   await waitForFixturePanes(launched.application, FIXTURE_PORT, 5, 15_000);
-  await pollUntil(async () => (await cardBoxes(chrome)).size === 5 || null, 10_000);
+  await pollUntil(async () => {
+    try {
+      return (await cardBoxes(chrome)).size === 5 || null;
+    } catch {
+      return null; // reload invalidates evaluation contexts mid-poll; retry on the next tick
+    }
+  }, 10_000);
 
   const before = (await cardBoxes(chrome)).get("desktop-1440");
   if (!before) throw new Error("source card missing");
@@ -101,7 +107,13 @@ it("drag and drop moves a pane and persists the position", async () => {
     application = relaunched.application;
     chrome = relaunched.chrome;
     userDataDir = relaunched.userDataDir;
-    await pollUntil(async () => (await cardBoxes(chrome)).size === 5 || null, 15_000);
+    await pollUntil(async () => {
+      try {
+        return (await cardBoxes(chrome)).size === 5 || null;
+      } catch {
+        return null; // reload invalidates evaluation contexts mid-poll; retry on the next tick
+      }
+    }, 15_000);
     // The relaunched renderer's first layout can race the application of persisted positions
     // (known seed-render race), so converge on the pre-close visual coordinates: a 10 s grace
     // phase, then exactly one forced reload to reapply them, then a second bounded phase.

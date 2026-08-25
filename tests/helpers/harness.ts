@@ -8,7 +8,7 @@ import { electronExecutablePath } from "../electron-executable.js";
 
 const REPO_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
-/** Polls fn until it returns a truthy value or the timeout elapses. */
+/** Polls fn until it returns a value other than null, undefined, or false, or the timeout elapses. */
 export async function pollUntil<T>(
   fn: () => Promise<T>,
   timeoutMs: number,
@@ -21,7 +21,7 @@ export async function pollUntil<T>(
     if (latest !== null && latest !== undefined && latest !== false) return latest as NonNullable<T>;
     await new Promise<void>((resolveSleep) => setTimeout(resolveSleep, intervalMs));
   }
-  throw new Error(`pollUntil timed out after ${timeoutMs}ms`);
+  throw new Error(`pollUntil timed out after ${timeoutMs}ms (last observation: ${JSON.stringify(latest)})`);
 }
 
 export interface FixtureServer {

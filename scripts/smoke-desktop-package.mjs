@@ -9,7 +9,8 @@ import { FIXTURE_PORTS } from "../tests/fixtures/ports.ts";
 const directoryArgument = process.argv[2] === "--" ? process.argv[3] : process.argv[2];
 const artifactDir = resolve(directoryArgument ?? "dist/desktop");
 const files = await fs.readdir(artifactDir);
-const temporary = await fs.mkdtemp(join(tmpdir(), "hoolypane-package-smoke-"));
+let temporary;
+let debuggingPort;
 const fixturePort = FIXTURE_PORTS.packageSmoke;
 let mountedDmg;
 let installedDirectory;
@@ -18,16 +19,6 @@ let fixture;
 let appExit;
 let logs = "";
 let fixtureLogs = "";
-
-// Binds an OS-assigned port so concurrent runs and leaked predecessors cannot satisfy the probe.
-const debuggingPort = await new Promise((resolvePort, rejectPort) => {
-  const probe = createServer();
-  probe.once("error", rejectPort);
-  probe.listen(0, "127.0.0.1", () => {
-    const { port } = probe.address();
-    probe.close(() => resolvePort(port));
-  });
-});
 
 function soleArtifact(extension) {
   const matches = files.filter((file) => file.endsWith(extension));
@@ -87,6 +78,17 @@ async function waitForDesktop() {
 }
 
 try {
+  temporary = await fs.mkdtemp(join(tmpdir(), "hoolypane-package-smoke-"));
+  // Binds an OS-assigned port so concurrent runs and leaked predecessors cannot satisfy the probe.
+  debuggingPort = await new Promise((resolvePort, rejectPort) => {
+    const probe = createServer();
+    probe.once("error", rejectPort);
+    probe.listen(0, "127.0.0.1", () => {
+      const { port } = probe.address();
+      probe.close(() => resolvePort(port));
+    });
+  });
+
   // Fixture stdout/stderr are piped so startup failures (e.g. EADDRINUSE) surface in error messages.
   fixture = spawn(process.execPath, [resolve("tests/fixtures/server.mjs")], { env: { ...process.env, PORT: String(fixturePort) }, stdio: ["ignore", "pipe", "pipe"] });
   fixture.stdout?.on("data", (data) => { fixtureLogs += data; });
@@ -134,9 +136,11 @@ try {
     const uninstaller = join(installedDirectory, "Uninstall Hoolypane.exe");
     try { await run(uninstaller, ["/S"]); } catch { /* temporary directory removal remains authoritative */ }
   }
-  try {
-    await fs.rm(temporary, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
-  } catch {
-    // Best-effort: cleanup must never mask the primary failure.
+  if (temporary) {
+    try {
+      await fs.rm(temporary, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    } catch {
+      // Best-effort: cleanup must never mask the primary failure.
+    }
   }
 }
