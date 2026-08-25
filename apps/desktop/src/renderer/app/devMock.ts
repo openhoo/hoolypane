@@ -8,13 +8,13 @@
  * against ChromeStateSchema / BoundsSnapshotSchema just like the real main
  * process, keeping the IPC contract honest during UI development.
  */
-import { BoundsSnapshotSchema, ChromeStateSchema } from "@hoolypane/contracts";
+import { BoundsSnapshotSchema, ChromeStateSchema, errorMessage } from "@hoolypane/contracts";
 import type { BoundsSnapshot, ChromeCommand, ChromeState, PaneState } from "@hoolypane/contracts";
 import { initialChromeState } from "./state.js";
 // Imported verbatim from the main process so the mock can never drift from the real
 // navigation-normalization pipeline (slashless special schemes, userinfo stripping).
 import { normalizeUrl } from "../../main/panes/url.js";
-import { addPane, uniquePaneId } from "../../main/panes/workspace.js";
+import { addPane, closePane, rotatePane } from "../../main/panes/workspace.js";
 
 let mockState: ChromeState = initialChromeState();
 const listeners = new Set<(value: unknown) => void>();
@@ -56,7 +56,7 @@ function apply(command: ChromeCommand): void {
         url = normalizeUrl(command.url);
       } catch (error) {
         // Mirror main's command .catch: rejected navigations surface via lastError, not silence.
-        patch({ lastError: error instanceof Error ? error.message : String(error) });
+        patch({ lastError: errorMessage(error) });
         break;
       }
       patch({
@@ -77,17 +77,14 @@ function apply(command: ChromeCommand): void {
       settleLoading([command.paneId]);
       break;
     case "create": {
-      const next = addPane(mockState, command.viewport, mockState.sharedUrl, uniquePaneId(new Set(mockState.panes.map((pane) => pane.id)), command.viewport.id));
+      const next = addPane(mockState, command.viewport, mockState.sharedUrl);
       patch({ panes: next.panes, order: next.order });
       break;
     }
     case "close": {
-      if (mockState.order.length <= 1) break;
-      patch({
-        panes: mockState.panes.filter((pane) => pane.id !== command.paneId),
-        order: mockState.order.filter((id) => id !== command.paneId),
-        focusedPaneId: mockState.focusedPaneId === command.paneId ? null : mockState.focusedPaneId,
-      });
+      // Same reference for last-pane/unknown-id no-ops, so the guard skips pointless republishes.
+      const next = closePane(mockState, command.paneId);
+      if (next !== mockState) patch({ ...next });
       break;
     }
     case "rename":
@@ -97,11 +94,8 @@ function apply(command: ChromeCommand): void {
       patch({ positions: { ...mockState.positions, [command.paneId]: { x: command.x, y: command.y } } });
       break;
     case "rotate": {
-      const pane = mockState.panes.find((candidate) => candidate.id === command.paneId);
-      if (!pane) break;
-      patchPane(command.paneId, {
-        viewport: { ...pane.viewport, width: pane.viewport.height, height: pane.viewport.width },
-      });
+      const next = rotatePane(mockState, command.paneId);
+      if (next !== mockState) patch({ ...next });
       break;
     }
     case "focus":

@@ -1,4 +1,4 @@
-import type { ActionEnvelope } from "@hoolypane/contracts";
+import { errorMessage, type ActionEnvelope } from "@hoolypane/contracts";
 
 type ReplayOutcome = { paneId: string; ok: boolean; reason?: string };
 
@@ -17,7 +17,7 @@ export class InteractionCoordinator {
       this.tails.set(paneId, task.catch(() => undefined));
       return task.then(
         (): ReplayOutcome => ({ paneId, ok: true }),
-        (error: unknown): ReplayOutcome => ({ paneId, ok: false, reason: error instanceof Error ? error.message : String(error) }),
+        (error: unknown): ReplayOutcome => ({ paneId, ok: false, reason: errorMessage(error) }),
       );
     });
     return Promise.all(started);

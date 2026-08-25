@@ -40,7 +40,6 @@ describe("multi-viewport encoder", () => {
       composite: { width: expectedComposite.outputWidth, height: expectedComposite.outputHeight },
     });
     expect(verification.success, verification.error).toBe(true);
-    expect(verification.ptsVector).toHaveLength(22);
     const geometryFor = (file: string) => verification.geometry.find((entry) => entry.file === file);
     expect(geometryFor("one.webm")).toMatchObject({ width: 320, height: 240 });
     expect(geometryFor("two.webm")).toMatchObject({ width: 240, height: 320 });

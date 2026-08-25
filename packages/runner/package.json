@@ -30,8 +30,7 @@
     "hoolypane": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc -b && tsup && rollup --config rollup.dts.config.mjs",
-    "test": "vitest run"
+    "build": "tsc -b && tsup && rollup --config rollup.dts.config.mjs"
   },
   "dependencies": {
     "esbuild": "0.25.9",

@@ -5,11 +5,11 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseCliArguments } from "./cli-arguments.js";
-import { buildContextOptions, validateResolvedConfig } from "./run-flow.js";
+import { buildContextOptions } from "./run-flow.js";
 import { compileModule } from "./module-loader.js";
 import { verifyDirectory } from "./verify.js";
 import ffmpegPath from "ffmpeg-static";
-import { VIEWPORT_PRESETS } from "@hoolypane/contracts";
+import { HoolypaneConfigSchema, VIEWPORT_PRESETS } from "@hoolypane/contracts";
 
 describe("runner CLI", () => {
   it("parses flow, config, output, and headed options", () => {
@@ -68,12 +68,12 @@ describe("cli help", () => {
 describe("runner preflight", () => {
   it("rejects duplicate viewport ids before launch", () => {
     const viewport = VIEWPORT_PRESETS[0]!;
-    expect(() => validateResolvedConfig({ viewports: [viewport, viewport] })).toThrow(/duplicate viewport/i);
+    expect(() => HoolypaneConfigSchema.parse({ viewports: [viewport, viewport] })).toThrow(/duplicate viewport/i);
   });
 
   it("builds exact isolated context options", () => {
     const viewport = VIEWPORT_PRESETS.find((item) => item.id === "phone-390")!;
-    const config = validateResolvedConfig({ viewports: [viewport] });
+    const config = HoolypaneConfigSchema.parse({ viewports: [viewport] });
     const options = buildContextOptions(config, config.viewports[0]!);
     expect(options).toMatchObject({
       viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true,
@@ -81,7 +81,7 @@ describe("runner preflight", () => {
   });
 
   it("rejects invalid recording values during preflight", () => {
-    expect(() => validateResolvedConfig({ viewports: [VIEWPORT_PRESETS[0]!], recording: { fps: 24 } })).toThrow();
+    expect(() => HoolypaneConfigSchema.parse({ viewports: [VIEWPORT_PRESETS[0]!], recording: { fps: 24 } })).toThrow();
   });
 });
 

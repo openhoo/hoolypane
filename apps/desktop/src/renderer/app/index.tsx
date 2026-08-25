@@ -4,7 +4,7 @@ import { ChromeStateSchema, type ChromeState, type PanePosition } from "@hoolypa
 import { ErrorToast, PaneCard, Toolbar, type SendCommand } from "./components.js";
 import { installDevMock } from "./devMock.js";
 import { chromeReducer, initialChromeState } from "./state.js";
-import { computePaneTiles, LAYOUT_PADDING, type PaneTile } from "./layout.js";
+import { clampPanePosition, computePaneTiles, LAYOUT_PADDING, type PaneTile } from "./layout.js";
 import "../styles.css";
 
 const SNAP_PX = 8;
@@ -146,7 +146,7 @@ function usePaneGestures(
   requestEmit: RefBox<() => void>,
 ) {
   const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null);
-  const [guides, setGuides] = useState<{ xs: number[]; ys: number[] }>({ xs: [], ys: [] });
+  const [guides, setGuides] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
   const [keyboardMove, setKeyboardMove] = useState<{ id: string; x: number; y: number } | null>(null);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
@@ -202,15 +202,9 @@ function usePaneGestures(
       // Post-snap re-clamp so emitted move-pane payloads always satisfy int >= 0 bounds.
       x = clampToWorkspace(x, width, cardWidth);
       y = clampToWorkspace(y, height, cardHeight);
-      const activeXs = snappedX ? [snappedX.guide] : [];
-      const activeYs = snappedY ? [snappedY.guide] : [];
-      setGuides((prev) =>
-        prev.xs.length === activeXs.length && prev.ys.length === activeYs.length &&
-        prev.xs.every((value, index) => value === activeXs[index]) &&
-        prev.ys.every((value, index) => value === activeYs[index])
-          ? prev
-          : { xs: activeXs, ys: activeYs },
-      );
+      const gx = snappedX?.guide ?? null;
+      const gy = snappedY?.guide ?? null;
+      setGuides((prev) => (prev.x === gx && prev.y === gy ? prev : { x: gx, y: gy }));
       setDrag((prev) => (prev !== null && prev.id === paneId && prev.x === x && prev.y === y ? prev : { id: paneId, x, y }));
       // The native WebContentsView follows the card only when main receives fresh bounds.
       // requestEmit coalesces via snapshotPending: at most one IPC per animation frame.
@@ -231,7 +225,7 @@ function usePaneGestures(
         }
         return null;
       });
-      setGuides({ xs: [], ys: [] });
+      setGuides({ x: null, y: null });
       // Final emission is deferred: the drag===null effect below waits out the revert render
       // (double-rAF) so bounds are measured from settled DOM, not from the last dragged frame.
     };
@@ -294,11 +288,10 @@ function usePaneGestures(
         const height = workspaceRef.current?.clientHeight ?? 0;
         const dx = event.key === "ArrowRight" ? SNAP_PX : event.key === "ArrowLeft" ? -SNAP_PX : 0;
         const dy = event.key === "ArrowDown" ? SNAP_PX : event.key === "ArrowUp" ? -SNAP_PX : 0;
-        // Clamp nudges to the same padded domain the free-tile restore clamp renders: a committed
-        // gutter coordinate would re-render the card at its LAYOUT_PADDING clamp while the native
-        // view keeps the committed position — a persistent visual and click-target desync.
-        const x = Math.max(LAYOUT_PADDING, Math.min(width - LAYOUT_PADDING - tile.width, Math.round(current.x + dx)));
-        const y = Math.max(LAYOUT_PADDING, Math.min(height - LAYOUT_PADDING - tile.height, Math.round(current.y + dy)));
+        // Nudges use the same padded-domain clamp as free-tile restore (clampPanePosition); an
+        // unclamped gutter commit desyncs the rendered card from the native view's click target.
+        const x = clampPanePosition(Math.round(current.x + dx), width, tile.width);
+        const y = clampPanePosition(Math.round(current.y + dy), height, tile.height);
         if (x !== current.x || y !== current.y) {
           setKeyboardMove({ id: current.id, x, y });
           window.hoolypaneChrome.send({ kind: "move-pane", paneId: current.id, x, y });
@@ -544,12 +537,12 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
             />
           );
         })}
-        {guides.xs.map((x) => (
-          <div key={`gx${x}`} aria-hidden="true" class="pointer-events-none absolute inset-y-0 z-20 w-px bg-accent/70" style={{ left: x }} />
-        ))}
-        {guides.ys.map((y) => (
-          <div key={`gy${y}`} aria-hidden="true" class="pointer-events-none absolute inset-x-0 z-20 h-px bg-accent/70" style={{ top: y }} />
-        ))}
+        {guides.x !== null && (
+          <div aria-hidden="true" class="pointer-events-none absolute inset-y-0 z-20 w-px bg-accent/70" style={{ left: guides.x }} />
+        )}
+        {guides.y !== null && (
+          <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 z-20 h-px bg-accent/70" style={{ top: guides.y }} />
+        )}
       </section>
       <footer class="flex h-6 shrink-0 items-center justify-between border-t border-edge bg-panel px-2 text-[10px] text-mute">
         <span>{state.order.length} panes · {state.layout}{state.recording ? " · recording" : ""}</span>

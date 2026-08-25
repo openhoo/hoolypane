@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { open, readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
+import { errorMessage } from "@hoolypane/contracts";
 import type { TrackGeometry } from "./capture-contract.js";
 import { resolveEncoders } from "./encoder.js";
 
@@ -10,7 +11,6 @@ interface VerificationResult {
   readonly geometry: readonly { file: string; width: number; height: number; timeBase: string }[];
   readonly artifacts: Record<string, string>;
   readonly sha256: Record<string, string>;
-  readonly ptsVector?: readonly string[];
   readonly error?: string;
 }
 
@@ -43,7 +43,7 @@ async function ffprobeJson(executable: string, args: readonly string[]): Promise
   } finally {
     clearTimeout(watchdog);
   }
-  try { return JSON.parse(stdout); } catch (error) { throw new Error(`${error instanceof Error ? error.message : String(error)}\n${stdout.slice(0, 1000)}`); }
+  try { return JSON.parse(stdout); } catch (error) { throw new Error(`${errorMessage(error)}\n${stdout.slice(0, 1000)}`); }
 }
 
 async function probe(executable: string, file: string): Promise<{ stream: ProbeStream; packets: readonly ProbePacket[] }> {
@@ -77,10 +77,10 @@ function timeBaseTicks(timeBase: string): { numerator: bigint; denominator: bigi
   return { numerator, denominator };
 }
 
-function exactPtsVector(stream: ProbeStream, packets: readonly ProbePacket[], fps: 30 | 60): { entries: string[]; ticks: bigint[] } {
-  const { numerator, denominator } = timeBaseTicks(stream.time_base!);
+function exactPtsVector(stream: ProbeStream, packets: readonly ProbePacket[], fps: 30 | 60): bigint[] {
+  timeBaseTicks(stream.time_base!);
   const ticks: bigint[] = [];
-  const entries = packets.map((packet, index) => {
+  packets.forEach((packet, index) => {
     if (packet.pts === undefined) throw new Error(`packet ${index} lacks integer PTS`);
     const next = packets[index + 1]?.pts;
     const previous = packets[index - 1]?.pts;
@@ -95,9 +95,8 @@ function exactPtsVector(stream: ProbeStream, packets: readonly ProbePacket[], fp
     }
     if (duration <= 0n) throw new Error(`packet ${index} lacks positive duration`);
     ticks.push(BigInt(packet.pts));
-    return `${BigInt(packet.pts) * numerator}/${denominator}|${duration * numerator}/${denominator}`;
   });
-  return { entries, ticks };
+  return ticks;
 }
 
 // Constant-frame-rate expectation: slot k sits at k·(1e6/fps) µs, expressed in the stream time base with
@@ -128,10 +127,8 @@ export async function verifyArtifacts(outputDir: string, fps: 30 | 60, durationF
       if (packets.length !== durationFrames) throw new Error("packet frame count mismatch");
       return exactPtsVector(stream, packets, fps);
     });
-    const [firstVector] = vectors;
-    if (!firstVector) throw new Error("no encoded WebM artifacts");
     const idealTicks = idealPtsTicks(probed[0]!.stream.time_base!, fps, durationFrames);
-    for (const { ticks } of vectors) {
+    for (const ticks of vectors) {
       for (let index = 0; index < ticks.length; index += 1) {
         if (ticks[index] !== idealTicks[index]) {
           throw new Error(`packet ${index} pts ${ticks[index]} deviates from the ${fps} fps constant-frame-rate timeline (${idealTicks[index]} ticks)`);
@@ -171,9 +168,8 @@ export async function verifyArtifacts(outputDir: string, fps: 30 | 60, durationF
       geometry,
       artifacts,
       sha256: hashes,
-      ptsVector: firstVector.entries,
     };
   } catch (error) {
-    return { success: false, geometry: [], artifacts: {}, sha256: {}, error: error instanceof Error ? error.message : String(error) };
+    return { success: false, geometry: [], artifacts: {}, sha256: {}, error: errorMessage(error) };
   }
 }

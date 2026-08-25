@@ -5,7 +5,7 @@
   "type": "module",
   "exports": { ".": "./dist/index.js" },
   "types": "./dist/index.d.ts",
-    "scripts": { "build": "tsc -b", "test": "pnpm -w exec vitest run packages/recorder/src" },
+  "scripts": { "build": "tsc -b" },
   "dependencies": {
     "@hoolypane/contracts": "workspace:*",
     "ffmpeg-static": "5.3.0",

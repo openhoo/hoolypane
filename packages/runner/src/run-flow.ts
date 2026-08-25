@@ -2,11 +2,11 @@ import { chromium } from "playwright";
 import type { Browser, BrowserContext, CDPSession, Page } from "playwright";
 import { mkdir, access } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
-import { HoolypaneConfigSchema } from "@hoolypane/contracts";
+import { HoolypaneConfigSchema, errorMessage } from "@hoolypane/contracts";
 import { resolve, dirname, join } from "node:path";
-import type { ResolvedHoolypaneConfig, ViewportSpec } from "@hoolypane/contracts";
+import type { FlowEvent, ResolvedHoolypaneConfig, ViewportSpec } from "@hoolypane/contracts";
 import { createFlowContext } from "@hoolypane/flow";
-import type { FlowDefinition, FlowEvent } from "@hoolypane/flow";
+import type { FlowDefinition } from "@hoolypane/flow";
 import { RecordingSession } from "@hoolypane/recorder";
 import type { RecordingTarget, RecorderFailure } from "@hoolypane/recorder";
 import { compileModule, validateConfigExport, validateFlowExport } from "./module-loader.js";
@@ -37,10 +37,6 @@ export function buildContextOptions(config: ResolvedHoolypaneConfig, viewport: V
     ...(config.baseURL === undefined ? {} : { baseURL: config.baseURL }),
     ...(config.storageState === undefined ? {} : { storageState: config.storageState }),
   };
-}
-
-export function validateResolvedConfig(config: unknown): ResolvedHoolypaneConfig {
-  return HoolypaneConfigSchema.parse(config);
 }
 
 function resolveExport<T>(module: Record<string, unknown>, names: readonly string[], source: string): T {
@@ -147,7 +143,7 @@ export async function runFlow(args: RunArguments): Promise<RunResult> {
     const configModule = await evaluateModule(configCompiled.path, MODULE_EVAL_TIMEOUT_MS, configPath);
     const configCandidate = resolveExport<unknown>(configModule, ["default", "config"], configPath);
     validateConfigExport(configCandidate, configPath);
-    const config = validateResolvedConfig(configCandidate);
+    const config = HoolypaneConfigSchema.parse(configCandidate);
     const flowModule = await evaluateModule(flowCompiled.path, config.timeoutMs, flowPath);
     const flow = resolveExport<FlowDefinition>(flowModule, ["default", "flow"], flowPath);
     validateFlowExport(flow, flowPath);
@@ -156,7 +152,7 @@ export async function runFlow(args: RunArguments): Promise<RunResult> {
     try {
       browser = await chromium.launch({ headless: !args.headed, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       if (/executable|browser.*(not|missing)|ENOENT/i.test(message)) throw new Error(`${message}\nInstall the pinned Chromium browser with: npx playwright install chromium`);
       throw error;
     }

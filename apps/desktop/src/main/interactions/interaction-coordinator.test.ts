@@ -153,11 +153,11 @@ describe("flow draft", () => {
     expect(draft.stop()).toEqual({ kind: "saved", source: expect.any(String) });
   });
 
-  it("cancel discards envelopes and deactivates", () => {
+  it("commit discards envelopes and deactivates", () => {
     const draft = new FlowDraft();
     draft.start("https://example.test", "source", 1);
     draft.append({ ...envelope, actionId: 2 }, draft.sessionGeneration);
-    draft.cancel();
+    draft.commit();
     expect(draft.isActive).toBe(false);
     expect(draft.stop()).toEqual({ kind: "empty" });
   });

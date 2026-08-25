@@ -54,7 +54,6 @@ export class FlowDraft {
 
   /** Computes the export outcome without mutating the draft; callers commit only after a successful save. */
   stop(): FlowStopResult {
-    if (!this.active) return { kind: "empty" };
     if (this.blocking.size > 0) {
       const reasons = [...this.blocking.entries()].flatMap(([key, values]) => {
         const separator = key.indexOf(":");
@@ -73,10 +72,6 @@ export class FlowDraft {
     this.active = false;
     this.envelopes = [];
     this.blocking.clear();
-  }
-
-  cancel(): void {
-    this.commit();
   }
 
   get sessionGeneration(): number { return this.generation; }

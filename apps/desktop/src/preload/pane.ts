@@ -1,5 +1,5 @@
 import { ipcRenderer } from "electron";
-import { IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, RecordFailureSchema, ReplayRequestSchema, staleGenerationMessage, type Action, type LocatorSpec, type ReplayRequest, type ReplayResult } from "@hoolypane/contracts";
+import { IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, RecordFailureSchema, ReplayRequestSchema, errorMessage, staleGenerationMessage, type Action, type LocatorSpec, type ReplayRequest, type ReplayResult } from "@hoolypane/contracts";
 
 let documentGeneration = 0;
 type SuppressionEntry = { generation: number; kind: Action["kind"]; box?: { x: number; y: number; width: number; height: number }; confirmed?: boolean };
@@ -163,8 +163,8 @@ function record(action: () => Action, force = false): void {
     console.error("[hoolypane] failed to record action", error);
     // Recording used to fail silently (locator resolution throws routinely); surface it to main.
     // Truncated before parse so the payload is always schema-valid and the send can never throw.
-    const reason = (error instanceof Error ? error.message : String(error)).slice(0, 512);
-    ipcRenderer.send(IPC_CHANNELS.recordFailure, RecordFailureSchema.parse({ kind: "record", reason }));
+    const reason = errorMessage(error).slice(0, 512);
+    ipcRenderer.send(IPC_CHANNELS.recordFailure, RecordFailureSchema.parse({ reason }));
   }
 }
 
@@ -185,6 +185,12 @@ function flushFill(force = false): void {
 /** Flushes a fill that active suppression had deferred, as soon as the last entry is gone. */
 function drainDeferredFill(): void {
   if (suppressed.size === 0) flushFill();
+}
+
+/** Frees one suppression slot; the freed slot may unblock a deferred user-typed fill. */
+function releaseSuppression(actionId: number): void {
+  suppressed.delete(actionId);
+  drainDeferredFill();
 }
 
 ipcRenderer.on(IPC_CHANNELS.paneGeneration, (_event, value: unknown) => {
@@ -254,10 +260,9 @@ document.addEventListener("click", (event) => {
     if (matchedEntry.kind === "check") {
       matchedEntry.confirmed = true;
       const settledActionId = matchedActionId;
-      window.setTimeout(() => { suppressed.delete(settledActionId); drainDeferredFill(); }, 0);
+      window.setTimeout(() => releaseSuppression(settledActionId), 0);
     } else {
-      suppressed.delete(matchedActionId);
-      drainDeferredFill();
+      releaseSuppression(matchedActionId);
     }
     if (matchedEntry.generation === documentGeneration) {
       ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId: matchedActionId, phase: "confirm", ok: true } satisfies ReplayResult);
@@ -317,10 +322,10 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
     const raw = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
     const actionId = typeof raw.actionId === "number" && Number.isInteger(raw.actionId) && raw.actionId > 0 ? raw.actionId : 1;
     const phase = raw.phase === "resolve" || raw.phase === "apply-dom" || raw.phase === "end" || raw.phase === "confirm" ? raw.phase : "resolve";
-    ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId, phase, ok: false, reason: (error instanceof Error ? error.message : String(error)).slice(0, 512) } satisfies ReplayResult);
+    ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId, phase, ok: false, reason: errorMessage(error).slice(0, 512) } satisfies ReplayResult);
     return;
   }
-  if (request.phase === "end") { suppressed.delete(request.actionId); drainDeferredFill(); }
+  if (request.phase === "end") releaseSuppression(request.actionId);
   let result: ReplayResult = { actionId: request.actionId, phase: request.phase, ok: true };
   try {
     if (request.documentGeneration !== documentGeneration) throw new Error(staleGenerationMessage(request.documentGeneration, documentGeneration));
@@ -337,7 +342,8 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
         if (request.action.kind === "select" && !(element instanceof HTMLSelectElement)) throw new Error("select locator resolved a non-select element");
         if (request.action.kind === "scroll" && !(element instanceof HTMLElement)) throw new Error("scroll locator resolved a non-HTMLElement");
       }
-      suppressed.set(request.actionId, { generation: request.documentGeneration, kind: request.action.kind });
+      const entry: SuppressionEntry = { generation: request.documentGeneration, kind: request.action.kind };
+      suppressed.set(request.actionId, entry);
       if (request.phase === "resolve" && (request.action.kind === "fill" || request.action.kind === "press") && element instanceof HTMLElement) {
         element.focus({ preventScroll: true });
       }
@@ -361,12 +367,11 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
         autoScrollCenter(element);
       }
       const box = element.getBoundingClientRect();
-      const entry = suppressed.get(request.actionId);
-      if (entry) entry.box = { x: box.x, y: box.y, width: box.width, height: box.height };
+      entry.box = { x: box.x, y: box.y, width: box.width, height: box.height };
       result = { ...result, box: { x: box.x, y: box.y, width: box.width, height: box.height }, ...(element instanceof HTMLInputElement ? { checked: element.checked } : {}) };
     }
   } catch (error) {
-    result = { ...result, ok: false, reason: (error instanceof Error ? error.message : String(error)).slice(0, 512) };
+    result = { ...result, ok: false, reason: errorMessage(error).slice(0, 512) };
   }
   ipcRenderer.send(IPC_CHANNELS.replayResult, result);
 });

@@ -2,8 +2,7 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join, relative } from "node:path";
 import { hrtime } from "node:process";
-import type { ResolvedRecordingConfig, ViewportSpec, FlowEvent } from "@hoolypane/contracts";
-import { encodedDimension } from "@hoolypane/contracts";
+import { errorMessage, type ResolvedRecordingConfig, type ViewportSpec, type FlowEvent } from "@hoolypane/contracts";
 import {
   alignFrames,
   assertStateTransition,
@@ -73,7 +72,6 @@ interface CapturePipelineResult {
   readonly durationFrames: number;
   readonly captureFailures: readonly RecorderFailure[];
   readonly spoolFailureNotes: readonly RecorderFailure[];
-  readonly mappings: Record<string, readonly SlotMapping[]>;
   readonly aligned: readonly AlignedCapture[];
   readonly encoding: EncodingResult;
   readonly verifiedArtifacts: Readonly<Record<string, string>>;
@@ -184,9 +182,7 @@ export class RecordingSession {
     try {
       const data = decodeScreencastData(frame);
       const metadata = frameMetadata(frame, context.fallbackSequence++);
-      const viewport = context.target.viewport;
-      const maximumWidth = encodedDimension(viewport.width, viewport.deviceScaleFactor);
-      const maximumHeight = encodedDimension(viewport.height, viewport.deviceScaleFactor);
+      const { encodedWidth: maximumWidth, encodedHeight: maximumHeight } = geometryForViewport(context.target.viewport);
       if (metadata.width <= 0 || metadata.height <= 0 || metadata.width > maximumWidth || metadata.height > maximumHeight) {
         throw new Error(`unexpected source geometry ${metadata.width}x${metadata.height} for ${context.target.id}, maximum ${maximumWidth}x${maximumHeight}`);
       }
@@ -282,7 +278,7 @@ export class RecordingSession {
           if (this.state !== "complete" && this.state !== "failed") await this.transition("failed");
         } catch { /* the original error takes precedence */ }
         try {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = errorMessage(error);
           await atomicJson(join(this.options.outputDir, "diagnostics.json"), { contract: CAPTURE_CONTRACT, status: input.status, failures: [...input.failures, { message: `finalize pipeline failed: ${message}` }] });
         } catch { /* the original error takes precedence */ }
         if (manifestOnDisk && !manifestWritten) {
@@ -331,10 +327,8 @@ export class RecordingSession {
       ...this.captureCloseFailures,
     ];
     const spoolFailureNotes = this.contexts.flatMap((context) => [...context.spool.drainFailureNotes()]);
-    const mappings: Record<string, readonly SlotMapping[]> = {};
     const aligned = this.contexts.map((context): AlignedCapture => {
       const result = alignFrames(context.spool.index.frames, this.t0Us!, durationFrames, this.options.recording.fps);
-      mappings[context.target.id] = result.mappings;
       return { context, result, geometry: geometryForViewport(context.target.viewport) };
     });
     await this.transition("encoding");
@@ -354,7 +348,7 @@ export class RecordingSession {
       await this.transition("failed");
       throw new Error(`artifact validation failed: ${verification.error ?? "unknown error"}`);
     }
-    return { t1Us, durationFrames, captureFailures, spoolFailureNotes, mappings, aligned, encoding, verifiedArtifacts: verification.artifacts, verifiedHashes: verification.sha256 };
+    return { t1Us, durationFrames, captureFailures, spoolFailureNotes, aligned, encoding, verifiedArtifacts: verification.artifacts, verifiedHashes: verification.sha256 };
   }
 
   private async buildManifest(input: FinalizeInput, pipeline: CapturePipelineResult): Promise<RecordingManifest> {
@@ -388,7 +382,7 @@ export class RecordingSession {
           queue: { maxFrames: context.spool.index.maxQueuedFrames, maxBytes: context.spool.index.maxQueuedBytes },
         };
       }),
-      mappings: pipeline.mappings,
+      mappings: Object.fromEntries(pipeline.aligned.map(({ context, result }) => [context.target.id, result.mappings])),
       failures: [...input.failures, ...pipeline.spoolFailureNotes, ...pipeline.captureFailures],
       flowEvents: input.events ?? [],
       artifacts,
@@ -397,7 +391,7 @@ export class RecordingSession {
   }
 
   private async writeFinalManifest(manifestPath: string, manifest: RecordingManifest): Promise<RecordingManifest> {
-    const stateKey = relative(this.options.outputDir, join(this.options.outputDir, "run-state.json"));
+    const stateKey = "run-state.json";
     // The terminal run-state write follows the manifest write: if the manifest fails to land,
     // the catch guard must still be able to mark the run failed instead of leaving a permanent
     // false "complete" record behind (see pruneFailedArtifacts contract). The manifest certifies

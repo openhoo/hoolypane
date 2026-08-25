@@ -31,6 +31,8 @@ const selectClass = (active: boolean, padding = "px-1"): string =>
 
 const fieldTone = (active: boolean): string => (active ? "border-accent/70 bg-accent/15 text-accent-text" : "border-edge bg-field text-mute hover:text-ink");
 
+const dotTone = (on: boolean): string => `size-1.5 shrink-0 rounded-full ${on ? "bg-accent" : "bg-edge"}`;
+
 function IconButton({
   label,
   onClick,
@@ -152,7 +154,7 @@ export function Toolbar({
       </button>
       <div role="group" aria-label="Emulation" class="flex h-8 shrink-0 items-center gap-1 border-l border-edge pl-2">
         <label class="flex items-center gap-1">
-          <span aria-hidden="true" class={`size-1.5 shrink-0 rounded-full ${state.emulation.colorScheme !== "auto" ? "bg-accent" : "bg-edge"}`} />
+          <span aria-hidden="true" class={dotTone(state.emulation.colorScheme !== "auto")} />
           <select
             aria-label="Color scheme"
             value={state.emulation.colorScheme}
@@ -175,7 +177,7 @@ export function Toolbar({
           Motion
         </button>
         <label class="flex items-center gap-1">
-          <span aria-hidden="true" class={`size-1.5 shrink-0 rounded-full ${state.emulation.throttling !== "none" ? "bg-accent" : "bg-edge"}`} />
+          <span aria-hidden="true" class={dotTone(state.emulation.throttling !== "none")} />
           <select
             aria-label="Throttling"
             value={state.emulation.throttling}
@@ -210,7 +212,7 @@ export function Toolbar({
                 class="flex items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs text-ink hover:bg-field"
               >
                 {item.label}
-                <span aria-hidden="true" class={`size-1.5 shrink-0 rounded-full ${state.emulation.overlays[item.key] ? "bg-accent" : "bg-edge"}`} />
+                <span aria-hidden="true" class={dotTone(state.emulation.overlays[item.key])} />
               </button>
             ))}
           </div>

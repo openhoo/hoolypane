@@ -2,6 +2,7 @@ export { ActionEnvelopeSchema, ActionSchema } from "./action.js";
 export type { Action, ActionEnvelope, FlowEvent, LocatorSpec } from "./action.js";
 export { HoolypaneConfigSchema } from "./config.js";
 export type { HoolypaneConfig, ResolvedHoolypaneConfig, ResolvedRecordingConfig } from "./config.js";
+export { errorMessage } from "./errors.js";
 export { BoundsSnapshotSchema, ChromeCommandSchema, IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, RecordFailureSchema, ReplayRequestSchema, ReplayResultSchema, staleGenerationMessage } from "./ipc.js";
 export type { BoundsSnapshot, ChromeCommand, ReplayRequest, ReplayResult } from "./ipc.js";
 export { VIEWPORT_PRESETS } from "./presets.js";

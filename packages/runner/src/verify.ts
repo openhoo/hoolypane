@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { errorMessage } from "@hoolypane/contracts";
 import { verifyArtifacts } from "@hoolypane/recorder";
 import type { TrackGeometry } from "@hoolypane/recorder";
 
@@ -10,7 +11,7 @@ export async function verifyDirectory(path: string): Promise<number> {
   try {
     value = JSON.parse(await readFile(manifestPath, "utf8"));
   } catch (error) {
-    throw new Error(`Cannot parse ${manifestPath}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Cannot parse ${manifestPath}: ${errorMessage(error)}`);
   }
   if (!value || typeof value !== "object" || !("fps" in value) || !("durationFrames" in value)) throw new Error(`${manifestPath} lacks fps or durationFrames`);
   const fps = value.fps;

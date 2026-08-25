@@ -1,4 +1,5 @@
 import type { ElectronApplication, Page } from "playwright";
+import { errorMessage } from "@hoolypane/contracts";
 
 /**
  * Clicks a fixture element inside the 1440px source pane through CDP input dispatch,
@@ -46,7 +47,7 @@ export async function clickPaneSurface(
         }
       } catch (error) {
         // Transient renderer reloads invalidate execution contexts mid-attempt; retry instead of aborting.
-        lastError = error instanceof Error ? error.message : String(error);
+        lastError = errorMessage(error);
         status = undefined;
       }
       const { promise: settleDelay, resolve: settleDone } = Promise.withResolvers<void>();

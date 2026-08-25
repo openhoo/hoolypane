@@ -1,6 +1,12 @@
 import type { ChromeState, PanePosition } from "@hoolypane/contracts";
 
 export const LAYOUT_PADDING = 8;
+
+/** Single padded-domain clamp shared by free-tile restore and keyboard nudges: a committed coordinate always renders where the native view sits. */
+export function clampPanePosition(value: number, areaExtent: number, size: number): number {
+  return Math.max(LAYOUT_PADDING, Math.min(areaExtent - LAYOUT_PADDING - size, value));
+}
+
 const LAYOUT_GAP = 8;
 const PANE_HEADER_HEIGHT = 28;
 
@@ -61,7 +67,7 @@ export function computePaneTiles(
   if (innerWidth <= 0 || innerHeight <= 0 || panes.length === 0) return tiles;
   if (layout === "focus") return focusTiles(panes, focusedPaneId, innerWidth, innerHeight);
   if (layout === "horizontal") return rowTiles(panes, innerWidth, innerHeight);
-  restoreFreePositions(tiles, masonryTiles(panes, innerWidth, innerHeight), positions, innerWidth, innerHeight);
+  restoreFreePositions(tiles, masonryTiles(panes, innerWidth, innerHeight), positions, areaWidth, areaHeight);
   return tiles;
 }
 
@@ -163,8 +169,8 @@ function restoreFreePositions(
   tiles: Map<string, PaneTile>,
   placed: readonly PaneTile[],
   positions: Readonly<Record<string, PanePosition>>,
-  innerWidth: number,
-  innerHeight: number,
+  areaWidth: number,
+  areaHeight: number,
 ): void {
   for (const tile of placed) {
     const stored = positions[tile.id];
@@ -172,8 +178,8 @@ function restoreFreePositions(
     // Restored free positions must be clamped onto the CURRENT workspace extent, otherwise a
     // stale saved position after a window resize pushes panes outside and the native view
     // collapses to 1×1.
-    const x = Math.max(LAYOUT_PADDING, Math.min(stored.x, LAYOUT_PADDING + innerWidth - tile.width));
-    const y = Math.max(LAYOUT_PADDING, Math.min(stored.y, LAYOUT_PADDING + innerHeight - tile.height));
+    const x = clampPanePosition(stored.x, areaWidth, tile.width);
+    const y = clampPanePosition(stored.y, areaHeight, tile.height);
     tiles.set(tile.id, { ...tile, x, y });
   }
 }

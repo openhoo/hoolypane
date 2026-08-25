@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, session, type Session, type WebContents, WebContentsView } from "electron";
-import { IPC_CHANNELS, PaneGenerationSchema, ViewportSpecSchema, type Action, type BoundsSnapshot, type ColorSchemeMode, type OverlayKey, type ThrottlingMode, type ViewportSpec } from "@hoolypane/contracts";
+import { IPC_CHANNELS, PaneGenerationSchema, ViewportSpecSchema, errorMessage, type Action, type BoundsSnapshot, type ColorSchemeMode, type OverlayKey, type ThrottlingMode, type ViewportSpec } from "@hoolypane/contracts";
 import { report } from "../report.js";
 import { displayScale, validateBoundsSnapshot, type Bounds } from "./layout.js";
 import { isAllowedProtocol, normalizeUrl } from "./url.js";
@@ -203,7 +203,7 @@ export class PaneRegistry {
       if (!record.networkEmulationReady) { await contents.debugger.sendCommand("Network.enable"); record.networkEmulationReady = true; }
       await contents.debugger.sendCommand("Network.emulateNetworkConditions", networkConditions(emulation.throttling));
     } catch (error) {
-      if (this.isLive(record)) report(record.id, `emulation failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (this.isLive(record)) report(record.id, `emulation failed: ${errorMessage(error)}`);
     }
     await this.applyOverlays(record);
   }
@@ -223,7 +223,7 @@ export class PaneRegistry {
         if (overlays[key]) record.overlayCssKeys[key] = await contents.insertCSS(OVERLAY_STYLES[key]);
       }
     } catch (error) {
-      if (this.isLive(record)) report(record.id, `overlay injection failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (this.isLive(record)) report(record.id, `overlay injection failed: ${errorMessage(error)}`);
     }
   }
 
@@ -250,7 +250,7 @@ export class PaneRegistry {
     for (const item of snapshot.panes) {
       const record = this.panes.get(item.paneId);
       if (!record || record.lastBounds && sameBounds(record.lastBounds, item.bounds)) continue;
-      this.applyBoundsEntry(record, item, snapshot.windowWidth, snapshot.windowHeight);
+      this.applyBoundsEntry(record, item);
     }
   }
 
@@ -258,11 +258,10 @@ export class PaneRegistry {
   private applyBoundsIfCached(record: PaneRecord): void {
     const snapshot = this.lastBoundsSnapshot;
     const item = snapshot?.panes.find((entry) => entry.paneId === record.id);
-    if (snapshot && item) this.applyBoundsEntry(record, item, snapshot.windowWidth, snapshot.windowHeight);
+    if (snapshot && item) this.applyBoundsEntry(record, item);
   }
 
-  private applyBoundsEntry(record: PaneRecord, item: BoundsSnapshot["panes"][number], windowWidth: number, windowHeight: number): void {
-    if (item.bounds.x + item.bounds.width > windowWidth || item.bounds.y + item.bounds.height > windowHeight) return;
+  private applyBoundsEntry(record: PaneRecord, item: BoundsSnapshot["panes"][number]): void {
     const visible = item.bounds.width > 0 && item.bounds.height > 0;
     record.view.setBounds(visible ? item.bounds : { x: 0, y: 0, width: 1, height: 1 });
     record.lastBounds = item.bounds;
@@ -326,7 +325,7 @@ export class PaneRegistry {
       const scale = this.getInputScale(record.id);
       await contents.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width: pane.viewport.width, height: pane.viewport.height, deviceScaleFactor: pane.viewport.deviceScaleFactor, mobile: pane.viewport.isMobile, scale });
       await contents.debugger.sendCommand("Emulation.setTouchEmulationEnabled", { enabled: pane.viewport.hasTouch, configuration: pane.viewport.hasTouch ? "mobile" : "desktop" });
-    } catch (error) { if (!this.isLive(record)) return; this.reportFailure(record.id, `viewport emulation failed: ${error instanceof Error ? error.message : String(error)}`); }
+    } catch (error) { if (!this.isLive(record)) return; this.reportFailure(record.id, `viewport emulation failed: ${errorMessage(error)}`); }
   }
 
   private installSessionSecurity(): void {

@@ -6,6 +6,7 @@ import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { errorMessage } from "@hoolypane/contracts";
 
 export interface CompiledModule {
   readonly path: string;
@@ -78,7 +79,7 @@ function hoolypaneEntry(specifier: string): string {
       try {
         manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
       } catch (error) {
-        throw new Error(`Cannot resolve ${specifier}: ${manifestPath} is not valid JSON (${error instanceof Error ? error.message : String(error)})`);
+        throw new Error(`Cannot resolve ${specifier}: ${manifestPath} is not valid JSON (${errorMessage(error)})`);
       }
       if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error(`Cannot resolve ${specifier}: ${manifestPath} is not a valid package manifest`);
       const manifestRecord = manifest as Record<string, unknown>; // JSON boundary; null/array/non-object rejected above.

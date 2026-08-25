@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, type IpcMainEvent } from "electron";
-import { dirname, extname, isAbsolute, join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   ActionEnvelopeSchema,
@@ -10,6 +10,7 @@ import {
   RecordFailureSchema,
   ReplayResultSchema,
   RUNTIME_PANE_DEFAULTS,
+  errorMessage,
   staleGenerationMessage,
   type ActionEnvelope,
   type ChromeCommand,
@@ -22,7 +23,7 @@ import { PaneRegistry } from "./panes/pane-registry.js";
 import { normalizeUrl } from "./panes/url.js";
 import { flushWorkspaceSaves, loadWorkspace, saveWorkspace, sweepStaleTemporaries, writeFileAtomic } from "./persistence/workspace-store.js";
 import { report } from "./report.js";
-import { captureOverview, capturePane } from "./screenshots/screenshot-service.js";
+import { captureOverview, capturePane, testEnvFilePath } from "./screenshots/screenshot-service.js";
 
 let chromeWindow: BrowserWindow | undefined;
 let registry: PaneRegistry | undefined;
@@ -62,10 +63,7 @@ function publishState(): void {
 function testFlowSavePath(): string | undefined {
   if (process.env.HOOLYPANE_TEST_MODE !== "1") return undefined;
   if (process.env.HOOLYPANE_TEST_FLOW_SAVE_CANCEL === "1") return "";
-  const value = process.env.HOOLYPANE_TEST_FLOW_PATH;
-  if (!value) return undefined;
-  if (!isAbsolute(value) || extname(value).toLowerCase() !== ".ts") throw new Error("HOOLYPANE_TEST_FLOW_PATH must be an absolute TypeScript path");
-  return value;
+  return testEnvFilePath("HOOLYPANE_TEST_FLOW_PATH", ".ts", "TypeScript");
 }
 async function applyTestReplayDelay(): Promise<void> {
   if (process.env.HOOLYPANE_TEST_MODE !== "1") return;
@@ -388,7 +386,7 @@ function drainDeferredActions(): void {
         try {
           await acceptSourceAction(next.paneId, next.observed);
         } catch (error) {
-          report(next.paneId, error instanceof Error ? error.message : String(error));
+          report(next.paneId, errorMessage(error));
         }
       }
     } finally {
@@ -443,7 +441,7 @@ async function createChrome(): Promise<void> {
   // Scoped to the shell webContents: every other surface keeps its session's existing behavior.
   shellContents.session.setPermissionRequestHandler((requesting, _permission, callback) => callback(requesting !== shellContents));
   shellContents.session.setPermissionCheckHandler((requesting) => requesting !== shellContents);
-  chromeWindow.on("closed", () => { flowDraft.cancel(); quittingRegistry = registry; void registry?.destroy(); chromeWindow = undefined; registry = undefined; });
+  chromeWindow.on("closed", () => { flowDraft.commit(); quittingRegistry = registry; void registry?.destroy(); chromeWindow = undefined; registry = undefined; });
   registry = new PaneRegistry({ workspace, onChange: publishState, onFailure: (failure) => report(failure.paneId, failure.message) });
   quittingRegistry = undefined;
   registry.attachWindow(chromeWindow);
@@ -474,7 +472,7 @@ app.commandLine.appendSwitch("disable-background-timer-throttling");
 // Surface relaunch failures instead of swallowing them: prefer the renderer error surface,
 // fall back to quitting when no window exists to show anything in.
 const handleLaunchFailure = (error: unknown): void => {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   console.error(message);
   if (chromeWindow && !chromeWindow.isDestroyed()) {
     lastError = `failed to (re)open the Hoolypane window: ${message}`;
@@ -533,7 +531,7 @@ app.on("before-quit", (event) => {
     } catch (error) {
       // Never block quit: a native dialog here wedges headless/Xvfb sessions forever, so
       // surface the failure through the log only and proceed with shutdown.
-      report("", `failed to save the workspace during quit: ${error instanceof Error ? error.message : String(error)}`);
+      report("", `failed to save the workspace during quit: ${errorMessage(error)}`);
     }
     try { await flushWorkspaceSaves(); } catch { /* save tails never reject */ }
     quitFlushComplete = true;
@@ -552,14 +550,14 @@ async function launchChrome(): Promise<void> {
 
 ipcMain.on(IPC_CHANNELS.bounds, (event, value: unknown) => {
   if (!trustedChrome(event)) return;
-  try { registry?.applyBounds(BoundsSnapshotSchema.parse(value)); } catch (error) { report("", error instanceof Error ? error.message : String(error)); }
+  try { registry?.applyBounds(BoundsSnapshotSchema.parse(value)); } catch (error) { report("", errorMessage(error)); }
 });
 ipcMain.on(IPC_CHANNELS.command, (event, value: unknown) => {
   if (!trustedChrome(event)) return;
   commandQueue = commandQueue
     .then(() => handleCommand(ChromeCommandSchema.parse(value)))
     .catch((error: unknown) => {
-      lastError = error instanceof Error ? error.message : String(error);
+      lastError = errorMessage(error);
       report("", lastError);
       publishState();
     });
@@ -568,7 +566,7 @@ ipcMain.on(IPC_CHANNELS.stateRequest, (event) => { if (!trustedChrome(event)) re
 ipcMain.on(IPC_CHANNELS.paneAction, (event, value: unknown) => {
   const paneId = sourcePane(event);
   if (!paneId) return;
-  void acceptSourceAction(paneId, value).catch((error: unknown) => report(paneId, error instanceof Error ? error.message : String(error)));
+  void acceptSourceAction(paneId, value).catch((error: unknown) => report(paneId, errorMessage(error)));
 });
 ipcMain.on(IPC_CHANNELS.recordFailure, (event, value: unknown) => {
   const paneId = sourcePane(event);
@@ -580,7 +578,7 @@ ipcMain.on(IPC_CHANNELS.recordFailure, (event, value: unknown) => {
     lastError = `pane ${paneId}: recording failed: ${failure.reason}`;
     report(paneId, `recording failed: ${failure.reason}`);
     publishState();
-  } catch (error) { report(paneId, error instanceof Error ? error.message : String(error)); }
+  } catch (error) { report(paneId, errorMessage(error)); }
 });
 ipcMain.on(IPC_CHANNELS.replayResult, (event, value: unknown) => {
   const paneId = sourcePane(event);
@@ -596,5 +594,5 @@ ipcMain.on(IPC_CHANNELS.replayResult, (event, value: unknown) => {
     // belongs to no live waiter: drop it and let the requester's timeout clean up.
     if (registry?.epochOf(paneId) !== pending.epoch) return;
     pending.resolve(parsed);
-  } catch (error) { report(paneId, error instanceof Error ? error.message : String(error)); }
+  } catch (error) { report(paneId, errorMessage(error)); }
 });

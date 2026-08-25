@@ -1,7 +1,7 @@
 import { parentPort, workerData } from "node:worker_threads";
-import sharp from "sharp";
+import sharp, { type OverlayOptions } from "sharp";
+import { errorMessage } from "@hoolypane/contracts";
 import type { OverviewInput, OverviewWorkerResponse } from "./overview-protocol.js";
-import type Sharp = require("sharp");
 
 
 function escapeXml(value: string): string {
@@ -16,7 +16,7 @@ async function render(input: OverviewInput): Promise<Buffer> {
   const tileHeight = imageHeight + headerHeight;
   const columns = Math.ceil(Math.sqrt(input.tiles.length));
   const rows = Math.ceil(input.tiles.length / columns);
-  const overlays: Sharp.OverlayOptions[] = [];
+  const overlays: OverlayOptions[] = [];
   for (const [index, tile] of input.tiles.entries()) {
     const left = index % columns * tileWidth;
     const top = Math.floor(index / columns) * tileHeight;
@@ -35,5 +35,5 @@ async function render(input: OverviewInput): Promise<Buffer> {
 
 void render(workerData as OverviewInput).then(
   (png) => parentPort?.postMessage({ ok: true, png } satisfies OverviewWorkerResponse),
-  (error: unknown) => parentPort?.postMessage({ ok: false, error: error instanceof Error ? error.message : String(error) } satisfies OverviewWorkerResponse),
+  (error: unknown) => parentPort?.postMessage({ ok: false, error: errorMessage(error) } satisfies OverviewWorkerResponse),
 );

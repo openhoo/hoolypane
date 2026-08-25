@@ -7,7 +7,6 @@ export default defineConfig({
       "@hoolypane/contracts": fileURLToPath(new URL("./packages/contracts/src/index.ts", import.meta.url)),
       "@hoolypane/flow": fileURLToPath(new URL("./packages/flow/src/index.ts", import.meta.url)),
       "@hoolypane/recorder": fileURLToPath(new URL("./packages/recorder/src/index.ts", import.meta.url)),
-      "@hoolypane/runner": fileURLToPath(new URL("./packages/runner/src/index.ts", import.meta.url)),
     },
   },
   test: {

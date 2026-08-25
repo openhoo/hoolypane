@@ -88,7 +88,8 @@ export function paneFromViewport(viewport: ViewportSpec, id: string, url: string
   return { id, name: viewport.name, viewport, url, ...RUNTIME_PANE_DEFAULTS };
 }
 
-export function defaultWorkspace(url = "https://example.com/"): WorkspaceState {
+export function defaultWorkspace(): WorkspaceState {
+  const url = "https://example.com/";
   const viewports = VIEWPORT_PRESETS;
   const panes = viewports.map((viewport) => paneFromViewport(viewport, viewport.id, url));
   return { version: 1, panes, order: panes.map((pane) => pane.id), layout: "free", positions: {}, emulation: EmulationSettingsSchema.parse({}), focusedPaneId: null, syncEnabled: true, sharedUrl: url };

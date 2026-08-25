@@ -54,7 +54,6 @@ export const PaneObservedActionSchema = z.strictObject({
 });
 
 export const RecordFailureSchema = z.strictObject({
-  kind: z.literal("record"),
   reason: z.string().max(512),
 });
 export const PaneGenerationSchema = z.strictObject({

@@ -4,6 +4,7 @@ import { access, constants, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import ffmpegStaticPath from "ffmpeg-static";
 import ffprobeStatic from "ffprobe-static";
+import { errorMessage } from "@hoolypane/contracts";
 import { compositeGeometry, type CompositeGeometry, type SlotMapping, type TrackGeometry } from "./capture-contract.js";
 import type { FrameSpool } from "./spool.js";
 
@@ -16,7 +17,7 @@ async function executable(path: string, envVariable?: string): Promise<string> {
     await access(path, constants.X_OK);
   } catch (error) {
     if (!envVariable) throw error;
-    throw new Error(`${envVariable}="${path}" is not an accessible executable: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`${envVariable}="${path}" is not an accessible executable: ${errorMessage(error)}`);
   }
   return path;
 }
@@ -132,6 +133,6 @@ export async function encodeAligned(
     }
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     await completion.promise.catch(() => undefined);
-    throw new Error(`ffmpeg ${paths.ffmpeg} failed (ffprobe ${paths.ffprobe}): ${spawnError?.message ?? (error instanceof Error ? error.message : String(error))}${stderr ? `\n${stderr}` : ""}`);
+    throw new Error(`ffmpeg ${paths.ffmpeg} failed (ffprobe ${paths.ffprobe}): ${spawnError?.message ?? errorMessage(error)}${stderr ? `\n${stderr}` : ""}`);
   }
 }

@@ -48,7 +48,6 @@ describe("ten-second recording contract", () => {
       composite: { width: 320, height: 320 },
     });
     expect(verification.success, verification.error).toBe(true);
-    expect(verification.ptsVector).toHaveLength(DURATION_FRAMES);
     expect(process.memoryUsage().rss - baselineRss).toBeLessThan(256 * 1024 * 1024);
     await writeFile(resolve(OUTPUT, "manifest.json"), `${JSON.stringify({ contract: CAPTURE_CONTRACT, validatorVersion: VALIDATOR_VERSION, validationSuccess: true, fps: FPS, durationFrames: DURATION_FRAMES, encodeSeconds, artifacts: verification.artifacts, sha256: verification.sha256 }, null, 2)}\n`);
   }, 120_000);

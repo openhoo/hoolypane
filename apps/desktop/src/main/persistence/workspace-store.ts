@@ -1,5 +1,4 @@
 import { promises as fs } from "node:fs";
-import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { WorkspaceStateSchema, defaultWorkspace, type WorkspaceState } from "../panes/workspace.js";
 
@@ -105,20 +104,31 @@ export async function flushWorkspaceSaves(): Promise<void> {
   await Promise.all([...saveTails.values()]);
 }
 
+/** Shared atomic-replace core: writes via a callback into a unique same-directory temporary,
+ *  renames over `path`, and removes the temporary on any failure. The temp naming keeps the
+ *  `${basename}.….tmp` shape sweepStaleTemporaries matches, so crash orphans stay reclaimable. */
+async function writeAtomic(path: string, write: (temporaryPath: string) => Promise<void>): Promise<void> {
+  const temporaryPath = `${path}.${process.pid}.${Date.now()}-${++temporarySequence}.tmp`;
+  try {
+    await write(temporaryPath);
+    await fs.rename(temporaryPath, path);
+  } catch (error) {
+    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
 async function writeWorkspace(file: string, state: WorkspaceState): Promise<void> {
   const directory = dirname(file);
-  const temporary = `${file}.${process.pid}.${Date.now()}-${++temporarySequence}.tmp`;
-  const handle = await fs.open(temporary, "w", 0o600);
-  try {
-    await handle.writeFile(JSON.stringify(state));
-    await handle.sync();
-    await fs.rename(temporary, file);
-  } catch (error) {
-    await fs.unlink(temporary).catch(() => {});
-    throw error;
-  } finally {
-    await handle.close();
-  }
+  await writeAtomic(file, async (temporary) => {
+    const handle = await fs.open(temporary, "w", 0o600);
+    try {
+      await handle.writeFile(JSON.stringify(state));
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  });
   // Best-effort directory fsync so the rename itself survives a crash; unsupported platforms are ignored.
   try {
     const directoryHandle = await fs.open(directory, "r");
@@ -134,12 +144,5 @@ async function writeWorkspace(file: string, state: WorkspaceState): Promise<void
 
 /** Writes via a same-directory temp file + rename so a mid-write failure never leaves a torn file behind. */
 export async function writeFileAtomic(path: string, contents: string | Uint8Array): Promise<void> {
-  const temporaryPath = `${path}.${randomUUID()}.tmp`;
-  try {
-    await fs.writeFile(temporaryPath, contents);
-    await fs.rename(temporaryPath, path);
-  } catch (error) {
-    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
-    throw error;
-  }
+  await writeAtomic(path, (temporaryPath) => fs.writeFile(temporaryPath, contents));
 }
