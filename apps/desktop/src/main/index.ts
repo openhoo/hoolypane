@@ -356,6 +356,13 @@ async function acceptSourceAction(sourcePaneId: string, observed: unknown): Prom
   // Capture the draft session before any await: an outliving drain must not pollute a newer recording.
   const draftGeneration = flowDraft.sessionGeneration;
   const source = PaneObservedActionSchema.parse(observed);
+  const sourceRecord = paneRegistry.getPane(sourcePaneId);
+  // A reloaded/re-attached preload restarts at generation 0 and only learns the current epoch
+  // at did-finish-load; an observation stamped with anything but the source record's live
+  // generation comes from that gap (or an already-navigated document). Drop it before envelope
+  // construction: strict equality downstream would fail it on every target, mass-flagging panes
+  // out of sync and recording an envelope no pane can ever replay.
+  if (sourceRecord && sourceRecord.documentGeneration !== source.documentGeneration) return;
   const envelope = ActionEnvelopeSchema.parse({
     actionId: nextActionId++,
     documentGeneration: source.documentGeneration,
@@ -366,15 +373,27 @@ async function acceptSourceAction(sourcePaneId: string, observed: unknown): Prom
   flowDraft.append(envelope, draftGeneration);
   if (!paneRegistry.getState().syncEnabled) return;
   const targets = paneRegistry.getState().order.filter((paneId) => paneId !== sourcePaneId);
-  const outcomes = await coordinator.dispatch(envelope, targets, replayEnvelope);
+  // Stamp each target's pane instance when its replay actually starts (not at dispatch time:
+  // coordinator queues can hold a task across a close+re-add of the same pane id) so outcomes
+  // are attributed to the exact surface they ran against.
+  const startEpochs = new Map<string, number | undefined>();
+  const outcomes = await coordinator.dispatch(envelope, targets, async (targetPaneId, env) => {
+    startEpochs.set(targetPaneId, paneRegistry.getPane(targetPaneId)?.creationEpoch);
+    await replayEnvelope(targetPaneId, env);
+  });
   for (const outcome of outcomes) {
+    // An outcome describes one specific pane instance. If that instance is gone — closed and
+    // re-added under the same id with a new creationEpoch, or cancelled before its replay
+    // started so no stamp exists — the current pane never received this replay: neither blame
+    // it as out of sync, nor clear its state on the dead instance's success.
+    const record = paneRegistry.getPane(outcome.paneId);
+    if (!record || record.creationEpoch !== startEpochs.get(outcome.paneId)) continue;
     if (outcome.ok) {
       // Scope the clear to the succeeded action: a success for one action must not hide a
       // different unresolved failure on the same pane.
       paneRegistry.clearOutOfSync(outcome.paneId, envelope.actionId);
       flowDraft.unblock(envelope.actionId, outcome.paneId);
-    } else if (!paneRegistry.getPane(outcome.paneId)) continue;
-    else {
+    } else {
       const reason = outcome.reason ?? "unknown replay failure";
       paneRegistry.markOutOfSync(outcome.paneId, envelope.actionId, envelope.action.kind, reason);
       flowDraft.block(envelope.actionId, outcome.paneId, reason);

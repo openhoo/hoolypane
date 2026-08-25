@@ -111,14 +111,12 @@ async function writeWorkspace(file: string, state: WorkspaceState): Promise<void
   try {
     await handle.writeFile(JSON.stringify(state));
     await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  try {
     await fs.rename(temporary, file);
   } catch (error) {
     await fs.unlink(temporary).catch(() => {});
     throw error;
+  } finally {
+    await handle.close();
   }
   // Best-effort directory fsync so the rename itself survives a crash; unsupported platforms are ignored.
   try {

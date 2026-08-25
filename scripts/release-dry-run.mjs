@@ -86,6 +86,12 @@ try {
 } finally {
   await rm(smokeProject, { recursive: true, force: true });
 }
+// Artifact hygiene: drop stale installer outputs from earlier runs/versions so
+// smoke:desktop-package's soleArtifact check only sees what package:* just wrote
+// (electron-builder never deletes previous version/arch artifacts).
+for (const entry of await readdir("dist/desktop").catch(() => [])) {
+  if (/^Hoolypane-.+-unsigned\.(AppImage|exe|dmg)$/.test(entry)) await rm(resolve("dist/desktop", entry));
+}
 const packageScript = process.platform === "win32" ? "package:windows" : process.platform === "darwin" ? "package:mac" : "package:linux";
 await run(pnpm, [packageScript]);
 if (process.platform === "linux") {

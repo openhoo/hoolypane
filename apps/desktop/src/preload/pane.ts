@@ -88,7 +88,10 @@ function accessibleName(element: Element): string {
   if (aria) return normalizedText(aria);
   if (element instanceof HTMLInputElement && element.labels?.length) return normalizedText([...element.labels].map((label) => label.textContent).join(" "));
   if (element instanceof HTMLInputElement && element.type === "password") return "";
-  return normalizedText(element.textContent || element.getAttribute("title") || (element as HTMLInputElement).value);
+  // No .value fallback: a live value is not part of standard accName computation for text fields,
+  // and a value-keyed role locator can never resolve in a sibling whose input still shows its old
+  // value — recording would flag every mirror outOfSync although placeholder/label/css would resolve.
+  return normalizedText(element.textContent || element.getAttribute("title"));
 }
 
 function unique(locator: LocatorSpec, labelElements?: readonly Element[]): boolean {
@@ -254,7 +257,10 @@ document.addEventListener("click", (event) => {
     return;
   }
   const target = event.target instanceof Element ? event.target.closest("button,a,[role],input") : null;
-  if (!target || target instanceof HTMLInputElement && ["checkbox", "radio", "text", "email", "search", "url", "number", "password", "tel"].includes(target.type)) return;
+  // range/color/file and the date/time pickers are local-only for fills (see the input listener):
+  // the trusted click ending their gesture (slider drag commit, picker toggle) stays local too, or
+  // main mirrors a center-click that drags every sibling's slider while no fill ever reconciles it.
+  if (!target || target instanceof HTMLInputElement && ["checkbox", "radio", "text", "email", "search", "url", "number", "password", "tel", "range", "color", "file", "date", "datetime-local", "month", "time", "week"].includes(target.type)) return;
   record(() => ({ kind: "click", locator: locatorFor(target) }));
 }, true);
 document.addEventListener("keydown", (event) => {

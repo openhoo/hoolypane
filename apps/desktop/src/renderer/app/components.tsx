@@ -241,9 +241,18 @@ export function Toolbar({
 function PaneName({ pane, onRename }: { pane: PaneState; onRename(name: string): void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(pane.name);
+  const nameRef = useRef<HTMLSpanElement>(null);
+  // Armed when editing ends via keyboard (Enter/Escape): the input unmounts while still holding
+  // focus, so hand focus back to the restored name span instead of letting it drop to <body>.
+  const restoreFocusRef = useRef(false);
   useEffect(() => {
     if (!editing) setDraft(pane.name);
   }, [editing, pane.name]);
+  useEffect(() => {
+    if (editing || !restoreFocusRef.current) return;
+    restoreFocusRef.current = false;
+    nameRef.current?.focus();
+  }, [editing]);
   const commit = () => {
     const trimmed = draft.trim();
     if (trimmed && trimmed !== pane.name) onRename(trimmed);
@@ -252,6 +261,7 @@ function PaneName({ pane, onRename }: { pane: PaneState; onRename(name: string):
   if (!editing) {
     return (
       <span
+        ref={nameRef}
         title="Double-click or press Enter to rename"
         role="button"
         tabIndex={0}
@@ -284,8 +294,14 @@ function PaneName({ pane, onRename }: { pane: PaneState; onRename(name: string):
         // Same ownership rule as the name span: rename keys must never reach the header
         // delegate or the global keyboard-move listener.
         event.stopPropagation();
-        if ((event as KeyboardEvent).key === "Enter") (event.currentTarget as HTMLInputElement).blur();
-        if ((event as KeyboardEvent).key === "Escape") setEditing(false);
+        if ((event as KeyboardEvent).key === "Enter") {
+          restoreFocusRef.current = true;
+          (event.currentTarget as HTMLInputElement).blur();
+        }
+        if ((event as KeyboardEvent).key === "Escape") {
+          restoreFocusRef.current = true;
+          setEditing(false);
+        }
       }}
       onInput={(event) => setDraft((event.currentTarget as HTMLInputElement).value)}
       class="min-w-6 max-w-36 shrink rounded border border-edge bg-field px-0.5 text-xs font-semibold text-ink outline-none focus:border-accent"

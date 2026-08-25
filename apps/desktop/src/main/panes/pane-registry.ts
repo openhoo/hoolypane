@@ -6,7 +6,7 @@ import { isAllowedProtocol, normalizeUrl } from "./url.js";
 import { addPane, closePane, defaultWorkspace, removePane, rotatePane, uniquePaneId, updatePane, type PaneState, type WorkspaceState } from "./workspace.js";
 
 type PaneFailure = { paneId: string; message: string };
-type PaneRecord = { id: string; view: WebContentsView; lastBounds?: Bounds; debuggerAttached: boolean; networkEmulationReady: boolean; documentGeneration: number; overlayCssKeys: Partial<Record<OverlayKey, string>>; creationEpoch: number; settingsChain?: Promise<void> };
+type PaneRecord = { id: string; view: WebContentsView; lastBounds?: Bounds; debuggerAttached: boolean; networkEmulationReady: boolean; initialized: boolean; documentGeneration: number; overlayCssKeys: Partial<Record<OverlayKey, string>>; creationEpoch: number; settingsChain?: Promise<void> };
 
 // Monotonic per-record identity: lets replay bookkeeping tell a recreated pane apart from its predecessor with the same id.
 let nextCreationEpoch = 1;
@@ -87,7 +87,7 @@ export class PaneRegistry {
     const preexistingEntry = this.workspace.panes.find((pane) => pane.id === id);
     // Track whether this call introduced the workspace entry: rollback must stay symmetric and
     // never delete a pane that existed before the failed create (e.g. a restored saved pane).
-    const record: PaneRecord = { id, view, debuggerAttached: false, networkEmulationReady: false, documentGeneration: this.documentEpoch, overlayCssKeys: {}, creationEpoch: nextCreationEpoch++ };
+    const record: PaneRecord = { id, view, debuggerAttached: false, networkEmulationReady: false, initialized: false, documentGeneration: this.documentEpoch, overlayCssKeys: {}, creationEpoch: nextCreationEpoch++ };
     this.panes.set(id, record);
     this.window.contentView.addChildView(view);
     this.workspace = preexistingEntry ? this.workspace : addPane(this.workspace, valid, this.workspace.sharedUrl, id);
@@ -95,6 +95,9 @@ export class PaneRegistry {
     try {
       await view.webContents.loadURL("about:blank");
       if (!this.isLive(record)) return id;
+      // about:blank completed: the view is initialized and safe for CDP emulation. Until this
+      // flag flips, applyBoundsEntry defers configureViewport to this gated call (SIGSEGV guard).
+      record.initialized = true;
       await this.configureViewport(record);
       if (!this.isLive(record)) return id;
       await this.applyPaneSettings(record);
@@ -121,6 +124,8 @@ export class PaneRegistry {
       // pre-existing ones); the record-less card must stay closable: drop just the entry.
       const next = closePane(this.workspace, paneId);
       if (next !== this.workspace) { this.workspace = next; this.emitChange(); }
+      // Same cache hygiene as the record path: a reused id must not resurrect stale geometry.
+      this.pruneCachedBounds(paneId);
       return;
     }
     if (this.workspace.panes.length === 1) return;
@@ -302,6 +307,9 @@ export class PaneRegistry {
   }
 
   private async configureViewport(record: PaneRecord): Promise<void> {
+    // create() gates CDP emulation behind the about:blank load; bounds snapshots arriving
+    // during that window defer to create()'s own post-load configureViewport call.
+    if (!record.initialized) return;
     const pane = this.getPaneState(record.id);
     if (!pane) return;
     const contents = record.view.webContents;

@@ -263,6 +263,8 @@ export class RecordingSession {
         await this.pruneFailedArtifacts();
         return { kind: "diagnostics", diagnosticsPath };
       }
+      const manifestPath = join(this.options.outputDir, "manifest.json");
+      let manifestOnDisk = false;
       let manifestWritten = false;
       try {
         const elapsedUs = Math.max(0, monotonicUs() - (this.flowStartUs ?? monotonicUs()));
@@ -340,7 +342,6 @@ export class RecordingSession {
           artifacts,
           sha256: hashes,
         };
-        const manifestPath = join(this.options.outputDir, "manifest.json");
         const statePath = join(this.options.outputDir, "run-state.json");
         const stateKey = relative(this.options.outputDir, statePath);
         // The terminal run-state write follows the manifest write: if the manifest fails to land,
@@ -350,6 +351,7 @@ export class RecordingSession {
         const finalManifest = { ...manifest, artifacts: { ...manifest.artifacts, "run-state.json": stateKey }, sha256: { ...manifest.sha256, [stateKey]: createHash("sha256").update(`${JSON.stringify({ runId: this.runId, state: "complete", contract: CAPTURE_CONTRACT }, null, 2)}\n`).digest("hex") } };
         await this.pruneRawBins();
         await atomicJson(manifestPath, finalManifest);
+        manifestOnDisk = true;
         await this.transition("complete");
         manifestWritten = true;
         return { kind: "manifest", manifestPath, manifest: finalManifest };
@@ -361,6 +363,13 @@ export class RecordingSession {
           const message = error instanceof Error ? error.message : String(error);
           await atomicJson(join(this.options.outputDir, "diagnostics.json"), { contract: CAPTURE_CONTRACT, status: input.status, failures: [...input.failures, { message: `finalize pipeline failed: ${message}` }] });
         } catch { /* the original error takes precedence */ }
+        if (manifestOnDisk && !manifestWritten) {
+          // The manifest landed but the terminal transition did not complete: unlink it so a failed
+          // exit cannot leave a success manifest certifying artifacts pruned below.
+          try {
+            await fs.unlink(manifestPath);
+          } catch { /* the original error takes precedence */ }
+        }
         if (!manifestWritten) await this.pruneFailedArtifacts();
         throw error;
       }

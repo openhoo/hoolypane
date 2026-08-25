@@ -37,7 +37,7 @@ async function waitForMirroredName(value: string): Promise<void> {
 async function waitForNoOutOfSync(): Promise<void> {
   let clearSince = 0;
   await pollUntil(async () => {
-    if (await chrome.getByText(/Out of sync/).count() === 0) {
+    if (await chrome.getByText(/out of sync/i).count() === 0) {
       if (clearSince === 0) clearSince = Date.now();
       else if (Date.now() - clearSince >= 300) return true;
     } else clearSince = 0;
