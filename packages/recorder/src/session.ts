@@ -24,7 +24,7 @@ export interface RecorderFailure { readonly message: string; readonly viewportId
 export type RecordingTarget = CaptureTarget;
 type RecordingFinalizeResult = { readonly kind: "manifest"; readonly manifestPath: string; readonly manifest: RecordingManifest } | { readonly kind: "diagnostics"; readonly diagnosticsPath: string };
 
-export interface RecordingManifest {
+interface RecordingManifest {
   readonly contract: typeof CAPTURE_CONTRACT;
   readonly validatorVersion: number;
   readonly validationSuccess: true;
@@ -341,13 +341,16 @@ export class RecordingSession {
           sha256: hashes,
         };
         const manifestPath = join(this.options.outputDir, "manifest.json");
-        await this.transition("complete");
         const statePath = join(this.options.outputDir, "run-state.json");
         const stateKey = relative(this.options.outputDir, statePath);
-        const finalManifest = { ...manifest, artifacts: { ...manifest.artifacts, "run-state.json": stateKey }, sha256: { ...manifest.sha256, [stateKey]: await sha256(statePath) } };
-        // Everything fallible precedes the manifest write; once it lands the manifest is durable and every artifact it certifies must survive (see pruneFailedArtifacts contract).
+        // The terminal run-state write follows the manifest write: if the manifest fails to land,
+        // the catch guard must still be able to mark the run failed instead of leaving a permanent
+        // false "complete" record behind (see pruneFailedArtifacts contract). The manifest certifies
+        // run-state.json, so hash the exact bytes transition("complete") persists below.
+        const finalManifest = { ...manifest, artifacts: { ...manifest.artifacts, "run-state.json": stateKey }, sha256: { ...manifest.sha256, [stateKey]: createHash("sha256").update(`${JSON.stringify({ runId: this.runId, state: "complete", contract: CAPTURE_CONTRACT }, null, 2)}\n`).digest("hex") } };
         await this.pruneRawBins();
         await atomicJson(manifestPath, finalManifest);
+        await this.transition("complete");
         manifestWritten = true;
         return { kind: "manifest", manifestPath, manifest: finalManifest };
       } catch (error) {

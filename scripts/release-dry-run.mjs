@@ -59,6 +59,11 @@ if (process.platform === "linux") {
   await run(pnpm, ["benchmark:desktop"]);
 }
 await run(pnpm, ["benchmark:recording"]);
+// Artifact hygiene: drop runner tarballs left over from earlier runs so the consumer
+// smoke below can only install the archive pack:runner just wrote.
+for (const entry of await readdir("dist").catch(() => [])) {
+  if (/^hoolypane-runner-.+\.tgz$/.test(entry)) await rm(resolve("dist", entry));
+}
 await run(pnpm, ["pack:runner"]);
 
 // Consumer-side smoke of the packed runner tarball: mirrors the release workflow's

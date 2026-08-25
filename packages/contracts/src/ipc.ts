@@ -32,10 +32,7 @@ export const BoundsSnapshotSchema = z.strictObject({
 export const ChromeCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("create"), viewport: ViewportSpecSchema }),
   z.strictObject({ kind: z.literal("close"), paneId }),
-  z.strictObject({ kind: z.literal("duplicate"), paneId }),
   z.strictObject({ kind: z.literal("rename"), paneId, name: z.string().min(1) }),
-  z.strictObject({ kind: z.literal("reorder"), paneId, index: z.number().int().nonnegative() }),
-  z.strictObject({ kind: z.literal("resize"), paneId, width: z.number().int().positive(), height: z.number().int().positive() }),
   z.strictObject({ kind: z.literal("rotate"), paneId }),
   z.strictObject({ kind: z.literal("focus"), paneId: paneId.nullable() }),
   z.strictObject({ kind: z.literal("navigate"), url: z.string().min(1) }),
@@ -83,5 +80,4 @@ export const ReplayResultSchema = z.strictObject({
 export type BoundsSnapshot = z.infer<typeof BoundsSnapshotSchema>;
 export type ChromeCommand = z.infer<typeof ChromeCommandSchema>;
 export type ReplayRequest = z.infer<typeof ReplayRequestSchema>;
-export type RecordFailure = z.infer<typeof RecordFailureSchema>;
 export type ReplayResult = z.infer<typeof ReplayResultSchema>;

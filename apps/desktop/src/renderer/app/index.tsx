@@ -397,6 +397,15 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
   useEffect(() => {
     if (!kbActive) return;
     const onKey = (event: KeyboardEvent): void => {
+      // Arrows typed into an editable (address bar, rename input) must never nudge the pane or
+      // lose caret handling: bail before any keyboard-move handling or preventDefault runs.
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)
+      ) {
+        return;
+      }
       const current = keyboardMoveRef.current;
       if (!current) return;
       const tile = tilesRef.current.get(current.id);

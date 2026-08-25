@@ -11,6 +11,9 @@
 import { BoundsSnapshotSchema, ChromeStateSchema } from "@hoolypane/contracts";
 import type { BoundsSnapshot, ChromeCommand, ChromeState, PaneState } from "@hoolypane/contracts";
 import { initialChromeState } from "./state.js";
+// Imported verbatim from the main process so the mock can never drift from the real
+// navigation-normalization pipeline (slashless special schemes, userinfo stripping).
+import { normalizeUrl } from "../../main/panes/url.js";
 
 let mockState: ChromeState = initialChromeState();
 const listeners = new Set<(value: unknown) => void>();
@@ -42,24 +45,6 @@ function settleLoading(paneIds: readonly string[]): void {
     pendingSettleIds.clear();
     patch({ panes: mockState.panes.map((pane) => (settled.has(pane.id) ? { ...pane, loading: false } : pane)) });
   }, 600);
-}
-
-const ALLOWED_PROTOCOLS: Record<string, true> = { "http:": true, "https:": true };
-
-// Mirrors src/main/panes/url.ts: only http/https navigations pass; anything else THROWS so the
-// failed command surfaces as lastError (ErrorToast) exactly like the real main process instead of
-// silently dropping the whole state transition inside patch().
-function normalizeUrl(raw: string): string {
-  const value = raw.trim();
-  if (!value) throw new Error("URL must not be empty");
-  let parsed: URL;
-  try {
-    parsed = new URL(/^[a-z][a-z\d+\-.]*:/i.test(value) ? value : `https://${value}`);
-  } catch {
-    throw new Error("Invalid URL");
-  }
-  if (!ALLOWED_PROTOCOLS[parsed.protocol]) throw new Error("Only http and https URLs are allowed");
-  return parsed.toString();
 }
 
 function uniqueId(base: string): string {
@@ -123,37 +108,12 @@ function apply(command: ChromeCommand): void {
       });
       break;
     }
-    case "duplicate": {
-      const source = mockState.panes.find((pane) => pane.id === command.paneId);
-      if (!source) break;
-      const id = uniqueId(`${source.id}-copy`);
-      const copy: PaneState = { ...source, id, name: `${source.name} copy`, outOfSync: null };
-      const order = [...mockState.order];
-      order.splice(order.indexOf(source.id) + 1, 0, id);
-      patch({ panes: [...mockState.panes, copy], order });
-      break;
-    }
     case "rename":
       patchPane(command.paneId, { name: command.name });
       break;
-    case "reorder": {
-      const from = mockState.order.indexOf(command.paneId);
-      if (from < 0) break;
-      const order = [...mockState.order];
-      order.splice(from, 1);
-      order.splice(Math.min(command.index, order.length), 0, command.paneId);
-      patch({ order });
-      break;
-    }
     case "move-pane":
       patch({ positions: { ...mockState.positions, [command.paneId]: { x: command.x, y: command.y } } });
       break;
-    case "resize": {
-      const pane = mockState.panes.find((candidate) => candidate.id === command.paneId);
-      if (!pane) break;
-      patchPane(command.paneId, { viewport: { ...pane.viewport, width: command.width, height: command.height } });
-      break;
-    }
     case "rotate": {
       const pane = mockState.panes.find((candidate) => candidate.id === command.paneId);
       if (!pane) break;

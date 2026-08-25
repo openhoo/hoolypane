@@ -6,7 +6,7 @@ import { ViewportSpecSchema, type ViewportSpec } from "./viewport.js";
 export const LayoutModeSchema = z.enum(["free", "grid", "horizontal", "focus"]);
 export type LayoutMode = z.infer<typeof LayoutModeSchema>;
 
-export const PanePositionSchema = z.strictObject({
+const PanePositionSchema = z.strictObject({
   x: z.number().int().min(0),
   y: z.number().int().min(0),
 });
@@ -18,14 +18,13 @@ export type ThrottlingMode = z.infer<typeof ThrottlingModeSchema>;
 export const OverlayKeySchema = z.enum(["outlines", "disableImages", "showRoles"]);
 export type OverlayKey = z.infer<typeof OverlayKeySchema>;
 
-export const EmulationOverlaysSchema = z.strictObject({
+const EmulationOverlaysSchema = z.strictObject({
   outlines: z.boolean().default(false),
   disableImages: z.boolean().default(false),
   showRoles: z.boolean().default(false),
 });
-export type EmulationOverlays = z.infer<typeof EmulationOverlaysSchema>;
 /** Global emulation and debug-overlay settings applied to every pane via CDP; every key defaults so legacy workspaces load unchanged. */
-export const EmulationSettingsSchema = z.strictObject({
+const EmulationSettingsSchema = z.strictObject({
   colorScheme: ColorSchemeModeSchema.default("auto"),
   reducedMotion: z.boolean().default(false),
   throttling: ThrottlingModeSchema.default("none"),

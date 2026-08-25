@@ -3,7 +3,7 @@ import { BrowserWindow, session, type Session, type WebContents, WebContentsView
 import { IPC_CHANNELS, PaneGenerationSchema, ViewportSpecSchema, type Action, type BoundsSnapshot, type ColorSchemeMode, type OverlayKey, type ThrottlingMode, type ViewportSpec } from "@hoolypane/contracts";
 import { displayScale, validateBoundsSnapshot, type Bounds } from "./layout.js";
 import { isAllowedProtocol, normalizeUrl } from "./url.js";
-import { addPane, closePane, defaultWorkspace, duplicatePane, removePane, reorderPane, rotatePane, uniquePaneId, updatePane, type PaneState, type WorkspaceState } from "./workspace.js";
+import { addPane, closePane, defaultWorkspace, removePane, rotatePane, uniquePaneId, updatePane, type PaneState, type WorkspaceState } from "./workspace.js";
 
 type PaneFailure = { paneId: string; message: string };
 type PaneRecord = { id: string; view: WebContentsView; lastBounds?: Bounds; debuggerAttached: boolean; networkEmulationReady: boolean; documentGeneration: number; overlayCssKeys: Partial<Record<OverlayKey, string>>; creationEpoch: number; settingsChain?: Promise<void> };
@@ -131,38 +131,6 @@ export class PaneRegistry {
     this.emitChange();
   }
 
-  async duplicate(paneId: string): Promise<string> {
-    const source = this.getPaneState(paneId);
-    if (!source) throw new Error(`unknown pane: ${paneId}`);
-    const next = duplicatePane(this.workspace, paneId);
-    const created = next.order.find((id) => !this.workspace.order.includes(id));
-    if (!created) throw new Error("unable to duplicate pane");
-    // The duplicated workspace state commits only AFTER the risky create succeeds; committing
-    // earlier would leave a phantom entry no record backs whenever create fails.
-    await this.create(next.panes.find((pane) => pane.id === created)!.viewport, created);
-    // Merge instead of overwriting: event-driven mutators (loading flags, url patches, failure
-    // and out-of-sync marks) legally mutate the live workspace while create() awaits its loads,
-    // and the `next` snapshot predates every one of them. Overlay only the duplication-specific
-    // deltas onto the live state: the clone's identity fields (name/url from the source pane)
-    // with its live runtime flags kept, plus the clone's order position after its source.
-    const duplicated = next.panes.find((pane) => pane.id === created);
-    const panes = this.workspace.panes.map((pane) => {
-      if (pane.id !== created || !duplicated) return pane;
-      return { ...duplicated, loading: pane.loading, canGoBack: pane.canGoBack, canGoForward: pane.canGoForward, failure: pane.failure, outOfSync: pane.outOfSync };
-    });
-    const order = this.workspace.order.filter((id) => id !== created);
-    const anchor = order.indexOf(paneId);
-    order.splice(anchor >= 0 ? anchor + 1 : order.length, 0, created);
-    this.workspace = { ...this.workspace, panes, order };
-    this.emitChange();
-    // create() loaded sharedUrl into the clone while the merge above stamps the source pane's
-    // current url as the clone's identity; load that url so rendered content matches label/state.
-    const dupUrl = this.workspace.panes.find((pane) => pane.id === created)?.url;
-    const dupRecord = this.panes.get(created);
-    if (dupRecord && dupUrl && dupUrl !== this.workspace.sharedUrl) await dupRecord.view.webContents.loadURL(this.restoreTarget(dupUrl)).catch(() => undefined);
-    return created;
-  }
-
   /** Drops the closed pane's entry from the cached snapshot so a reused pane id cannot resurrect stale geometry. */
   private pruneCachedBounds(paneId: string): void {
     const snapshot = this.lastBoundsSnapshot;
@@ -173,13 +141,6 @@ export class PaneRegistry {
   rename(paneId: string, name: string): void {
     if (!name.trim()) throw new Error("pane name must not be empty");
     this.workspace = updatePane(this.workspace, paneId, (pane) => ({ ...pane, name: name.trim() }));
-    this.emitChange();
-  }
-  reorder(paneId: string, index: number): void { this.workspace = reorderPane(this.workspace, paneId, index); this.emitChange(); }
-  resize(paneId: string, width: number, height: number): void {
-    this.workspace = updatePane(this.workspace, paneId, (pane) => ({ ...pane, viewport: ViewportSpecSchema.parse({ ...pane.viewport, width, height }) }));
-    const record = this.panes.get(paneId);
-    if (record) void this.configureViewport(record);
     this.emitChange();
   }
   rotate(paneId: string): void { this.workspace = rotatePane(this.workspace, paneId); const record = this.panes.get(paneId); if (record) void this.configureViewport(record); this.emitChange(); }
@@ -323,6 +284,7 @@ export class PaneRegistry {
       // insertCSS keys die with the finished document: re-inject active overlays for the new one.
       void this.applyPaneSettings(record);
     });
+    contents.on("did-start-loading", () => this.setPane(record.id, { loading: true }));
     contents.on("did-stop-loading", () => this.setPane(record.id, { loading: false, canGoBack: contents.canGoBack(), canGoForward: contents.canGoForward() }));
     contents.on("did-navigate", (_event, url) => {
       if (!isAllowedProtocol(url)) return; // ignore chrome-error://chromewebdata/, about: and other non-http(s) commits

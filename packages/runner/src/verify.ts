@@ -15,7 +15,7 @@ export async function verifyDirectory(path: string): Promise<number> {
   const fps = value.fps;
   const durationFrames = value.durationFrames;
   if ((fps !== 30 && fps !== 60) || typeof durationFrames !== "number" || !Number.isInteger(durationFrames) || durationFrames < 1) throw new Error(`${manifestPath} has invalid fps or durationFrames`);
-  // No runtime schema for RecordingManifest exists yet (@hoolypane/recorder exports the type only); these checks mirror the fps 30|60 and durationFrames >= 1 contract by hand.
+  // No runtime schema for RecordingManifest exists yet (the recorder declares the type internally); these checks mirror the fps 30|60 and durationFrames >= 1 contract by hand.
   // Geometry expectations are optional: directories recorded before the geometry contract lack the fields and still verify on the timeline contract alone.
   const manifestRecord = value as Record<string, unknown>; // JSON boundary; object shape checked above.
   // A manifest whose own status records a non-success run must not certify: timeline and geometry
@@ -56,10 +56,11 @@ export async function verifyDirectory(path: string): Promise<number> {
       && typeof (geometry as Record<string, unknown>).outputWidth === "number"
       && typeof (geometry as Record<string, unknown>).outputHeight === "number";
     if (!valid) throw new Error(`${manifestPath} has a malformed geometry field: { outputWidth: number, outputHeight: number } is required`);
-    if (tracks.length > 0) {
-      const record = geometry as Record<string, unknown>;
-      expectedGeometry = { tracks, composite: { width: record.outputWidth as number, height: record.outputHeight as number } };
-    }
+    // Geometry without any viewport entries must fail loudly like malformed geometry: with no
+    // tracks, verification would silently degrade to timeline-only while claiming success.
+    if (tracks.length === 0) throw new Error(`${manifestPath} has geometry without viewports: at least one viewport entry is required`);
+    const record = geometry as Record<string, unknown>;
+    expectedGeometry = { tracks, composite: { width: record.outputWidth as number, height: record.outputHeight as number } };
   }
   const result = await verifyArtifacts(outputDir, fps, durationFrames, expectedGeometry);
   if (!result.success) throw new Error(result.error ?? "artifact verification failed");

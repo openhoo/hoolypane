@@ -9,7 +9,7 @@ const PlaceholderLocatorSchema = z.strictObject({ kind: z.literal("placeholder")
 const TextLocatorSchema = z.strictObject({ kind: z.literal("text"), value: nonEmpty });
 const CssLocatorSchema = z.strictObject({ kind: z.literal("css"), value: nonEmpty });
 
-export const LocatorSpecSchema = z.discriminatedUnion("kind", [
+const LocatorSpecSchema = z.discriminatedUnion("kind", [
   TestIdLocatorSchema,
   RoleLocatorSchema,
   LabelLocatorSchema,

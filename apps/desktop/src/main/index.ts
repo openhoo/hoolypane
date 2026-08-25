@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, type IpcMainEvent } from "electron";
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { dirname, extname, isAbsolute, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -53,7 +54,8 @@ function sourcePane(event: IpcMainEvent): string | undefined {
 }
 
 function publishState(): void {
-  if (chromeWindow && registry) chromeWindow.webContents.send(IPC_CHANNELS.state, { ...registry.getState(), recording: flowDraft.isActive, lastError });
+  if (!chromeWindow || !registry || chromeWindow.isDestroyed() || chromeWindow.webContents.isDestroyed()) return;
+  chromeWindow.webContents.send(IPC_CHANNELS.state, { ...registry.getState(), recording: flowDraft.isActive, lastError });
 }
 
 function report(paneId: string, message: string): void {
@@ -85,6 +87,18 @@ function commitFlowDraft(): void {
 
 /** Record-stop outcome: "blocked" reports unresolved replay failures after the draft was discarded; "handled" covers persisted, empty, and abandoned saves. */
 type StopFlowOutcome = { kind: "blocked"; reasons: string[] } | { kind: "handled" };
+
+/** Writes via a same-directory temp file + rename so a mid-write failure never leaves a torn flow export. */
+async function writeFileAtomic(path: string, contents: string): Promise<void> {
+  const temporaryPath = `${path}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(temporaryPath, contents, "utf8");
+    await fs.rename(temporaryPath, path);
+  } catch (error) {
+    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
 
 async function stopAndSaveFlow(): Promise<StopFlowOutcome> {
   const paneRegistry = registry;
@@ -122,7 +136,7 @@ async function stopAndSaveFlow(): Promise<StopFlowOutcome> {
       return { kind: "handled" };
     }
     if (directPath) {
-      await fs.writeFile(directPath, stopped.source, "utf8");
+      await writeFileAtomic(directPath, stopped.source);
       commitFlowDraft();
       return { kind: "handled" };
     }
@@ -135,10 +149,7 @@ async function stopAndSaveFlow(): Promise<StopFlowOutcome> {
       commitFlowDraft();
       return { kind: "handled" };
     }
-    await fs.writeFile(selection.filePath, stopped.source, { encoding: "utf8", flag: "wx" }).catch(async (error: unknown) => {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      await fs.writeFile(selection.filePath!, stopped.source, "utf8");
-    });
+    await writeFileAtomic(selection.filePath, stopped.source);
     commitFlowDraft();
     return { kind: "handled" };
   } finally {
@@ -160,10 +171,7 @@ async function handleCommand(command: ChromeCommand): Promise<void> {
       flowDraft.discardPane(command.paneId);
       break;
     }
-    case "duplicate": await paneRegistry.duplicate(command.paneId); break;
     case "rename": paneRegistry.rename(command.paneId, command.name); break;
-    case "reorder": paneRegistry.reorder(command.paneId, command.index); break;
-    case "resize": paneRegistry.resize(command.paneId, command.width, command.height); break;
     case "rotate": paneRegistry.rotate(command.paneId); break;
     case "focus": paneRegistry.focus(command.paneId); break;
     case "navigate": {
@@ -446,21 +454,25 @@ async function createChrome(): Promise<void> {
   quittingRegistry = undefined;
   registry.attachWindow(chromeWindow);
   chromeWindow.once("ready-to-show", () => chromeWindow?.show());
+  // Pin the singletons for the awaited restore below: the 'closed' handler may fire mid-await
+  // and clear the module-levels, so every later touch goes through these locals.
+  const shell = chromeWindow;
+  const paneRegistry = registry;
   try {
-    await chromeWindow.loadFile(rendererPath);
+    await shell.loadFile(rendererPath);
     for (const pane of workspace.panes) {
-      if (chromeWindow.isDestroyed()) return;
-      if (!registry.panes.has(pane.id)) await registry.create(pane.viewport, pane.id);
+      if (shell.isDestroyed() || !paneRegistry) return;
+      if (!paneRegistry.panes.has(pane.id)) await paneRegistry.create(pane.viewport, pane.id);
     }
   } catch (error) {
     // A failed load or pane restore leaves an invisible window behind: show:false plus a
     // ready-to-show that never fired means there is no error surface inside it, and keeping it
     // alive wedges every relaunch behind the launchChrome guard. Destroying routes cleanup
     // through the 'closed' handler above, which resets the singletons for a clean retry.
-    chromeWindow.destroy();
+    shell.destroy();
     throw error;
   }
-  if (chromeWindow.isDestroyed()) return;
+  if (shell.isDestroyed()) return;
   publishState();
 }
 
@@ -504,16 +516,25 @@ app.on("before-quit", (event) => {
   if (quitFlushStarted) return;
   quitFlushStarted = true;
   void (async () => {
-    // Bound the drain: a stuck command must not hold the app hostage at shutdown.
-    const outcome = await Promise.race([
-      commandQueue.then(() => "drained" as const, () => "drained" as const),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), QUIT_FLUSH_DEADLINE_MS)),
-    ]);
+    // Bound the drain: a stuck command must not hold the app hostage at shutdown. Commands
+    // arriving mid-drain reassign commandQueue, so keep awaiting fresh tails until the chain
+    // stops changing (or the shared deadline expires) before the final state write below.
+    const deadline = Date.now() + QUIT_FLUSH_DEADLINE_MS;
+    let outcome: "drained" | "timeout" = "drained";
+    let tail = commandQueue;
+    while (true) {
+      outcome = await Promise.race([
+        tail.then(() => "drained" as const, () => "drained" as const),
+        new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), Math.max(deadline - Date.now(), 0))),
+      ]);
+      if (outcome === "timeout" || commandQueue === tail) break;
+      tail = commandQueue;
+    }
     if (outcome === "timeout") report("", `command drain exceeded the ${QUIT_FLUSH_DEADLINE_MS}ms quit deadline; proceeding with shutdown`);
     const activeRegistry = registry ?? quittingRegistry;
     try {
-      // Enqueue as a tail with a provider: state is read when the write executes, so mutations
-      // landing during the drain above are still included.
+      // Provider form: state is read when the write executes, covering any mutation that
+      // landed between the last drained snapshot and this write.
       if (workspacePersistable && activeRegistry && workspacePath) await saveWorkspace(workspacePath, () => activeRegistry.getState());
     } catch (error) {
       // Never block quit: a native dialog here wedges headless/Xvfb sessions forever, so

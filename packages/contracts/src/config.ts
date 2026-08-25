@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { HttpUrlSchema } from "./action.js";
 import { ViewportListSchema } from "./viewport.js";
 
 const DEFAULT_RECORDING = {
@@ -23,7 +24,7 @@ const RecordingInputSchema = z.strictObject({
 
 export const HoolypaneConfigSchema = z
   .strictObject({
-    baseURL: z.string().url().optional(),
+    baseURL: HttpUrlSchema.optional(),
     viewports: ViewportListSchema,
     storageState: z.string().min(1).optional(),
     timeoutMs: z.number().int().positive().optional(),

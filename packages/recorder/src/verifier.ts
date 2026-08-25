@@ -5,7 +5,7 @@ import { join, relative } from "node:path";
 import type { TrackGeometry } from "./capture-contract.js";
 import { resolveEncoders } from "./encoder.js";
 
-export interface VerificationResult {
+interface VerificationResult {
   readonly success: boolean;
   readonly geometry: readonly { file: string; width: number; height: number; timeBase: string }[];
   readonly artifacts: Record<string, string>;
@@ -14,7 +14,7 @@ export interface VerificationResult {
   readonly error?: string;
 }
 
-export interface ExpectedArtifacts {
+interface ExpectedArtifacts {
   readonly tracks: readonly TrackGeometry[];
   readonly composite: { readonly width: number; readonly height: number };
 }

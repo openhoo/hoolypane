@@ -32,29 +32,9 @@ export function closePane(workspace: WorkspaceState, paneId: string): WorkspaceS
   return removePane(workspace, paneId);
 }
 
-export function duplicatePane(workspace: WorkspaceState, paneId: string): WorkspaceState {
-  const source = workspace.panes.find((pane) => pane.id === paneId);
-  if (!source) return workspace;
-  const id = uniquePaneId(new Set(workspace.order), source.id);
-  const pane = { ...source, id, name: `${source.name} copy`, viewport: { ...source.viewport, id } };
-  const sourceIndex = workspace.order.indexOf(paneId);
-  const order = [...workspace.order];
-  order.splice(sourceIndex + 1, 0, id);
-  return { ...workspace, panes: [...workspace.panes, pane], order };
-}
-
 export function updatePane(workspace: WorkspaceState, paneId: string, update: (pane: PaneState) => PaneState): WorkspaceState {
   if (!workspace.order.includes(paneId)) return workspace;
   return { ...workspace, panes: workspace.panes.map((pane) => pane.id === paneId ? update(pane) : pane) };
-}
-
-export function reorderPane(workspace: WorkspaceState, paneId: string, index: number): WorkspaceState {
-  const current = workspace.order.indexOf(paneId);
-  if (current < 0) return workspace;
-  const order = [...workspace.order];
-  order.splice(current, 1);
-  order.splice(Math.min(index, order.length), 0, paneId);
-  return { ...workspace, order };
 }
 
 export function rotatePane(workspace: WorkspaceState, paneId: string): WorkspaceState {
