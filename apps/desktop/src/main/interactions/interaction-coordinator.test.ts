@@ -15,7 +15,7 @@ describe("interaction coordinator", () => {
     const coordinator = new InteractionCoordinator();
     const started: string[] = [];
     const gate = Promise.withResolvers<void>();
-    const pending = coordinator.dispatch(envelope, ["one", "two", "three"], async (paneId) => {
+    const pending = coordinator.dispatch(["one", "two", "three"], async (paneId) => {
       started.push(paneId);
       await gate.promise;
     });
@@ -29,8 +29,8 @@ describe("interaction coordinator", () => {
   it("keeps FIFO ordering within each target", async () => {
     const coordinator = new InteractionCoordinator();
     const events: string[] = [];
-    const first = coordinator.dispatch(envelope, ["one"], async () => { events.push("first-start"); await Promise.resolve(); events.push("first-end"); });
-    const second = coordinator.dispatch({ ...envelope, actionId: 2 }, ["one"], async () => { events.push("second"); });
+    const first = coordinator.dispatch(["one"], async () => { events.push("first-start"); await Promise.resolve(); events.push("first-end"); });
+    const second = coordinator.dispatch(["one"], async () => { events.push("second"); });
     await Promise.all([first, second]);
     expect(events).toEqual(["first-start", "first-end", "second"]);
   });
@@ -39,11 +39,11 @@ describe("interaction coordinator", () => {
     const coordinator = new InteractionCoordinator();
     const gate = Promise.withResolvers<void>();
     let started = false;
-    const first = coordinator.dispatch(envelope, ["one"], async () => { started = true; await gate.promise; });
+    const first = coordinator.dispatch(["one"], async () => { started = true; await gate.promise; });
     await Promise.resolve();
     await Promise.resolve();
     expect(started).toBe(true);
-    const second = coordinator.dispatch({ ...envelope, actionId: 2 }, ["one"], async () => undefined);
+    const second = coordinator.dispatch(["one"], async () => undefined);
     coordinator.cancelPane("one");
     gate.resolve();
     expect(await second).toEqual([{ paneId: "one", ok: false, reason: expect.stringMatching(/replay cancelled/) }]);
@@ -52,7 +52,7 @@ describe("interaction coordinator", () => {
 
   it("maps a rejecting replay to a failed outcome, including non-Error throws", async () => {
     const coordinator = new InteractionCoordinator();
-    const outcomes = await coordinator.dispatch(envelope, ["one"], async () => {
+    const outcomes = await coordinator.dispatch(["one"], async () => {
       throw "locator exploded";
     });
     expect(outcomes).toEqual([{ paneId: "one", ok: false, reason: "locator exploded" }]);
@@ -61,13 +61,34 @@ describe("interaction coordinator", () => {
   it("still executes work dispatched after a cancelled predecessor on the same pane", async () => {
     const coordinator = new InteractionCoordinator();
     const gate = Promise.withResolvers<void>();
-    const first = coordinator.dispatch(envelope, ["one"], () => gate.promise);
+    const first = coordinator.dispatch(["one"], () => gate.promise);
     coordinator.cancelPane("one");
     gate.resolve();
     await expect(first).resolves.toEqual([{ paneId: "one", ok: false, reason: expect.stringMatching(/replay cancelled/) }]);
     let ran = false;
-    const next = await coordinator.dispatch({ ...envelope, actionId: 3 }, ["one"], async () => { ran = true; });
+    const next = await coordinator.dispatch(["one"], async () => { ran = true; });
     expect(next).toEqual([{ paneId: "one", ok: true }]);
+    expect(ran).toBe(true);
+  });
+
+  it("cancels queued work on every pane via cancelAll while in-flight work settles", async () => {
+    const coordinator = new InteractionCoordinator();
+    const gate = Promise.withResolvers<void>();
+    let started = false;
+    const first = coordinator.dispatch(["one"], async () => { started = true; await gate.promise; });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(started).toBe(true);
+    const second = coordinator.dispatch(["one"], async () => undefined);
+    const third = coordinator.dispatch(["two"], async () => undefined);
+    coordinator.cancelAll();
+    gate.resolve();
+    expect(await first).toEqual([{ paneId: "one", ok: true }]);
+    expect(await second).toEqual([{ paneId: "one", ok: false, reason: expect.stringMatching(/replay cancelled/) }]);
+    expect(await third).toEqual([{ paneId: "two", ok: false, reason: expect.stringMatching(/replay cancelled/) }]);
+    let ran = false;
+    const next = await coordinator.dispatch(["one", "two"], async () => { ran = true; });
+    expect(next).toEqual([{ paneId: "one", ok: true }, { paneId: "two", ok: true }]);
     expect(ran).toBe(true);
   });
 
@@ -75,7 +96,7 @@ describe("interaction coordinator", () => {
     const coordinator = new InteractionCoordinator();
     const draft = new FlowDraft();
     draft.start("https://example.test", "desktop", 1);
-    const pending = coordinator.dispatch(envelope, ["phone", "desktop"], async (paneId) => {
+    const pending = coordinator.dispatch(["phone", "desktop"], async (paneId) => {
       if (paneId === "phone") throw new Error("locator resolved 0 elements");
     });
     const outcomes = await pending;

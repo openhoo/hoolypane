@@ -9,6 +9,7 @@ import {
   asError,
   assertStateTransition,
   CAPTURE_CONTRACT,
+  compositeGeometry,
   durationFrameCount,
   geometryForViewport,
   POST_ROLL_US,
@@ -291,6 +292,7 @@ export class RecordingSession {
               ...input.failures,
               ...this.spoolFailureNotes,
               ...this.contexts.flatMap((context) => [...context.spool.drainFailureNotes()]),
+              ...this.captureEndedEarlyFailures(),
               ...this.captureCloseFailures,
               { message: failureDiagnostics.pipelineErrorMessage },
             ],
@@ -366,7 +368,7 @@ export class RecordingSession {
     await this.transition("validating");
     const verification = await verifyArtifacts(this.options.outputDir, this.options.recording.fps, durationFrames, {
       tracks: aligned.map(({ context, geometry }) => ({ id: context.target.id, encodedWidth: geometry.encodedWidth, encodedHeight: geometry.encodedHeight })),
-      composite: { width: encoding.geometry.outputWidth, height: encoding.geometry.outputHeight },
+      composite: (({ outputWidth, outputHeight }) => ({ width: outputWidth, height: outputHeight }))(compositeGeometry(aligned.map(({ geometry }) => geometry), this.options.recording.compositeMaxSize)),
     });
     if (!verification.success) {
       await this.transition("failed");

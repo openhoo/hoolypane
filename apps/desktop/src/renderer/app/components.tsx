@@ -2,6 +2,7 @@ import { memo } from "preact/compat";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import type { ChromeCommand, ChromeState, EmulationSettings as EmulationState, LayoutMode, PaneState } from "@hoolypane/contracts";
+import { formatViewportDimensions } from "@hoolypane/contracts";
 import { customViewport } from "./state.js";
 import { PANE_HEADER_HEIGHT } from "./layout.js";
 import {
@@ -270,12 +271,13 @@ function PaneName({ pane, onRename }: { pane: PaneState; onRename(name: string):
         aria-label={`Rename ${pane.name}`}
         onDblClick={() => setEditing(true)}
         onKeyDown={(event) => {
-          // The name control owns its keys: without this, Enter/F2 bubble into the draggable
-          // header and arm sticky keyboard-move state (the pointer path excludes us at the
-          // header via closest("button, input, select") — keyboard must behave the same).
+          // The name control owns its keys: neither the header delegate (closest("button,
+          // input, select") never matches this span) nor any other guard stops Enter/F2
+          // here, so stopPropagation is the only thing keeping rename keys from arming
+          // keyboard-move.
           event.stopPropagation();
           const key = event.key;
-          if (key === "Enter" || key === "F2") {
+          if (key === "Enter" || key === "F2" || key === " ") {
             event.preventDefault();
             setEditing(true);
           }
@@ -371,7 +373,7 @@ export const PaneCard = memo(function PaneCard({
           </span>
         )}
         <span aria-hidden="true" class="ml-auto hidden shrink-0 items-center gap-1.5 font-mono text-[10px] text-mute @[240px]:flex">
-          {pane.viewport.width}×{pane.viewport.height} @{pane.viewport.deviceScaleFactor}x
+          {formatViewportDimensions(pane.viewport)}
           {zoom !== undefined && zoom < 0.995 && (
             <span class="rounded bg-ink/10 px-1 leading-4">{Math.round(zoom * 100)}%</span>
           )}

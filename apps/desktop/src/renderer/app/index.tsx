@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type StateUpdater } from "preact/hooks";
 import { render } from "preact";
 import { ChromeStateSchema, type ChromeState, type PanePosition } from "@hoolypane/contracts";
 import { ErrorToast, PaneCard, Toolbar, type SendCommand } from "./components.js";
@@ -72,6 +72,109 @@ function snappedDragPosition(
   return { x, y, guideX: snappedX?.guide ?? null, guideY: snappedY?.guide ?? null };
 }
 
+// Arrows typed into an editable (address bar, rename input) must never nudge the pane or
+// lose caret handling: callers bail before any keyboard-move handling or preventDefault runs.
+function isEditableTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)
+  );
+}
+
+/** Per-arrow nudge step at the shared snap increment, or null for any non-nudge key. */
+function arrowNudgeDelta(key: string): { dx: number; dy: number } | null {
+  switch (key) {
+    case "ArrowLeft":
+      return { dx: -SNAP_PX, dy: 0 };
+    case "ArrowRight":
+      return { dx: SNAP_PX, dy: 0 };
+    case "ArrowUp":
+      return { dx: 0, dy: -SNAP_PX };
+    case "ArrowDown":
+      return { dx: 0, dy: SNAP_PX };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Imperative shell of a free-layout pointer drag, extracted verbatim from usePaneGestures'
+ * startPaneDrag: installs the window-level move/up/cancel trio, tracks the gesture, commits
+ * exactly one move-pane on release, and tears down on every exit path. Every former closure
+ * capture arrives explicitly via deps.
+ */
+function beginFreeDragGesture(
+  paneId: string,
+  event: PointerEvent,
+  deps: {
+    tilesRef: RefBox<Map<string, PaneTile>>;
+    layoutRef: RefBox<ChromeState["layout"]>;
+    workspaceRef: RefBox<HTMLElement | null>;
+    requestEmit: RefBox<() => void>;
+    endDragRef: RefBox<(() => void) | null>;
+    wasDraggingRef: RefBox<boolean>;
+    cancelKeyboardMove(): void;
+    setDrag: (update: StateUpdater<{ id: string; x: number; y: number } | null>) => void;
+    setGuides: (update: StateUpdater<{ x: number | null; y: number | null }>) => void;
+    send: SendCommand;
+  },
+): void {
+  // Dragging rearranges stored free positions; in generated layouts a header gesture must
+  // neither move panes nor persist a move-pane command. A live drag is detected via
+  // endDragRef, which flips synchronously at listener install — drag state is async-batched.
+  if (deps.endDragRef.current || deps.layoutRef.current !== "free") return;
+  deps.cancelKeyboardMove();
+  const tile = deps.tilesRef.current.get(paneId);
+  if (!tile || tile.hidden || event.button !== 0) return;
+  const offsetX = event.clientX - tile.x;
+  const offsetY = event.clientY - tile.y;
+  // Only a real pointer movement turns the gesture into a move-pane; a bare header click
+  // must not persist anything or it would freeze the masonry seed in place.
+  let moved = false;
+  let lastPlaced: { x: number; y: number } | null = null;
+
+  const move = (moveEvent: PointerEvent): void => {
+    moved = true;
+    const currentTiles = deps.tilesRef.current;
+    // The workspace extent is re-read every frame so resizes mid-drag are honored;
+    // clientWidth/clientHeight is the single metric source (no border-box mix).
+    const width = deps.workspaceRef.current?.clientWidth ?? 0;
+    const height = deps.workspaceRef.current?.clientHeight ?? 0;
+    const placed = snappedDragPosition(paneId, moveEvent.clientX, moveEvent.clientY, offsetX, offsetY, currentTiles, width, height);
+    lastPlaced = { x: placed.x, y: placed.y };
+    deps.setGuides((prev) => (prev.x === placed.guideX && prev.y === placed.guideY ? prev : { x: placed.guideX, y: placed.guideY }));
+    deps.setDrag((prev) => (prev !== null && prev.id === paneId && prev.x === placed.x && prev.y === placed.y ? prev : { id: paneId, x: placed.x, y: placed.y }));
+    // The native WebContentsView follows the card only when main receives fresh bounds.
+    // requestEmit coalesces via snapshotPending: at most one IPC per animation frame.
+    deps.requestEmit.current();
+  };
+  // Shared end path for pointerup AND pointercancel so an interrupted gesture can never
+  // strand listeners or guides; unmount reuses it via endDragRef.
+  const end = (): void => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", end);
+    window.removeEventListener("pointercancel", end);
+    deps.endDragRef.current = null;
+    // A layout switch mid-gesture must not commit a stale free-position payload.
+    const layoutStillFree = deps.layoutRef.current === "free";
+    // Updaters stay pure: commit from gesture locals and send outside setState, so
+    // exactly-once delivery never depends on how often a queued updater is invoked.
+    deps.setDrag(null);
+    if (moved && layoutStillFree && lastPlaced) {
+      deps.send({ kind: "move-pane", paneId, x: lastPlaced.x, y: lastPlaced.y });
+    }
+    deps.setGuides({ x: null, y: null });
+    // Final emission is deferred: the drag===null effect below waits out the revert render
+    // (double-rAF) so bounds are measured from settled DOM, not from the last dragged frame.
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", end);
+  window.addEventListener("pointercancel", end);
+  deps.endDragRef.current = end;
+  deps.wasDraggingRef.current = true;
+  deps.setDrag({ id: paneId, x: tile.x, y: tile.y });
+}
+
 function useAddressState(initialUrl: string, send: SendCommand) {
   const [address, setAddress] = useState(initialUrl);
   const latestSharedUrl = useRef(initialUrl);
@@ -140,6 +243,7 @@ function useChromeIngest(
         console.error("[hoolypane] rejected chrome state", parsed.error.message);
         if (disposed) return;
         if (failures >= INGRESS_RETRY_LIMIT) {
+          window.clearTimeout(retryTimer);
           unsubscribe?.();
           unsubscribe = null;
           dispatch({ type: "error", message: "Live state updates kept failing validation; live sync paused." });
@@ -181,12 +285,14 @@ function useKeyboardMoveMode({
   endDragRef,
   workspaceRef,
   layout,
+  send,
 }: {
   tilesRef: RefBox<Map<string, PaneTile>>;
   layoutRef: RefBox<ChromeState["layout"]>;
   endDragRef: RefBox<(() => void) | null>;
   workspaceRef: RefBox<HTMLElement | null>;
   layout: ChromeState["layout"];
+  send: SendCommand;
 }) {
   const [keyboardMove, setKeyboardMove] = useState<{ id: string; x: number; y: number } | null>(null);
   const keyboardMoveRef = useRef<{ id: string; x: number; y: number } | null>(null);
@@ -195,6 +301,7 @@ function useKeyboardMoveMode({
   const startKeyboardMove = useCallback((paneId: string): void => {
     // Mirrors startPaneDrag: keyboard moves rearrange stored free positions, so they must
     // not arm in generated layouts where a move-pane command would freeze masonry seeds.
+    if (keyboardMoveRef.current) return;
     if (endDragRef.current || layoutRef.current !== "free") return;
     const tile = tilesRef.current.get(paneId);
     if (!tile || tile.hidden) return;
@@ -209,15 +316,7 @@ function useKeyboardMoveMode({
   useEffect(() => {
     if (!kbActive) return;
     const onKey = (event: KeyboardEvent): void => {
-      // Arrows typed into an editable (address bar, rename input) must never nudge the pane or
-      // lose caret handling: bail before any keyboard-move handling or preventDefault runs.
-      const target = event.target;
-      if (
-        target instanceof HTMLElement &&
-        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)
-      ) {
-        return;
-      }
+      if (isEditableTarget(event.target)) return;
       const current = keyboardMoveRef.current;
       if (!current) return;
       const tile = tilesRef.current.get(current.id);
@@ -225,25 +324,24 @@ function useKeyboardMoveMode({
         setKeyboardMove(null);
         return;
       }
-      if (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "ArrowUp" || event.key === "ArrowDown") {
+      const delta = arrowNudgeDelta(event.key);
+      if (delta !== null) {
         const width = workspaceRef.current?.clientWidth ?? 0;
         const height = workspaceRef.current?.clientHeight ?? 0;
-        const dx = event.key === "ArrowRight" ? SNAP_PX : event.key === "ArrowLeft" ? -SNAP_PX : 0;
-        const dy = event.key === "ArrowDown" ? SNAP_PX : event.key === "ArrowUp" ? -SNAP_PX : 0;
         // Nudges use the same padded-domain clamp as free-tile restore (clampPanePosition); an
         // unclamped gutter commit desyncs the rendered card from the native view's click target.
-        const x = clampPanePosition(Math.round(current.x + dx), width, tile.width);
-        const y = clampPanePosition(Math.round(current.y + dy), height, tile.height);
+        const x = clampPanePosition(Math.round(current.x + delta.dx), width, tile.width);
+        const y = clampPanePosition(Math.round(current.y + delta.dy), height, tile.height);
         if (x !== current.x || y !== current.y) {
           setKeyboardMove({ id: current.id, x, y });
-          window.hoolypaneChrome.send({ kind: "move-pane", paneId: current.id, x, y });
+          send({ kind: "move-pane", paneId: current.id, x, y });
         }
       } else if (event.key === "Enter") {
         setKeyboardMove(null);
       } else if (event.key === "Escape") {
         setKeyboardMove(null);
         const origin = kbOriginRef.current;
-        if (origin) window.hoolypaneChrome.send({ kind: "move-pane", paneId: current.id, x: origin.x, y: origin.y });
+        if (origin) send({ kind: "move-pane", paneId: current.id, x: origin.x, y: origin.y });
       } else {
         return;
       }
@@ -267,6 +365,7 @@ function usePaneGestures(
   layout: ChromeState["layout"],
   workspaceRef: RefBox<HTMLElement | null>,
   requestEmit: RefBox<() => void>,
+  send: SendCommand,
 ) {
   const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null);
   const [guides, setGuides] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
@@ -284,60 +383,21 @@ function usePaneGestures(
     endDragRef,
     workspaceRef,
     layout,
+    send,
   });
   const startPaneDrag = useCallback((paneId: string, event: PointerEvent): void => {
-    // Dragging rearranges stored free positions; in generated layouts a header gesture must
-    // neither move panes nor persist a move-pane command. A live drag is detected via
-    // endDragRef, which flips synchronously at listener install — drag state is async-batched.
-    if (endDragRef.current || layoutRef.current !== "free") return;
-    cancelKeyboardMove();
-    const tile = tilesRef.current.get(paneId);
-    if (!tile || tile.hidden || event.button !== 0) return;
-    const offsetX = event.clientX - tile.x;
-    const offsetY = event.clientY - tile.y;
-    // Only a real pointer movement turns the gesture into a move-pane; a bare header click
-    // must not persist anything or it would freeze the masonry seed in place.
-    let moved = false;
-
-    const move = (moveEvent: PointerEvent): void => {
-      moved = true;
-      const currentTiles = tilesRef.current;
-      // The workspace extent is re-read every frame so resizes mid-drag are honored;
-      // clientWidth/clientHeight is the single metric source (no border-box mix).
-      const width = workspaceRef.current?.clientWidth ?? 0;
-      const height = workspaceRef.current?.clientHeight ?? 0;
-      const placed = snappedDragPosition(paneId, moveEvent.clientX, moveEvent.clientY, offsetX, offsetY, currentTiles, width, height);
-      setGuides((prev) => (prev.x === placed.guideX && prev.y === placed.guideY ? prev : { x: placed.guideX, y: placed.guideY }));
-      setDrag((prev) => (prev !== null && prev.id === paneId && prev.x === placed.x && prev.y === placed.y ? prev : { id: paneId, x: placed.x, y: placed.y }));
-      // The native WebContentsView follows the card only when main receives fresh bounds.
-      // requestEmit coalesces via snapshotPending: at most one IPC per animation frame.
-      requestEmit.current();
-    };
-    // Shared end path for pointerup AND pointercancel so an interrupted gesture can never
-    // strand listeners or guides; unmount reuses it via endDragRef.
-    const end = (): void => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", end);
-      window.removeEventListener("pointercancel", end);
-      endDragRef.current = null;
-      // A layout switch mid-gesture must not commit a stale free-position payload.
-      const layoutStillFree = layoutRef.current === "free";
-      setDrag((current) => {
-        if (moved && layoutStillFree && current && current.id === paneId) {
-          window.hoolypaneChrome.send({ kind: "move-pane", paneId, x: current.x, y: current.y });
-        }
-        return null;
-      });
-      setGuides({ x: null, y: null });
-      // Final emission is deferred: the drag===null effect below waits out the revert render
-      // (double-rAF) so bounds are measured from settled DOM, not from the last dragged frame.
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", end);
-    window.addEventListener("pointercancel", end);
-    endDragRef.current = end;
-    wasDraggingRef.current = true;
-    setDrag({ id: paneId, x: tile.x, y: tile.y });
+    beginFreeDragGesture(paneId, event, {
+      tilesRef,
+      layoutRef,
+      workspaceRef,
+      requestEmit,
+      endDragRef,
+      wasDraggingRef,
+      cancelKeyboardMove,
+      setDrag,
+      setGuides,
+      send,
+    });
   }, []);
 
   // Final emit after a gesture: defer until the reverted render has settled (double-rAF).
@@ -522,6 +582,7 @@ function App({ usingDevMock }: { usingDevMock: boolean }) {
     state.layout,
     workspaceRef,
     requestEmit,
+    send,
   );
   useBoundsEmission(
     workspaceSizeRef,

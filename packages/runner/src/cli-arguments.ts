@@ -22,6 +22,10 @@ export const TOP_LEVEL_USAGE = [
   "  -h, --help  Show this help and exit",
 ].join("\n");
 
+// Interrupted runs exit 130 (128 + SIGINT): shared by the CLI status mapping and runFlow's
+// second-signal and force-exit backstops so the convention cannot drift apart.
+export const EXIT_INTERRUPTED = 130;
+
 export function parseCliArguments(argv: readonly string[]): RunArguments {
   if (argv[0] !== "run" || !argv[1] || argv[1].startsWith("-")) throw new Error(USAGE);
 

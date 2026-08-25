@@ -1,16 +1,17 @@
 import { chromium } from "playwright";
-import type { Browser, BrowserContext, CDPSession, Page } from "playwright";
-import { mkdir, access } from "node:fs/promises";
+import type { Browser, BrowserContext, CDPSession } from "playwright";
+import { access } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { HoolypaneConfigSchema, errorMessage } from "@hoolypane/contracts";
 import { resolve, dirname, join } from "node:path";
 import type { FlowEvent, ResolvedHoolypaneConfig, ViewportSpec } from "@hoolypane/contracts";
 import { createFlowContext } from "@hoolypane/flow";
-import type { FlowDefinition } from "@hoolypane/flow";
+import type { FlowDefinition, Screen } from "@hoolypane/flow";
 import { RecordingSession } from "@hoolypane/recorder";
 import type { RecordingTarget, RecorderFailure } from "@hoolypane/recorder";
 import { compileModule, validateConfigExport, validateFlowExport } from "./module-loader.js";
 import type { CompiledModule } from "./module-loader.js";
+import { EXIT_INTERRUPTED } from "./cli-arguments.js";
 import type { RunArguments } from "./cli-arguments.js";
 
 interface RunResult {
@@ -104,7 +105,9 @@ async function evaluateModule(path: string, deadlineMs: number, source: string):
 interface FlowRunState {
   browser?: Browser | undefined;
   recorder?: RecordingSession | undefined;
-  readonly contexts: BrowserContext[];
+  // Trace filenames bind the viewport id captured at context creation: stopTraces never relies
+  // on positional alignment between contexts and config.viewports across the loop seam.
+  readonly contexts: { readonly context: BrowserContext; readonly viewportId: string }[];
   interrupted: boolean;
   signalDeadline?: ReturnType<typeof setTimeout>;
   // Cooperative cancellation for the user flow itself: createFlowContext checks this between steps.
@@ -124,16 +127,14 @@ interface FlowRunState {
   outcomeDecided: boolean;
 }
 
-type Screen = { id: string; viewport: ViewportSpec; page: Page };
-
 function armSignals(state: FlowRunState): () => void {
   const onSignal = (): void => {
     // A second SIGINT/SIGTERM means "stop now": bypass graceful teardown like the force timer below.
-    if (state.interrupted) process.exit(130);
+    if (state.interrupted) process.exit(EXIT_INTERRUPTED);
     state.interrupted = true;
     state.flowAbort.abort();
     state.signal.resolve();
-    state.signalDeadline = setTimeout(() => process.exit(130), 10_000);
+    state.signalDeadline = setTimeout(() => process.exit(EXIT_INTERRUPTED), 10_000);
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
@@ -150,7 +151,6 @@ async function evaluateAndParseConfig(args: RunArguments, flowPath: string, conf
   const flow = resolveExport<FlowDefinition>(flowModule, ["default", "flow"], flowPath);
   validateFlowExport(flow, flowPath);
   const outputDir = resolve(args.outputDir ?? config.recording.outputDir);
-  await mkdir(join(outputDir, "traces"), { recursive: true });
   return { config, flow, outputDir };
 }
 
@@ -171,7 +171,7 @@ async function runViewportLoop(config: ResolvedHoolypaneConfig, browser: Browser
   for (const viewport of config.viewports) {
     if (state.interrupted) break;
     const context = await browser.newContext(buildContextOptions(config, viewport));
-    state.contexts.push(context);
+    state.contexts.push({ context, viewportId: viewport.id });
     await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
     const page = await context.newPage();
     const cdp = await context.newCDPSession(page);
@@ -189,10 +189,10 @@ function recordFlowFailure(state: FlowRunState, error: unknown): void {
   state.flowError = error;
 }
 
-async function stopTraces(config: ResolvedHoolypaneConfig, outputDir: string, state: FlowRunState): Promise<readonly RecorderFailure[]> {
+async function stopTraces(outputDir: string, state: FlowRunState): Promise<readonly RecorderFailure[]> {
   if (state.tracesStopped) return [];
   state.tracesStopped = true;
-  const results = await Promise.allSettled(state.contexts.map((context, index) => context.tracing.stop({ path: join(outputDir, "traces", `${config.viewports[index]!.id}.zip`) })));
+  const results = await Promise.allSettled(state.contexts.map(({ context, viewportId }) => context.tracing.stop({ path: join(outputDir, "traces", `${viewportId}.zip`) })));
   return results.flatMap((result) => (result.status === "rejected" ? [failureFrom(result.reason)] : []));
 }
 
@@ -243,7 +243,7 @@ async function executeFlow(config: ResolvedHoolypaneConfig, flow: FlowDefinition
 
 async function finalizeRecording(recorder: RecordingSession, config: ResolvedHoolypaneConfig, outputDir: string, state: FlowRunState): Promise<void> {
   state.initialFramesAbort.abort();
-  const traceFailures = await stopTraces(config, outputDir, state);
+  const traceFailures = await stopTraces(outputDir, state);
   // tracing.stop failures (lost Playwright traces) must fail loudly like captureFailures do:
   // they land in manifest.failures AND flip the manifest status and the runner exit code.
   state.traceFailed = traceFailures.length > 0;
@@ -308,25 +308,21 @@ export async function runFlow(args: RunArguments): Promise<RunResult> {
       state.recorder = new RecordingSession({ recording: config.recording, timeoutMs: config.timeoutMs, outputDir });
       await state.recorder.start(targets);
     }
-    try {
-      await executeFlow(config, flow, screens, state);
-      if (state.recorder === undefined) {
-        // Interrupted during setup: no recording started and the previous output directory
-        // contents must stay intact, so discard the partial traces instead of writing them
-        // over the preserved directory. context.close() below drops the unfinished buffers.
-        state.tracesStopped = true;
-        return { outputDir, status: "interrupted" };
-      }
-      await finalizeRecording(state.recorder, config, outputDir, state);
-    } finally {
-      for (const failure of await stopTraces(config, outputDir, state)) process.stderr.write(`tracing.stop failed: ${failure.message}\n`);
+    await executeFlow(config, flow, screens, state);
+    if (state.recorder === undefined) {
+      // Interrupted during setup: no recording started and the previous output directory
+      // contents must stay intact, so discard the partial traces instead of writing them
+      // over the preserved directory. context.close() below drops the unfinished buffers.
+      state.tracesStopped = true;
+      return { outputDir, status: "interrupted" };
     }
+    await finalizeRecording(state.recorder, config, outputDir, state);
     return { outputDir, status: statusFor(state) };
   } finally {
     process.removeListener("SIGINT", onSignal);
     process.removeListener("SIGTERM", onSignal);
     state.initialFramesAbort.abort();
-    await Promise.allSettled([...state.contexts.map((context) => context.close()), state.browser?.close()]);
+    await Promise.allSettled([...state.contexts.map(({ context }) => context.close()), state.browser?.close()]);
     if (state.recorder && !state.recorderFinalized) {
       try { await state.recorder.finalize({ status: "failed", failures: [], events: [] }); } catch { /* best effort */ }
     }

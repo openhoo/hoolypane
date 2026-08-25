@@ -1,7 +1,7 @@
 import { BrowserWindow, dialog } from "electron";
 import { Worker } from "node:worker_threads";
 import { extname, isAbsolute } from "node:path";
-import { DEFAULT_COMPOSITE_BACKGROUND, errorMessage } from "@hoolypane/contracts";
+import { DEFAULT_COMPOSITE_BACKGROUND, errorMessage, formatViewportDimensions } from "@hoolypane/contracts";
 import { writeFileAtomic } from "@hoolypane/contracts/fsync";
 import type { PaneRegistry } from "../panes/pane-registry.js";
 import type { OverviewInput, OverviewTileInput, OverviewWorkerResponse } from "./overview-protocol.js";
@@ -53,18 +53,14 @@ export async function capturePane(window: BrowserWindow, registry: PaneRegistry,
   await savePng(window, png, "HOOLYPANE_TEST_PANE_PNG", `Save ${state.name} screenshot`, `${state.id}.png`);
 }
 
-function formatDimensions(viewport: { width: number; height: number; deviceScaleFactor: number }): string {
-  return `${viewport.width}×${viewport.height} @${viewport.deviceScaleFactor}`;
-}
-
 export async function captureOverview(window: BrowserWindow, registry: PaneRegistry): Promise<void> {
   const workspace = registry.getState();
   const tiles = await Promise.all(workspace.order.map(async (paneId) => {
     const pane = registry.getPane(paneId);
     const state = registry.getPaneState(paneId);
-    if (!pane || !state) return { name: paneId, dimensions: formatDimensions({ width: 0, height: 0, deviceScaleFactor: 1 }), error: "pane closed before capture" };
+    if (!pane || !state) return { name: state?.name ?? paneId, dimensions: formatViewportDimensions(state?.viewport ?? { width: 0, height: 0, deviceScaleFactor: 1 }), error: "pane closed before capture" };
     const name = state.name;
-    const dimensions = formatDimensions(state.viewport);
+    const dimensions = formatViewportDimensions(state.viewport);
     try {
       const image = await pane.view.webContents.capturePage();
       return { name, dimensions, png: image.toPNG() };

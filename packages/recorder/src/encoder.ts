@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import type { Writable } from "node:stream";
 import { access, constants, mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -36,7 +36,7 @@ export async function resolveEncoders(): Promise<EncoderPaths> {
   }
 }
 
-function filterGraph(tracks: readonly AlignedTrack[], grid: CompositeGeometry, fps: 30 | 60, background: string): string {
+export function filterGraph(tracks: readonly AlignedTrack[], grid: CompositeGeometry, fps: 30 | 60, background: string): string {
   const color = background.replace(/^#/, "0x");
   const filters: string[] = [];
   for (const [index, track] of tracks.entries()) {
@@ -66,6 +66,56 @@ function writeChunk(stream: Writable, data: Buffer): Promise<void> {
   return completion.promise;
 }
 
+/** Pure ffmpeg argv assembly: per-track image2pipe inputs, filter graph, and per-output map pushes. */
+export function ffmpegArguments(outputDir: string, tracks: readonly AlignedTrack[], geometry: CompositeGeometry, fps: 30 | 60, durationFrames: number, background: string): string[] {
+  const videos = tracks.map((track) => join(outputDir, "videos", trackVideoName(track.id)));
+  const composite = join(outputDir, "videos", COMPOSITE_VIDEO_NAME);
+  const args: string[] = ["-hide_banner", "-loglevel", "error", "-y", "-nostdin"];
+  for (let index = 0; index < tracks.length; index += 1) {
+    args.push("-probesize", "32", "-analyzeduration", "0", "-c:v", "mjpeg", "-f", "image2pipe", "-framerate", String(fps), "-i", `pipe:${index + 3}`);
+  }
+  args.push("-filter_complex", filterGraph(tracks, geometry, fps, background));
+  const outputOptions = ["-an", "-frames:v", String(durationFrames), "-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8", "-fps_mode", "passthrough"];
+  for (const [index, path] of videos.entries()) args.push("-map", `[track${index}]`, ...outputOptions, path);
+  args.push("-map", "[composite]", ...outputOptions, composite);
+  return args;
+}
+
+/** Frame pump: reads each aligned slot from the spools and writes it to ffmpeg's input pipes. */
+async function pumpFrames(tracks: readonly AlignedTrack[], pipes: readonly Writable[], durationFrames: number): Promise<void> {
+  const framesByTrack = tracks.map((track) => new Map(track.spool.index.frames.map((frame) => [frame.sequence, frame])));
+  try {
+    for (let slot = 0; slot < durationFrames; slot += 1) {
+      const chunks = await Promise.all(tracks.map(async (track, index) => {
+        const mapping = track.mappings[slot];
+        const frame = mapping ? framesByTrack[index]!.get(mapping.sourceSequence) : undefined;
+        if (!mapping || !frame) throw new Error(`missing source mapping for ${track.id} slot ${slot}`);
+        return track.spool.read(frame);
+      }));
+      await Promise.all(chunks.map((chunk, index) => writeChunk(pipes[index]!, chunk)));
+    }
+  } finally {
+    // Spools are closed before encoding starts, so cached read handles opened here have no other owner.
+    await Promise.allSettled(tracks.map((track) => track.spool.closeRead()));
+  }
+}
+
+/** Failure teardown: destroy pipes, SIGTERM with a CHILD_GRACE_MS watchdog, SIGKILL escalation, then rethrow composed diagnostics. */
+async function terminateFailedEncoder(child: ChildProcess, pipes: readonly Writable[], completion: { readonly promise: Promise<void> }, spawnError: Error | undefined, stderr: string, paths: EncoderPaths, error: unknown): Promise<never> {
+  for (const pipe of pipes) pipe.destroy();
+  child.kill("SIGTERM");
+  const graceful = Promise.withResolvers<void>();
+  const watchdog = setTimeout(graceful.resolve, CHILD_GRACE_MS);
+  try {
+    await Promise.race([completion.promise.catch(() => undefined), graceful.promise]);
+  } finally {
+    clearTimeout(watchdog);
+  }
+  if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  await completion.promise.catch(() => undefined);
+  throw new Error(`ffmpeg ${paths.ffmpeg} failed: ${spawnError?.message ?? errorMessage(error)}${spawnError ? "" : stderr ? `\n${stderr}` : ""}`);
+}
+
 export async function encodeAligned(
   outputDir: string,
   tracks: readonly AlignedTrack[],
@@ -77,16 +127,7 @@ export async function encodeAligned(
   await mkdir(join(outputDir, "videos"), { recursive: true });
   const paths = await resolveEncoders();
   const geometry = compositeGeometry(tracks.map((track) => track.geometry), recording.compositeMaxSize);
-  const videos = tracks.map((track) => join(outputDir, "videos", trackVideoName(track.id)));
-  const composite = join(outputDir, "videos", COMPOSITE_VIDEO_NAME);
-  const args: string[] = ["-hide_banner", "-loglevel", "error", "-y", "-nostdin"];
-  for (let index = 0; index < tracks.length; index += 1) {
-    args.push("-probesize", "32", "-analyzeduration", "0", "-c:v", "mjpeg", "-f", "image2pipe", "-framerate", String(fps), "-i", `pipe:${index + 3}`);
-  }
-  args.push("-filter_complex", filterGraph(tracks, geometry, fps, recording.compositeBackground));
-  const outputOptions = ["-an", "-frames:v", String(durationFrames), "-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8", "-fps_mode", "passthrough"];
-  for (const [index, path] of videos.entries()) args.push("-map", `[track${index}]`, ...outputOptions, path);
-  args.push("-map", "[composite]", ...outputOptions, composite);
+  const args = ffmpegArguments(outputDir, tracks, geometry, fps, durationFrames, recording.compositeBackground);
 
   const child = spawn(paths.ffmpeg, args, { stdio: ["ignore", "ignore", "pipe", ...tracks.map(() => "pipe" as const)] });
   let stderr = "";
@@ -111,36 +152,11 @@ export async function encodeAligned(
     return writable;
   });
   try {
-    const framesByTrack = tracks.map((track) => new Map(track.spool.index.frames.map((frame) => [frame.sequence, frame])));
-    try {
-      for (let slot = 0; slot < durationFrames; slot += 1) {
-        const chunks = await Promise.all(tracks.map(async (track, index) => {
-          const mapping = track.mappings[slot];
-          const frame = mapping ? framesByTrack[index]!.get(mapping.sourceSequence) : undefined;
-          if (!mapping || !frame) throw new Error(`missing source mapping for ${track.id} slot ${slot}`);
-          return track.spool.read(frame);
-        }));
-        await Promise.all(chunks.map((chunk, index) => writeChunk(pipes[index]!, chunk)));
-      }
-    } finally {
-      // Spools are closed before encoding starts, so cached read handles opened here have no other owner.
-      await Promise.allSettled(tracks.map((track) => track.spool.closeRead()));
-    }
+    await pumpFrames(tracks, pipes, durationFrames);
     for (const pipe of pipes) pipe.end();
     await completion.promise;
     return { geometry };
   } catch (error) {
-    for (const pipe of pipes) pipe.destroy();
-    child.kill("SIGTERM");
-    const graceful = Promise.withResolvers<void>();
-    const watchdog = setTimeout(graceful.resolve, CHILD_GRACE_MS);
-    try {
-      await Promise.race([completion.promise.catch(() => undefined), graceful.promise]);
-    } finally {
-      clearTimeout(watchdog);
-    }
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-    await completion.promise.catch(() => undefined);
-    throw new Error(`ffmpeg ${paths.ffmpeg} failed: ${spawnError?.message ?? errorMessage(error)}${spawnError ? "" : stderr ? `\n${stderr}` : ""}`);
+    return terminateFailedEncoder(child, pipes, completion, spawnError, stderr, paths, error);
   }
 }

@@ -2,7 +2,7 @@ import type { HoolypaneConfig, ResolvedHoolypaneConfig, ViewportSpec, FlowEvent 
 import { HoolypaneConfigSchema } from "@hoolypane/contracts";
 import type { Page } from "playwright";
 
-interface Screen {
+export interface Screen {
   readonly id: string;
   readonly viewport: Readonly<ViewportSpec>;
   readonly page: Page;

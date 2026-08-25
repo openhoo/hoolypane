@@ -61,7 +61,7 @@ export async function clickPaneSurface(
       await settleDelay;
     }
     return { status, attempts, lastAttempt: attempts, lastError };
-  }, { port: options.port, testId: options.testId, scale, expectedStatus: options.expectedStatus, width: desktopPaneWidth, height: desktopPaneHeight });
+  }, { port: options.port, testId: options.testId, scale, expectedStatus: options.expectedStatus, width: desktopPaneWidth });
   if (options.expectedStatus !== undefined && result.status !== options.expectedStatus) {
     throw new Error(`source ${options.testId} click did not activate: ${JSON.stringify({ surface, scale, result })}`);
   }

@@ -1,4 +1,4 @@
-import { errorMessage, type ActionEnvelope } from "@hoolypane/contracts";
+import { errorMessage } from "@hoolypane/contracts";
 
 type ReplayOutcome = { paneId: string; ok: boolean; reason?: string };
 
@@ -6,7 +6,7 @@ export class InteractionCoordinator {
   private readonly tails = new Map<string, Promise<void>>();
   private readonly epochs = new Map<string, number>();
 
-  async dispatch(envelope: ActionEnvelope, targetPaneIds: readonly string[], replay: (paneId: string) => Promise<void>): Promise<ReplayOutcome[]> {
+  async dispatch(targetPaneIds: readonly string[], replay: (paneId: string) => Promise<void>): Promise<ReplayOutcome[]> {
     const started = targetPaneIds.map((paneId) => {
       const previous = this.tails.get(paneId) ?? Promise.resolve();
       const epoch = this.epochs.get(paneId) ?? 0;

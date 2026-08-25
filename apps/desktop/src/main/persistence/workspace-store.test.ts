@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WorkspaceStateSchema } from "../panes/workspace.js";
-import { loadWorkspace, saveWorkspace, sweepStaleTemporaries } from "./workspace-store.js";
+import { flushWorkspaceSaves, loadWorkspace, saveWorkspace, sweepStaleTemporaries } from "./workspace-store.js";
 
 const directories: string[] = [];
 
@@ -65,6 +65,16 @@ describe("loadWorkspace", () => {
     const siblings = await readdir(join(file, ".."));
     expect(siblings.some((entry) => entry.startsWith("workspace.json.corrupt-"))).toBe(false);
   });
+  it("drops position entries for panes that no longer exist", async () => {
+    const file = await workspaceFile();
+    const loaded = await loadWorkspace(file);
+    const known = loaded.state.panes[0]!.id;
+    const withGhost = { ...loaded.state, positions: { [known]: { x: 1, y: 2 }, ghostId: { x: 9, y: 9 } } };
+    await saveWorkspace(file, withGhost);
+    const reread = await loadWorkspace(file);
+    expect(reread.persistable).toBe(true);
+    expect(reread.state.positions).toEqual({ [known]: { x: 1, y: 2 } });
+  });
 });
 
 async function freshStateJson(): Promise<string> {
@@ -82,6 +92,21 @@ describe("sweepStaleTemporaries", () => {
     await writeFile(`${file}.unrelated.tmp`, "orphan2", "utf8");
     await sweepStaleTemporaries(file);
     expect(await readFile(file, "utf8")).toBe("real");
+    const siblings = await readdir(join(file, ".."));
+    expect(siblings.filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
+  });
+});
+
+describe("flushWorkspaceSaves", () => {
+  it("drains chained saves so the last enqueued state lands on disk", async () => {
+    const file = await workspaceFile();
+    const base = (await loadWorkspace(file)).state;
+    const mutated = { ...base, sharedUrl: "https://example.com/flushed" };
+    await saveWorkspace(file, base);
+    const second = saveWorkspace(file, () => mutated); // provider evaluated when the tail executes
+    await flushWorkspaceSaves();
+    await second;
+    expect(JSON.parse(await readFile(file, "utf8"))).toEqual(mutated);
     const siblings = await readdir(join(file, ".."));
     expect(siblings.filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
   });

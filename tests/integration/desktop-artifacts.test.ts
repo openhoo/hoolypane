@@ -6,7 +6,7 @@ import type { ElectronApplication, Page } from "playwright";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { runFlow } from "../../packages/runner/src/run-flow.js";
-import { OVERVIEW_ERROR_TILE_COLOR } from "../../apps/desktop/src/main/screenshots/overview-worker.js";
+import { OVERVIEW_ERROR_TILE_COLOR } from "../../apps/desktop/src/main/screenshots/overview-shared.js";
 import { launchDesktopApp, pollUntil, startFixtureServer, waitForFixturePanes, type FixtureServer } from "../helpers/harness.js";
 import { clickPaneSurface } from "./cdp-input.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";

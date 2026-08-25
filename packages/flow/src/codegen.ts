@@ -25,9 +25,9 @@ function actionStatements(action: Action): readonly string[] {
     case "check": return [`await ${locator}.${action.checked ? "check" : "uncheck"}();`];
     case "press": return [`await ${locator}.press(${literal(action.key)});`];
     case "scroll": {
-      const horizontal = Number(action.horizontalRatio);
-      const vertical = Number(action.verticalRatio);
-      if (!Number.isFinite(horizontal) || !Number.isFinite(vertical) || horizontal < SCROLL_RATIO_MIN || horizontal > SCROLL_RATIO_MAX || vertical < SCROLL_RATIO_MIN || vertical > SCROLL_RATIO_MAX) {
+      const horizontal = action.horizontalRatio;
+      const vertical = action.verticalRatio;
+      if (typeof horizontal !== "number" || typeof vertical !== "number" || !Number.isFinite(horizontal) || !Number.isFinite(vertical) || horizontal < SCROLL_RATIO_MIN || horizontal > SCROLL_RATIO_MAX || vertical < SCROLL_RATIO_MIN || vertical > SCROLL_RATIO_MAX) {
         throw new Error(`Invalid scroll ratios: ${String(action.horizontalRatio)}, ${String(action.verticalRatio)}`);
       }
       return [

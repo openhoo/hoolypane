@@ -68,13 +68,16 @@ jobs:
       - run: pnpm build
       - name: Run Linux desktop E2E
         if: runner.os == 'Linux'
-        run: env -u DBUS_SESSION_BUS_ADDRESS -u WAYLAND_DISPLAY LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a pnpm test:desktop
+        # Wrapper pins the documented 1920x1080x24 Xvfb geometry and software-rendering env
+        # (canonical values: tests/helpers/desktop-runtime.ts); default 640x480 breaks drag E2E.
+        run: pnpm test:desktop:xvfb
       - name: Run native desktop E2E
         if: runner.os != 'Linux'
         run: pnpm test:desktop
       - name: Run Linux desktop performance gate
         if: runner.os == 'Linux'
-        run: env -u DBUS_SESSION_BUS_ADDRESS -u WAYLAND_DISPLAY LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a pnpm benchmark:desktop
+        # Same geometry contract as the E2E step above.
+        run: pnpm benchmark:desktop:xvfb
       - name: Run native desktop performance gate
         if: runner.os != 'Linux'
         run: pnpm benchmark:desktop
@@ -88,7 +91,8 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       - name: Smoke Linux package
         if: runner.os == 'Linux'
-        run: env -u DBUS_SESSION_BUS_ADDRESS -u WAYLAND_DISPLAY LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a pnpm smoke:desktop-package -- dist/desktop
+        # Geometry mirrors scripts/release-dry-run.mjs; flags anchored in tests/helpers/desktop-runtime.ts.
+        run: env -u DBUS_SESSION_BUS_ADDRESS -u WAYLAND_DISPLAY LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a --server-args='-screen 0 1920x1080x24' pnpm smoke:desktop-package -- dist/desktop
       - name: Smoke native package
         if: runner.os != 'Linux'
         run: pnpm smoke:desktop-package -- dist/desktop

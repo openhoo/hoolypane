@@ -34,6 +34,11 @@ function patch(partial: Partial<ChromeState>): void {
 function patchPane(paneId: string, changes: Partial<PaneState>): void {
   patch({ panes: mockState.panes.map((pane) => (pane.id === paneId ? { ...pane, ...changes } : pane)) });
 }
+// Mirrors main's PaneRegistry.patchEmulation seam: one owner for the nested emulation spread
+// instead of per-case hand-synced copies of the EmulationSettings field layout.
+function patchEmulation(patchPartial: Partial<ChromeState["emulation"]>): void {
+  patch({ emulation: { ...mockState.emulation, ...patchPartial } });
+}
 
 // Overlapping settles ACCUMULATE targets: clear-and-reschedule per call would drop panes not
 // named by the newest caller, wedging them in loading:true forever.
@@ -48,7 +53,8 @@ function settleLoading(paneIds: readonly string[]): void {
   }, 600);
 }
 
-function apply(command: ChromeCommand): void {
+function apply(command: ChromeCommand): boolean {
+  let refused = false;
   switch (command.kind) {
     case "navigate": {
       let url: string;
@@ -57,6 +63,7 @@ function apply(command: ChromeCommand): void {
       } catch (error) {
         // Mirror main's command .catch: rejected navigations surface via lastError, not silence.
         patch({ lastError: errorMessage(error) });
+        refused = true;
         break;
       }
       patch({
@@ -92,12 +99,20 @@ function apply(command: ChromeCommand): void {
       const name = command.name.trim();
       if (!name) {
         patch({ lastError: "pane name must not be empty" });
+        refused = true;
         break;
       }
       patchPane(command.paneId, { name });
       break;
     }
     case "move-pane":
+      // Mirror main's PaneRegistry.setPanePosition: unknown ids are refused via lastError
+      // instead of accumulating orphaned position entries production state can never contain.
+      if (!mockState.order.includes(command.paneId)) {
+        patch({ lastError: `unknown pane: ${command.paneId}` });
+        refused = true;
+        break;
+      }
       patch({ positions: { ...mockState.positions, [command.paneId]: { x: command.x, y: command.y } } });
       break;
     case "rotate": {
@@ -106,6 +121,13 @@ function apply(command: ChromeCommand): void {
       break;
     }
     case "focus":
+      // Mirror main's PaneRegistry.focus guard so unknown ids surface as a refusal here
+      // instead of dying later inside ChromeStateSchema.safeParse.
+      if (command.paneId !== null && !mockState.order.includes(command.paneId)) {
+        patch({ lastError: `unknown pane: ${command.paneId}` });
+        refused = true;
+        break;
+      }
       patch({ focusedPaneId: command.paneId });
       break;
     case "set-layout":
@@ -115,28 +137,38 @@ function apply(command: ChromeCommand): void {
       patch({ syncEnabled: command.enabled });
       break;
     case "set-color-scheme":
-      patch({ emulation: { ...mockState.emulation, colorScheme: command.value } });
+      patchEmulation({ colorScheme: command.value });
       break;
     case "set-reduced-motion":
-      patch({ emulation: { ...mockState.emulation, reducedMotion: command.enabled } });
+      patchEmulation({ reducedMotion: command.enabled });
       break;
     case "set-throttling":
-      patch({ emulation: { ...mockState.emulation, throttling: command.mode } });
+      patchEmulation({ throttling: command.mode });
       break;
     case "set-overlay":
-      patch({ emulation: { ...mockState.emulation, overlays: { ...mockState.emulation.overlays, [command.key]: command.enabled } } });
+      patchEmulation({ overlays: { ...mockState.emulation.overlays, [command.key]: command.enabled } });
       break;
     case "capture-pane":
     case "capture-overview":
       // Screenshots require the native WebContentsView; no-op success in the mock.
       break;
     case "record-start":
+      // Mirror main's handleCommand refusal: a running recording must not silently restart.
+      if (mockState.recording) {
+        patch({ lastError: "a flow recording is already active" });
+        refused = true;
+        break;
+      }
       patch({ recording: true });
       break;
     case "record-stop":
       patch({ recording: false });
       break;
   }
+  // Mirror main's success tail (handleCommand): every completed command resets lastError
+  // before republishing, so one rejected command cannot pin the error toast until reload.
+  if (!refused) patch({ lastError: null });
+  return refused;
 }
 
 export function installDevMock(): void {

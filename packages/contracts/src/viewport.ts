@@ -39,6 +39,13 @@ export const ViewportSpecSchema = z
 
 export type ViewportSpec = z.infer<typeof ViewportSpecSchema>;
 
+/** Canonical pane dimension label ("1280×800 @2x"), shared by the renderer pane badges and the
+ *  overview PNG tile headers so the two surfaces cannot drift. Takes a structural subset: callers
+ *  without a full ViewportSpec (capture fallbacks) pass only the rendered fields. */
+export function formatViewportDimensions(viewport: Pick<ViewportSpec, "width" | "height" | "deviceScaleFactor">): string {
+  return `${viewport.width}×${viewport.height} @${viewport.deviceScaleFactor}x`;
+}
+
 export const ViewportListSchema = z.array(ViewportSpecSchema).min(1).superRefine((viewports, context) => {
   const ids = new Set<string>();
   for (const [index, viewport] of viewports.entries()) {

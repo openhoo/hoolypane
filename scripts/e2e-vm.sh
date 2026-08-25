@@ -24,20 +24,29 @@ if [[ -z "$VM_DIR" || "$VM_DIR" == \~* ]]; then
   exit 1
 fi
 
-SSH=(ssh -p "$VM_PORT" -i "$VM_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new "$VM_SSH")
+# Shared connection options: ssh runs consume them as an array, rsync's -e as one joined string.
+SSH_OPTS=(-p "$VM_PORT" -i "$VM_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new)
+SSH=(ssh "${SSH_OPTS[@]}" "$VM_SSH")
 
 cd "$(dirname "$0")/.."
 SUITES=("$@")
 if [[ ${#SUITES[@]} -eq 0 ]]; then SUITES=(desktop runner); fi
+
+# Authoritative suite table: the validation loop and the dispatch loop share this single mapping.
+declare -A SUITE_CMD=(
+  [desktop]="pnpm test:desktop"
+  [runner]="pnpm test:runner"
+  [unit]="pnpm test:unit"
+  [bench]="pnpm benchmark:desktop"
+)
 for suite in "${SUITES[@]}"; do
-  case "$suite" in
-    desktop|runner|unit|bench) ;;
-    *) echo "unknown suite: $suite"; exit 1 ;;
-  esac
+  if [[ -z "${SUITE_CMD[$suite]:-}" ]]; then
+    echo "unknown suite: $suite"; exit 1
+  fi
 done
 
 echo "== sync working tree → VM"
-RSYNC_SSH="ssh -p $VM_PORT -i $VM_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+RSYNC_SSH="ssh ${SSH_OPTS[*]}"
 rsync -az --delete -e "$RSYNC_SSH" \
   --exclude .git --exclude node_modules --exclude dist \
   --exclude build/icons --exclude build/icon.ico --exclude build/icon.icns \
@@ -59,12 +68,6 @@ echo "== install + build in VM"
 
 for suite in "${SUITES[@]}"; do
   echo "== run $suite suite in VM"
-  case "$suite" in
-    desktop) CMD="pnpm test:desktop" ;;
-    runner)  CMD="pnpm test:runner" ;;
-    unit)    CMD="pnpm test:unit" ;;
-    bench)   CMD="pnpm benchmark:desktop" ;;
-    *) echo "unknown suite: $suite"; exit 1 ;;
-  esac
+  CMD="${SUITE_CMD[$suite]}"
   "${SSH[@]}" "cd ~/$VM_DIR && xvfb-run -a -s '-screen 0 ${VM_SCREEN}' $CMD"
 done

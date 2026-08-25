@@ -1,7 +1,8 @@
-import { spawn } from "node:child_process";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+// Node strips types natively; plain-node scripts need the exact .ts specifier.
+import { applyLinuxSoftwareRenderingEnv, runCommand } from "../tests/helpers/desktop-runtime.ts";
 
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
@@ -13,40 +14,22 @@ const npx = process.platform === "win32" ? "npx.cmd" : "npx";
 // E2E or packaging smoke runs locally.
 const xvfb = ["--", "xvfb-run", "-a", "--server-args=-screen 0 1920x1080x24"];
 const linuxDesktopEnvironment = () => {
-  const environment = { ...process.env, LIBGL_ALWAYS_SOFTWARE: "1" };
+  const environment = applyLinuxSoftwareRenderingEnv({ ...process.env });
   delete environment.DBUS_SESSION_BUS_ADDRESS;
   delete environment.WAYLAND_DISPLAY;
   return environment;
 };
-function run(command, args, environment = process.env, cwd) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      stdio: "inherit",
-      env: environment,
-      // .cmd shims on Windows only resolve through cmd.exe; args are fixed literals.
-      shell: process.platform === "win32",
-    });
-    child.once("error", reject);
-    child.once("exit", (code, signal) => code === 0 ? resolve() : reject(new Error(`${command} ${args.join(" ")} exited ${code ?? signal}`)));
-  });
-}
+// Local adapters over the shared runner in tests/helpers/desktop-runtime.ts: gates stream live
+// output while the consumer --help probe captures regardless of exit code. Win32 .cmd shims
+// (pnpm.cmd/npm.cmd/npx.cmd) resolve only through cmd.exe; args stay fixed literals, which is
+// why smoke-desktop-package.mjs intentionally stays shell-less for its direct .exe spawns.
+const winShell = process.platform === "win32";
+const run = (command, args, environment = process.env, cwd) =>
+  runCommand(command, args, { env: environment, cwd, output: "inherit", shell: winShell });
 
 // Captures combined output regardless of exit code, mirroring the workflow's "$(npx ... || true)".
-function capture(command, args, cwd) {
-  return new Promise((resolveCapture, rejectCapture) => {
-    const child = spawn(command, args, {
-      cwd,
-      env: process.env,
-      shell: process.platform === "win32",
-    });
-    let output = "";
-    child.stdout.on("data", (chunk) => { output += chunk; });
-    child.stderr.on("data", (chunk) => { output += chunk; });
-    child.once("error", rejectCapture);
-    child.once("exit", () => resolveCapture(output));
-  });
-}
+const capture = (command, args, cwd) =>
+  runCommand(command, args, { cwd, shell: winShell, ignoreExitCode: true });
 
 await run(pnpm, ["pins:check"]);
 await run(pnpm, ["architecture"]);

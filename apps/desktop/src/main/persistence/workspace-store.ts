@@ -7,7 +7,7 @@ import { report } from "../report.js";
 
 type LoadedWorkspace = {
   state: WorkspaceState;
-  /** false when the on-disk file is newer than supported or unreadable: automatic overwriting is suppressed. */
+  /** false when the on-disk file is newer than supported or unreadable, or a corrupt file could not be quarantined: automatic overwriting is suppressed. */
   persistable: boolean;
 };
 
@@ -22,7 +22,8 @@ async function quarantine(file: string): Promise<boolean> {
   try {
     await fs.rename(file, `${file}.corrupt-${process.pid}.${Date.now()}-${++temporarySequence}`);
     return true;
-  } catch {
+  } catch (error) {
+    report("", `could not quarantine ${file}; treating it as unpersistable: ${errorMessage(error)}`);
     return false; // could not move aside: treat as unpersistable rather than clobbering
   }
 }

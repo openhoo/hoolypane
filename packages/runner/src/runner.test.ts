@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,6 +11,7 @@ import { compileModule } from "./module-loader.js";
 import { verifyDirectory } from "./verify.js";
 import ffmpegPath from "ffmpeg-static";
 import { HoolypaneConfigSchema, VIEWPORT_PRESETS } from "@hoolypane/contracts";
+import { ffmpegArguments, filterGraph } from "@hoolypane/recorder";
 
 describe("runner CLI", () => {
   it("parses flow, config, output, and headed options", () => {
@@ -122,22 +124,66 @@ function runFfmpeg(args: readonly string[]): Promise<void> {
   child.once("close", (code) => code === 0 ? completion.resolve() : completion.reject(new Error(`ffmpeg exited ${code}: ${stderr}`)));
   return completion.promise;
 }
-// Encodes one 64x64 CFR track plus a composite through the same filter chain the recorder uses.
+const FIXTURE_TRACK_SIZE = 64;
+const FIXTURE_BACKGROUND = "#111318";
+
+// Encodes one 64x64 CFR track plus a composite, hand-mirroring the recorder encoder's argv shape
+// while feeding real files instead of input pipes; the parity test below pins that mirror to
+// @hoolypane/recorder's exported production builders so encoder drift fails loudly here.
+function recordingEncodeArguments(directory: string, fps: 30 | 60, frames: number): readonly string[] {
+  const scale = `scale=${FIXTURE_TRACK_SIZE}:${FIXTURE_TRACK_SIZE}:force_original_aspect_ratio=decrease,pad=${FIXTURE_TRACK_SIZE}:${FIXTURE_TRACK_SIZE}:(ow-iw)/2:(oh-ih)/2:color=0x${FIXTURE_BACKGROUND.slice(1)}`;
+  const filter = `[0:v]settb=AVTB,setpts=N/(${fps}*TB),split=2[raw0][gridraw0];[raw0]${scale}[track0];[gridraw0]${scale}[tile0];[tile0]scale=${FIXTURE_TRACK_SIZE}:${FIXTURE_TRACK_SIZE}[composite]`;
+  const outputOptions = ["-an", "-frames:v", String(frames), "-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8", "-fps_mode", "passthrough"];
+  return [
+    "-hide_banner", "-loglevel", "error", "-y",
+    "-probesize", "32", "-analyzeduration", "0", "-c:v", "mjpeg", "-f", "image2pipe", "-framerate", String(fps), "-i", join(directory, "frames.mjpeg"),
+    "-filter_complex", filter,
+    "-map", "[track0]", ...outputOptions, join(directory, "videos", "one.webm"),
+    "-map", "[composite]", ...outputOptions, join(directory, "videos", "composite.webm"),
+  ];
+}
+
 async function writeRecordingFixture(directory: string, fps: 30 | 60, frames: number): Promise<void> {
   await mkdir(join(directory, "videos"), { recursive: true });
-  const framesFile = join(directory, "frames.mjpeg");
-  await runFfmpeg(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=16x16", "-frames:v", String(frames), "-c:v", "mjpeg", "-f", "image2pipe", framesFile]);
-  const scale = "scale=64:64:force_original_aspect_ratio=decrease,pad=64:64:(ow-iw)/2:(oh-ih)/2:color=0x111318";
-  const filter = `[0:v]settb=AVTB,setpts=N/(${fps}*TB),split=2[raw0][gridraw0];[raw0]${scale}[track0];[gridraw0]${scale}[tile0];[tile0]scale=64:64[composite]`;
-  const outputOptions = ["-an", "-frames:v", String(frames), "-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8", "-fps_mode", "passthrough"];
-  await runFfmpeg([
-    "-hide_banner", "-loglevel", "error", "-y",
-    "-probesize", "32", "-analyzeduration", "0", "-c:v", "mjpeg", "-f", "image2pipe", "-framerate", String(fps), "-i", framesFile,
-    "-filter_complex", filter,
-    ...outputOptions, "-map", "[track0]", join(directory, "videos", "one.webm"),
-    ...outputOptions, "-map", "[composite]", join(directory, "videos", "composite.webm"),
-  ]);
+  await runFfmpeg(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=16x16", "-frames:v", String(frames), "-c:v", "mjpeg", "-f", "image2pipe", join(directory, "frames.mjpeg")]);
+  await runFfmpeg(recordingEncodeArguments(directory, fps, frames));
 }
+
+describe("recording fixture parity", () => {
+  it("pins the fixture argv to the encoder's filter graph and output options", () => {
+    // The stubs satisfy only what the pure builders read (id/geometry); spools and mappings are
+    // consumed solely by the frame pump, which never runs here.
+    const tracks = [
+      {
+        id: "one",
+        spool: null,
+        mappings: [],
+        geometry: { id: "one", encodedWidth: FIXTURE_TRACK_SIZE, encodedHeight: FIXTURE_TRACK_SIZE },
+      },
+    ] as unknown as Parameters<typeof ffmpegArguments>[1];
+    const grid = {
+      columns: 1,
+      rows: 1,
+      tileWidth: FIXTURE_TRACK_SIZE,
+      tileHeight: FIXTURE_TRACK_SIZE,
+      unscaledWidth: FIXTURE_TRACK_SIZE,
+      unscaledHeight: FIXTURE_TRACK_SIZE,
+      outputWidth: FIXTURE_TRACK_SIZE,
+      outputHeight: FIXTURE_TRACK_SIZE,
+    } as unknown as Parameters<typeof ffmpegArguments>[2];
+    for (const fps of [30, 60] as const) {
+      const directory = "fixture-parity-unused"; // Pure argv assembly: nothing spawns or writes.
+      const emitted = recordingEncodeArguments(directory, fps, 22);
+      const expected = ffmpegArguments(directory, tracks, grid, fps, 22, FIXTURE_BACKGROUND);
+      const anchor = expected.indexOf("-filter_complex");
+      // Both layers of the real construction path are pinned: the encoder argv embeds exactly
+      // the standalone filterGraph(...) chain for the same track spec, and the fixture's tail
+      // equals that argv positionally from the chain onward (chain, maps, options, paths).
+      expect(expected.slice(anchor, anchor + 2)).toEqual(["-filter_complex", filterGraph(tracks, grid, fps, FIXTURE_BACKGROUND)]);
+      expect(emitted.slice(emitted.indexOf("-filter_complex"))).toEqual(expected.slice(anchor));
+    }
+  });
+});
 
 function manifestBody(overrides: Record<string, unknown>): string {
   return JSON.stringify({
@@ -216,4 +262,24 @@ describe("verify command", () => {
     await writeFile(join(directory, "manifest.json"), manifestBody({ geometry: { outputWidth: 64 } }));
     await expect(verifyDirectory(directory)).rejects.toThrow(/malformed geometry field/u);
   });
+
+  it("certifies the manifest sha256 map: mismatched or missing artifacts fail loudly", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "hoolypane-verify-sha256-"));
+    scratchDirectories.push(directory);
+    await writeRecordingFixture(directory, 30, 22);
+    const digestOf = async (key: string): Promise<readonly [string, string]> => [
+      key,
+      createHash("sha256").update(await readFile(join(directory, key))).digest("hex"),
+    ];
+    const sha256 = Object.fromEntries(await Promise.all(["videos/one.webm", "videos/composite.webm"].map(digestOf)));
+    await writeFile(join(directory, "manifest.json"), manifestBody({ sha256 }));
+    expect(await verifyDirectory(directory)).toBe(0);
+    // A payload diverging from its certified digest (corruption/tampering) must fail loudly
+    // even though ffprobe CFR/geometry agreement alone would certify the directory.
+    await writeFile(join(directory, "manifest.json"), manifestBody({ sha256: { ...sha256, "videos/composite.webm": "0".repeat(64) } }));
+    await expect(verifyDirectory(directory)).rejects.toThrow(/videos\/composite\.webm fails sha256 certification/u);
+    // A listed-but-missing artifact fails the same way instead of being silently skipped.
+    await writeFile(join(directory, "manifest.json"), manifestBody({ viewports: undefined, geometry: undefined, sha256: { "run-state.json": "0".repeat(64) } }));
+    await expect(verifyDirectory(directory)).rejects.toThrow(/run-state\.json fails sha256 certification/u);
+  }, 30_000);
 });

@@ -5,6 +5,13 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 // Node 24 strips types natively; plain-node scripts need the exact .ts specifier (no .js remap).
 import { FIXTURE_PORTS } from "../tests/fixtures/ports.ts";
+import {
+  LINUX_SOFTWARE_RENDERING_ARGS,
+  applyLinuxSoftwareRenderingEnv,
+  runCommand,
+  startFixtureServer,
+  stopChildProcess,
+} from "../tests/helpers/desktop-runtime.ts";
 
 const directoryArgument = process.argv[2] === "--" ? process.argv[3] : process.argv[2];
 const artifactDir = resolve(directoryArgument ?? "dist/desktop");
@@ -18,7 +25,6 @@ let app;
 let fixture;
 let appExit;
 let logs = "";
-let fixtureLogs = "";
 
 function soleArtifact(extension) {
   const matches = files.filter((file) => file.endsWith(extension));
@@ -28,41 +34,6 @@ function soleArtifact(extension) {
   return matches[0];
 }
 
-function run(command, args, options = {}) {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], ...options });
-    let output = "";
-    child.stdout?.on("data", (data) => { output += data; });
-    child.stderr?.on("data", (data) => { output += data; });
-    child.once("error", reject);
-    child.once("exit", (code, signal) => code === 0 ? resolvePromise(output) : reject(new Error(`${command} exited ${code ?? signal}: ${output}`)));
-  });
-}
-async function stopChild(child) {
-  if (!child) return;
-  if (child.exitCode === null) {
-    const exited = Promise.withResolvers();
-    child.once("exit", exited.resolve);
-    child.kill("SIGTERM");
-    const timer = setTimeout(() => child.kill("SIGKILL"), 2_000);
-    await exited.promise;
-    clearTimeout(timer);
-  }
-  child.stdout?.destroy();
-  child.stderr?.destroy();
-}
-
-async function waitForFixture() {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    if (fixture.exitCode !== null || fixture.signalCode !== null) {
-      throw new Error(`fixture server exited before readiness (code ${fixture.exitCode ?? fixture.signalCode}): ${fixtureLogs.trim()}`);
-    }
-    try { if ((await fetch(`http://127.0.0.1:${fixturePort}/`)).ok) return; } catch { /* not ready */ }
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
-  }
-  throw new Error(`fixture server did not become ready: ${fixtureLogs.trim()}`);
-}
 async function waitForDesktop() {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
@@ -89,11 +60,7 @@ try {
     });
   });
 
-  // Fixture stdout/stderr are piped so startup failures (e.g. EADDRINUSE) surface in error messages.
-  fixture = spawn(process.execPath, [resolve("tests/fixtures/server.mjs")], { env: { ...process.env, PORT: String(fixturePort) }, stdio: ["ignore", "pipe", "pipe"] });
-  fixture.stdout?.on("data", (data) => { fixtureLogs += data; });
-  fixture.stderr?.on("data", (data) => { fixtureLogs += data; });
-  await waitForFixture();
+  fixture = await startFixtureServer(fixturePort);
   let executable;
   let launchArgs = [`--remote-debugging-port=${debuggingPort}`, "--url", `http://127.0.0.1:${fixturePort}`];
   let environment = { ...process.env };
@@ -102,20 +69,20 @@ try {
     const artifact = soleArtifact(".AppImage");
     executable = join(artifactDir, artifact);
     await fs.chmod(executable, 0o755);
-    environment = { ...environment, LIBGL_ALWAYS_SOFTWARE: environment.LIBGL_ALWAYS_SOFTWARE ?? "1" };
+    environment = applyLinuxSoftwareRenderingEnv(environment);
     // Extraction mode cannot preserve the AppImage's setuid sandbox ownership; this flag is smoke-only.
-    launchArgs = ["--appimage-extract-and-run", "--no-sandbox", "--ozone-platform=x11", "--use-gl=angle", "--use-angle=swiftshader", ...launchArgs];
+    launchArgs = ["--appimage-extract-and-run", "--no-sandbox", ...LINUX_SOFTWARE_RENDERING_ARGS, ...launchArgs];
   } else if (process.platform === "win32") {
     const installer = soleArtifact(".exe");
     installedDirectory = join(temporary, "installed");
-    await run(join(artifactDir, installer), ["/S", `/D=${installedDirectory}`]);
+    await runCommand(join(artifactDir, installer), ["/S", `/D=${installedDirectory}`]);
     executable = join(installedDirectory, "Hoolypane.exe");
     await fs.access(executable);
   } else if (process.platform === "darwin") {
     const dmg = soleArtifact(".dmg");
     mountedDmg = join(temporary, "mounted");
     await fs.mkdir(mountedDmg);
-    await run("hdiutil", ["attach", join(artifactDir, dmg), "-nobrowse", "-readonly", "-mountpoint", mountedDmg]);
+    await runCommand("hdiutil", ["attach", join(artifactDir, dmg), "-nobrowse", "-readonly", "-mountpoint", mountedDmg]);
     executable = join(mountedDmg, "Hoolypane.app", "Contents", "MacOS", "Hoolypane");
     await fs.access(executable);
   } else {
@@ -129,12 +96,12 @@ try {
   await waitForDesktop();
   process.stdout.write(`PACKAGED_DESKTOP_SMOKE_OK ${basename(executable)}\n`);
 } finally {
-  await stopChild(app);
-  await stopChild(fixture);
-  if (mountedDmg) await run("hdiutil", ["detach", mountedDmg, "-force"]).catch(() => undefined);
+  await stopChildProcess(app);
+  await fixture?.close();
+  if (mountedDmg) await runCommand("hdiutil", ["detach", mountedDmg, "-force"]).catch(() => undefined);
   if (installedDirectory) {
     const uninstaller = join(installedDirectory, "Uninstall Hoolypane.exe");
-    try { await run(uninstaller, ["/S"]); } catch { /* temporary directory removal remains authoritative */ }
+    try { await runCommand(uninstaller, ["/S"]); } catch { /* temporary directory removal remains authoritative */ }
   }
   if (temporary) {
     try {

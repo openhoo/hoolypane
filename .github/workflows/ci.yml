@@ -71,7 +71,8 @@ jobs:
         run: pnpm ${{ matrix.package-command }}
       - name: Smoke Linux package
         if: runner.os == 'Linux'
-        run: env -u DBUS_SESSION_BUS_ADDRESS -u WAYLAND_DISPLAY LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a pnpm smoke:desktop-package -- dist/desktop
+        # Geometry mirrors scripts/release-dry-run.mjs; flags anchored in tests/helpers/desktop-runtime.ts.
+        run: env -u DBUS_SESSION_BUS_ADDRESS -u WAYLAND_DISPLAY LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a --server-args='-screen 0 1920x1080x24' pnpm smoke:desktop-package -- dist/desktop
       - name: Smoke native package
         if: runner.os != 'Linux'
         run: pnpm smoke:desktop-package -- dist/desktop

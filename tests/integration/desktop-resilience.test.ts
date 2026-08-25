@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { IPC_CHANNELS } from "@hoolypane/contracts";
-import { launchDesktopApp, pollUntil, startFixtureServer, teardownDesktopSuite, type FixtureServer } from "../helpers/harness.js";
+import { fixturePages, launchDesktopApp, pollUntil, startFixtureServer, teardownDesktopSuite, type FixtureServer } from "../helpers/harness.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
 
 const FIXTURE_PORT = FIXTURE_PORTS.resilience;
@@ -13,28 +13,23 @@ let chrome: Page;
 let userDataDir = "";
 
 async function sourcePage(path = "/"): Promise<Page> {
-  const target = `http://127.0.0.1:${FIXTURE_PORT}${path}`;
   try {
-    return await pollUntil(async () => {
-      const candidates = application.context().pages().filter((page) => page.url() === target);
-      return candidates[0] ?? null;
-    }, 5_000);
+    return await pollUntil(async () => fixturePages(application, FIXTURE_PORT, path)[0] ?? null, 5_000);
   } catch (error) {
     throw new Error(`no fixture page at ${path} for port ${FIXTURE_PORT} within 5s (${error instanceof Error ? error.message : String(error)})`);
   }
 }
 
 async function waitForRemotePages(path: string, expected = 5): Promise<Page[]> {
-  const target = `http://127.0.0.1:${FIXTURE_PORT}${path}`;
   return pollUntil(async () => {
-    const pages = application.context().pages().filter((page) => page.url() === target);
+    const pages = fixturePages(application, FIXTURE_PORT, path);
     return pages.length === expected ? pages : null;
   }, 10_000);
 }
 
 async function waitForMirroredName(value: string): Promise<void> {
   await pollUntil(async () => {
-    const pages = application.context().pages().filter((page) => page.url().startsWith(`http://127.0.0.1:${FIXTURE_PORT}`));
+    const pages = fixturePages(application, FIXTURE_PORT);
     const values = await Promise.all(pages.map((page) => page.getByTestId("name").inputValue().catch(() => "")));
     return values.length === 5 && values.every((candidate) => candidate === value);
   }, 10_000);
@@ -103,7 +98,14 @@ describe("desktop replay and security resilience", () => {
     expect(await page.evaluate(() => navigator.permissions.query({ name: "geolocation" }).then((permission) => permission.state))).toBe("denied");
     const pageCount = application.context().pages().length;
     await page.evaluate(() => window.open("mailto:security@example.test"));
-    expect(application.context().pages()).toHaveLength(pageCount);
+    let stableSince = 0;
+    await pollUntil(async () => {
+      if (application.context().pages().length === pageCount) {
+        if (stableSince === 0) stableSince = Date.now();
+        else if (Date.now() - stableSince >= 300) return true;
+      } else stableSince = 0;
+      return null;
+    }, 2_000);
 
     const downloadState = await application.evaluate(async ({ webContents }, port) => {
       const pane = webContents.getAllWebContents().find((contents) => contents.getURL() === `http://127.0.0.1:${port}/next`);
@@ -140,13 +142,13 @@ describe("desktop replay and security resilience", () => {
       process.kill(pid, "SIGKILL");
     }
     await chrome.getByText(/render process gone/).first().waitFor({ state: "attached", timeout: 10_000 });
-    const healthy = await Promise.all(application.context().pages().filter((page) => page.url().startsWith(`http://127.0.0.1:${FIXTURE_PORT}`)).map((page) => page.title().catch(() => "crashed")));
+    const healthy = await Promise.all(fixturePages(application, FIXTURE_PORT).map((page) => page.title().catch(() => "crashed")));
     expect(healthy.filter((title) => title.startsWith("Nimbus Analytics")).length).toBeGreaterThanOrEqual(4);
   }, 20_000);
 
   it("blocks main-frame navigation to disallowed protocols", async () => {
     let target: Page | undefined;
-    for (const candidate of application.context().pages().filter((page) => page.url().startsWith(`http://127.0.0.1:${FIXTURE_PORT}`))) {
+    for (const candidate of fixturePages(application, FIXTURE_PORT)) {
       if ((await candidate.title().catch(() => "")).startsWith("Nimbus Analytics")) { target = candidate; break; }
     }
     if (!target) throw new Error("no healthy fixture pane for the protocol guard test");

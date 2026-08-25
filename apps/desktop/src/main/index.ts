@@ -365,7 +365,7 @@ async function acceptSourceAction(sourcePaneId: string, observed: unknown): Prom
   // coordinator queues can hold a task across a close+re-add of the same pane id) so outcomes
   // are attributed to the exact surface they ran against.
   const startEpochs = new Map<string, number | undefined>();
-  const outcomes = await coordinator.dispatch(envelope, targets, async (targetPaneId) => {
+  const outcomes = await coordinator.dispatch(targets, async (targetPaneId) => {
     startEpochs.set(targetPaneId, paneRegistry.getPane(targetPaneId)?.creationEpoch);
     await replayEnvelope(targetPaneId, envelope);
   });
@@ -531,6 +531,10 @@ if (!hasSingleInstanceLock) {
   void app.whenReady().then(launchChrome).catch(handleLaunchFailure);
 }
 app.on("activate", () => { void launchChrome().catch(handleLaunchFailure); });
+// macOS keep-alive (semantics lost in d831aac): closing the last window must not quit on darwin,
+// so the activate/second-instance relaunch paths above can restore the saved workspace. The
+// 'closed'-handler comment in createShellWindow already reasons on exactly this behavior.
+app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
 
 // Flush-on-quit: a workspace mutation racing app shutdown must still reach disk. Every quit
 // request is held (preventDefault) until queued commands plus every in-flight save tail have

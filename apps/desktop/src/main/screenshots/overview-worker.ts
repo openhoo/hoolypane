@@ -2,10 +2,8 @@ import { parentPort, workerData } from "node:worker_threads";
 import sharp, { type OverlayOptions } from "sharp";
 import { errorMessage } from "@hoolypane/contracts";
 import type { OverviewInput, OverviewWorkerResponse } from "./overview-protocol.js";
+import { OVERVIEW_ERROR_TILE_COLOR } from "./overview-shared.js";
 
-
-/** Error-tile background shared with the desktop-artifacts pixel-count gate, which asserts this exact RGB triplet survives compositing. */
-export const OVERVIEW_ERROR_TILE_COLOR = "#3a171b";
 
 function escapeXml(value: string): string {
   return value.replace(/[<>&"']/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" })[character] ?? character);

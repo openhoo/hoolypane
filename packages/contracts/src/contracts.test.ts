@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ActionEnvelopeSchema, ActionSchema, ChromeCommandSchema, ChromeStateSchema, HoolypaneConfigSchema, VIEWPORT_PRESETS, WorkspaceStateSchema, defaultWorkspace } from "./index.js";
+import { ActionSchema } from "./action.js";
+import { ActionEnvelopeSchema, ChromeCommandSchema, ChromeStateSchema, HoolypaneConfigSchema, VIEWPORT_PRESETS, WorkspaceStateSchema, defaultWorkspace } from "./index.js";
 
 describe("configuration", () => {
   it("applies all recording defaults", () => {

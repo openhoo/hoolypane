@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { errorMessage, RECORDING_FPS_VALUES } from "@hoolypane/contracts";
@@ -54,6 +55,27 @@ function parseCompositeGeometry(record: Record<string, unknown>, tracks: TrackGe
   return { tracks, composite: { width: geometry.outputWidth as number, height: geometry.outputHeight as number } };
 }
 
+// Certifies every entry of the manifest's own optional sha256 map: videos arrive freshly hashed
+// in result.sha256 under their `videos/<name>` keys; remaining entries (traces/*, run-state.json)
+// are hashed on demand. A corrupted or tampered payload must fail loudly instead of being
+// certified by ffprobe timeline/geometry agreement alone — mirrors the loud-failure philosophy
+// applied to degraded geometry/status checks above. Directories recorded before the hash
+// contract lack the optional map and skip certification.
+async function certifyManifestHashes(outputDir: string, manifestPath: string, record: Record<string, unknown>, verifiedHashes: Readonly<Record<string, string>>): Promise<void> {
+  const map: unknown = record.sha256;
+  if (typeof map !== "object" || map === null) return;
+  for (const [key, expected] of Object.entries(map)) {
+    if (typeof expected !== "string") continue;
+    let actual: string;
+    try {
+      actual = verifiedHashes[key] ?? createHash("sha256").update(await readFile(resolve(outputDir, key))).digest("hex");
+    } catch {
+      throw new Error(`${manifestPath} artifact ${key} fails sha256 certification`);
+    }
+    if (actual !== expected) throw new Error(`${manifestPath} artifact ${key} fails sha256 certification`);
+  }
+}
+
 export async function verifyDirectory(path: string): Promise<number> {
   const outputDir = resolve(path);
   const manifestPath = resolve(outputDir, "manifest.json");
@@ -75,6 +97,7 @@ export async function verifyDirectory(path: string): Promise<number> {
   if (manifestRecord.geometry !== undefined) expectedGeometry = parseCompositeGeometry(manifestRecord, tracks, manifestPath);
   const result = await verifyArtifacts(outputDir, fps, durationFrames, expectedGeometry);
   if (!result.success) throw new Error(result.error ?? "artifact verification failed");
+  await certifyManifestHashes(outputDir, manifestPath, manifestRecord, result.sha256);
   process.stdout.write(`Verified ${durationFrames} aligned frames in ${outputDir}\n`);
   return 0;
 }

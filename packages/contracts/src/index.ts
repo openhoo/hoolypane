@@ -1,4 +1,4 @@
-export { ActionEnvelopeSchema, ActionSchema, SCROLL_RATIO_MAX, SCROLL_RATIO_MIN } from "./action.js";
+export { ActionEnvelopeSchema, SCROLL_RATIO_MAX, SCROLL_RATIO_MIN } from "./action.js";
 export type { Action, ActionEnvelope, FlowEvent, LocatorSpec } from "./action.js";
 export { DEFAULT_COMPOSITE_BACKGROUND, HoolypaneConfigSchema, RECORDING_FPS_VALUES } from "./config.js";
 export type { HoolypaneConfig, ResolvedHoolypaneConfig, ResolvedRecordingConfig } from "./config.js";
@@ -8,5 +8,5 @@ export type { BoundsSnapshot, ChromeCommand, ReplayRequest, ReplayResult } from 
 export { VIEWPORT_PRESETS } from "./presets.js";
 export { ChromeStateSchema, DEFAULT_SHARED_URL, RUNTIME_PANE_DEFAULTS, WORKSPACE_VERSION, WorkspaceStateSchema, defaultWorkspace, paneFromViewport } from "./state.js";
 export type { ChromeState, ColorSchemeMode, EmulationSettings, LayoutMode, OverlayKey, PanePosition, PaneState, ThrottlingMode, WorkspaceState } from "./state.js";
-export { encodedDimension, MAX_ENCODED_DIMENSION, ViewportSpecSchema } from "./viewport.js";
+export { encodedDimension, formatViewportDimensions, MAX_ENCODED_DIMENSION, ViewportSpecSchema } from "./viewport.js";
 export type { ViewportSpec } from "./viewport.js";

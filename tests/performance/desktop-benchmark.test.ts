@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { launchDesktopApp, pollUntil, startFixtureServer, fixturePaneCount, teardownDesktopSuite, type FixtureServer } from "../helpers/harness.js";
+import { fixturePaneCount, fixturePages, launchDesktopApp, locateSourcePane, pollUntil, startFixtureServer, teardownDesktopSuite, type FixtureServer } from "../helpers/harness.js";
 import { clickPaneSurface } from "../integration/cdp-input.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
 
@@ -22,7 +22,7 @@ function percentile(values: readonly number[], quantile: number): number {
 }
 
 function remotePages(): Page[] {
-  return application.context().pages().filter((page) => page.url().startsWith(`http://127.0.0.1:${FIXTURE_PORT}`));
+  return fixturePages(application, FIXTURE_PORT);
 }
 
 async function waitForPaneCount(expected: number): Promise<void> {
@@ -82,7 +82,7 @@ describe("six-pane direct compositor", () => {
     await waitForPaneCount(6);
     const pages = remotePages();
     await Promise.all(pages.map((page) => page.getByTestId("apply").waitFor({ state: "visible" })));
-    const source = pages.find((page) => page.viewportSize()?.width === 1440) ?? pages[0]!;
+    const source = locateSourcePane(pages)!;
     const rssSamples: number[] = [await mainProcessRssBytes()];
 
     await Promise.all([chrome, ...pages].map((page) => page.evaluate(() => {

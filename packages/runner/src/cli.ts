@@ -2,7 +2,7 @@
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { errorMessage } from "@hoolypane/contracts";
-import { parseCliArguments, TOP_LEVEL_USAGE } from "./cli-arguments.js";
+import { EXIT_INTERRUPTED, parseCliArguments, TOP_LEVEL_USAGE } from "./cli-arguments.js";
 import { runFlow } from "./run-flow.js";
 import { verifyDirectory } from "./verify.js";
 
@@ -18,7 +18,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     }
     const args = parseCliArguments(argv);
     const result = await runFlow(args);
-    if (result.status === "interrupted") return 130;
+    if (result.status === "interrupted") return EXIT_INTERRUPTED;
     return result.status === "success" ? 0 : 1;
   } catch (error) {
     process.stderr.write(`${errorMessage(error)}\n`);

@@ -1,6 +1,6 @@
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { launchDesktopApp, pollUntil, startFixtureServer, teardownDesktopSuite, waitForFixturePanes, type FixtureServer } from "../helpers/harness.js";
+import { fixturePages, launchDesktopApp, locateSourcePane, pollUntil, startFixtureServer, teardownDesktopSuite, waitForFixturePanes, type FixtureServer } from "../helpers/harness.js";
 import { IPC_CHANNELS } from "@hoolypane/contracts";
 import { clickPaneSurface } from "./cdp-input.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
@@ -30,8 +30,7 @@ async function paneSnapshots(): Promise<Array<PaneSnapshot | null>> {
 }
 
 function sourcePage(): Page {
-  const remotePages = application.context().pages().filter((page) => page.url().startsWith(`http://127.0.0.1:${FIXTURE_PORT}`));
-  const source = remotePages.find((page) => page.viewportSize()?.width === 1440) ?? remotePages[0];
+  const source = locateSourcePane(fixturePages(application, FIXTURE_PORT));
   if (!source) throw new Error("source pane missing");
   return source;
 }
@@ -125,22 +124,22 @@ describe("direct Electron surfaces", () => {
     // invalidates execution contexts or drops in-flight mirrored input; retry the whole
     // action together with its convergence poll once before giving up.
     const withReloadRetry = async (label: string, action: () => Promise<void>, predicate: (snapshots: readonly PaneSnapshot[]) => boolean): Promise<void> => {
+      let firstError: unknown;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
           await action();
           await waitForPaneState(predicate, label);
           return;
         } catch (error) {
-          if (attempt === 1) throw error;
+          if (attempt === 1) throw new Error(`${label} failed on retry (first attempt: ${firstError instanceof Error ? firstError.message : String(firstError)})`, { cause: error });
+          firstError = error;
         }
       }
     };
     await withReloadRetry("fill", () => fillSource("Mirrored value"), (snapshots) => snapshots.every((snapshot) => snapshot.name === "Mirrored value"));
-    await clickPaneSurface(application, chrome, { port: FIXTURE_PORT, testId: "subscribe" });
-    await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.checked), "check");
+    await withReloadRetry("check", () => clickPaneSurface(application, chrome, { port: FIXTURE_PORT, testId: "subscribe" }), (snapshots) => snapshots.every((snapshot) => snapshot.checked));
     await withReloadRetry("select", selectSourceDark, (snapshots) => snapshots.every((snapshot) => snapshot.theme === "dark"));
-    await clickPaneSurface(application, chrome, { port: FIXTURE_PORT, testId: "apply", expectedStatus: "applied" });
-    await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.status === "applied"), "click");
+    await withReloadRetry("click", () => clickPaneSurface(application, chrome, { port: FIXTURE_PORT, testId: "apply", expectedStatus: "applied" }), (snapshots) => snapshots.every((snapshot) => snapshot.status === "applied"));
     await withReloadRetry("press", pressSourceEnter, (snapshots) => snapshots.every((snapshot) => snapshot.status === "entered"));
     await withReloadRetry("scroll", scrollSource, (snapshots) => snapshots.every((snapshot) => snapshot.scrollRatio > 0.95));
 

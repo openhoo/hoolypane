@@ -263,9 +263,9 @@ function matchSuppressedClick(event: MouseEvent): { actionId: number; entry: Sup
     // times out after 5s and marks the pane outOfSync although the toggle itself landed.
     if (!box || (entry.kind !== "click" && entry.kind !== "check")) continue;
     if (event.clientX >= box.x - 2 && event.clientX <= box.x + box.width + 2 && event.clientY >= box.y - 2 && event.clientY <= box.y + box.height + 2) {
+      if (matchedEntry) return undefined; // a second qualifying entry makes the acknowledgment ambiguous — send no confirm rather than guess
       matchedActionId = actionId;
       matchedEntry = entry;
-      break;
     }
   }
   if (!matchedActionId || !matchedEntry) return undefined;
@@ -366,7 +366,10 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
     request = ReplayRequestSchema.parse(value);
   } catch (error) {
     const raw = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-    const actionId = typeof raw.actionId === "number" && Number.isInteger(raw.actionId) && raw.actionId > 0 ? raw.actionId : 1;
+    const actionId = typeof raw.actionId === "number" && Number.isInteger(raw.actionId) && raw.actionId > 0 ? raw.actionId : undefined;
+    // An unusable actionId cannot be attributed to any waiter — drop the reply and let main's
+    // own timeout fail the exchange with a correctly attributed reason.
+    if (actionId === undefined) return;
     const phase = REPLAY_RESULT_PHASES.find((candidate) => candidate === raw.phase) ?? "resolve";
     ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId, phase, ok: false, reason: failureReason(error) } satisfies ReplayResult);
     return;

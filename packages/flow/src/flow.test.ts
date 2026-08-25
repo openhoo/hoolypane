@@ -89,6 +89,16 @@ describe("flow API", () => {
     expect(() => serializeFlow([{ actionId: 1, documentGeneration: 0, sourcePaneId: "pane-1", action }])).toThrow(/Invalid scroll ratios/);
   });
 
+  it("rejects non-number scroll ratios instead of coercing them", () => {
+    const action = {
+      kind: "scroll",
+      locator: { kind: "css", value: "#feed" },
+      horizontalRatio: null,
+      verticalRatio: true,
+    } as unknown as Action;
+    expect(() => serializeFlow([{ actionId: 1, documentGeneration: 0, sourcePaneId: "pane-1", action }])).toThrow(/Invalid scroll ratios/);
+  });
+
   it("aggregates per-screen failures into an AggregateError with screen ids and a failed event", async () => {
     const events: unknown[] = [];
     const screens = ["one", "two"].map((id, index) => ({ id, viewport: VIEWPORT_PRESETS[index]!, page: {} as never }));

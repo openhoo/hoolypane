@@ -1,10 +1,11 @@
-import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
 import { electronExecutablePath } from "../electron-executable.js";
+import { LINUX_SOFTWARE_RENDERING_ARGS, type FixtureServer } from "./desktop-runtime.js";
+export { startFixtureServer, type FixtureServer } from "./desktop-runtime.js";
 
 const REPO_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
@@ -24,47 +25,6 @@ export async function pollUntil<T>(
   throw new Error(`pollUntil timed out after ${timeoutMs}ms (last observation: ${JSON.stringify(latest)})`);
 }
 
-export interface FixtureServer {
-  /** Terminates the fixture promptly even when Chromium panes keep keep-alive sockets open. */
-  close(): Promise<void>;
-}
-
-/**
- * Spawns tests/fixtures/server.mjs and resolves once it reports readiness.
- * The child's stdout/stderr are piped so startup errors (e.g. EADDRINUSE) surface
- * in failure messages instead of being discarded.
- */
-export async function startFixtureServer(port: number): Promise<FixtureServer> {
-  const child = spawn(process.execPath, [resolve(REPO_ROOT, "tests/fixtures/server.mjs")], {
-    env: { ...process.env, PORT: String(port) },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let output = "";
-  const ready = Promise.withResolvers<void>();
-  child.stdout?.on("data", (chunk: Buffer) => {
-    const text = chunk.toString();
-    output += text;
-    if (text.includes("fixture ready")) ready.resolve();
-  });
-  child.stderr?.on("data", (chunk: Buffer) => {
-    output += chunk.toString();
-  });
-  child.once("error", ready.reject);
-  child.once("exit", (code) => ready.reject(new Error(`fixture server failed before readiness (code ${code}): ${output.trim()}`)));
-  await ready.promise;
-  return {
-    async close(): Promise<void> {
-      if (child.exitCode !== null || child.signalCode !== null) return;
-      const exited = Promise.withResolvers<void>();
-      child.once("exit", () => exited.resolve());
-      child.kill("SIGTERM");
-      const forceExitTimer = setTimeout(() => child.kill("SIGKILL"), 2_000);
-      await exited.promise;
-      clearTimeout(forceExitTimer);
-    },
-  };
-}
-
 /** Counts fixture-origin WebContents through Electron's authoritative registry. */
 export async function fixturePaneCount(application: ElectronApplication, port: number): Promise<number> {
   return application.evaluate(({ webContents }, fixturePort) =>
@@ -80,6 +40,21 @@ export async function waitForFixturePanes(
   timeoutMs = 10_000,
 ): Promise<void> {
   await pollUntil(async () => await fixturePaneCount(application, port) === expected ? expected : null, timeoutMs);
+}
+
+/**
+ * Enumerates the fixture server's Playwright pages. Without `path`, every page whose URL
+ * starts with the fixture origin matches; with `path`, only the exact `${origin}${path}`
+ * URL matches, preserving each suite's fuzzy-vs-strict enumeration semantics.
+ */
+export function fixturePages(application: ElectronApplication, port: number, path?: string): Page[] {
+  const origin = `http://127.0.0.1:${port}`;
+  return application.context().pages().filter((page) => path === undefined ? page.url().startsWith(origin) : page.url() === `${origin}${path}`);
+}
+
+/** Picks the desktop-1440 source pane among fixture pages, falling back to the first page. */
+export function locateSourcePane(pages: readonly Page[], minWidth = 1440): Page | undefined {
+  return pages.find((page) => page.viewportSize()?.width === minWidth) ?? pages[0];
 }
 
 interface DesktopLaunch {
@@ -115,7 +90,7 @@ export async function launchDesktopApp(options: LaunchDesktopAppOptions): Promis
       delete environment.WAYLAND_DISPLAY;
     }
     const graphicsArguments =
-      process.platform === "linux" ? ["--ozone-platform=x11", "--use-gl=angle", "--use-angle=swiftshader"] : [];
+      process.platform === "linux" ? LINUX_SOFTWARE_RENDERING_ARGS : [];
     application = await electron.launch({
       executablePath: electronExecutablePath(),
       args: [

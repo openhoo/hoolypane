@@ -60,6 +60,23 @@ function exportTarget(exportValue: unknown): string | undefined {
   return undefined;
 }
 
+// Shared package-manifest JSON boundary for both resolvers below: parse the text and require a
+// plain (non-null, non-array) object, reporting WHICH clause failed so each callsite keeps its
+// own error wording byte-identical while the validate-as-object logic — and its drift risk —
+// lives in exactly one place.
+type ParsedManifest = { ok: true; value: Record<string, unknown> } | { ok: false; reason: "json"; cause: unknown } | { ok: false; reason: "shape" };
+
+function parseJsonObject(text: string): ParsedManifest {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch (error) {
+    return { ok: false, reason: "json", cause: error };
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, reason: "shape" };
+  return { ok: true, value: value as Record<string, unknown> }; // JSON boundary; null/array/non-object rejected above.
+}
+
 // Resolves a bare or deep "@hoolypane/*" specifier by walking up from the runner installation,
 // probing node_modules for the PACKAGE directory only. Root imports keep the src/index.ts dev
 // shortcut; subpath imports must be mapped by the package's exports field — pattern keys ("./x/*")
@@ -75,14 +92,11 @@ function hoolypaneEntry(specifier: string): string {
         const sourceEntry = join(packageDir, "src", "index.ts");
         if (existsSync(sourceEntry)) return sourceEntry;
       }
-      let manifest: unknown;
-      try {
-        manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-      } catch (error) {
-        throw new Error(`Cannot resolve ${specifier}: ${manifestPath} is not valid JSON (${errorMessage(error)})`);
-      }
-      if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error(`Cannot resolve ${specifier}: ${manifestPath} is not a valid package manifest`);
-      const manifestRecord = manifest as Record<string, unknown>; // JSON boundary; null/array/non-object rejected above.
+      const parsed = parseJsonObject(readFileSync(manifestPath, "utf8"));
+      if (!parsed.ok) throw parsed.reason === "json"
+        ? new Error(`Cannot resolve ${specifier}: ${manifestPath} is not valid JSON (${errorMessage(parsed.cause)})`)
+        : new Error(`Cannot resolve ${specifier}: ${manifestPath} is not a valid package manifest`);
+      const manifestRecord = parsed.value;
       const exportsField: unknown = manifestRecord.exports;
       const exportTable: Record<string, unknown> | undefined = exportsField && typeof exportsField === "object" && !Array.isArray(exportsField)
         ? exportsField as Record<string, unknown> // keys are arbitrary specifiers by contract.
@@ -141,19 +155,15 @@ function playwrightEntry(specifier: string): string {
     dir = parent;
   }
   const manifestPath = join(dir, "package.json");
-  let manifest: unknown;
-  try {
-    manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  } catch {
-    if (directResolveFailed) throw new Error(`Cannot resolve ${specifier}: ${manifestPath} is not valid JSON`);
-    return located;
+  const parsed = parseJsonObject(readFileSync(manifestPath, "utf8"));
+  if (!parsed.ok && directResolveFailed) {
+    throw parsed.reason === "json"
+      ? new Error(`Cannot resolve ${specifier}: ${manifestPath} is not valid JSON`)
+      : new Error(`Cannot resolve ${specifier}: ${manifestPath} is not a valid package manifest`);
   }
-  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
-    if (directResolveFailed) throw new Error(`Cannot resolve ${specifier}: ${manifestPath} is not a valid package manifest`);
-    return located;
-  }
+  if (!parsed.ok) return located;
   // JSON boundary: member reads below are guarded by in-checks on this record.
-  const manifestRecord = manifest as Record<string, unknown>;
+  const manifestRecord = parsed.value;
   if (!("name" in manifestRecord) || manifestRecord.name !== "playwright") return degrade();
   if (!("exports" in manifestRecord)) return degrade();
   const exportTable: unknown = manifestRecord.exports;
