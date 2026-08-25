@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
-import { basename, join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { basename, dirname, join } from "node:path";
 import { WorkspaceStateSchema, defaultWorkspace, type WorkspaceState } from "../panes/workspace.js";
 
 const SUPPORTED_WORKSPACE_VERSION = 1;
@@ -66,7 +67,7 @@ function pruneOrphanPositions(state: WorkspaceState): WorkspaceState {
 
 /** Removes crash-orphaned `*.tmp` siblings of the workspace file left behind by interrupted saves. */
 export async function sweepStaleTemporaries(file: string): Promise<void> {
-  const directory = join(file, "..");
+  const directory = dirname(file);
   const prefix = `${basename(file)}.`;
   let entries: string[];
   try {
@@ -88,7 +89,7 @@ export async function saveWorkspace(file: string, state: WorkspaceState | (() =>
   const previous = saveTails.get(file) ?? Promise.resolve();
   // A provider is evaluated when the tail executes, not when it is enqueued, so mutations
   // landing while earlier writes settle are still included.
-  const task = previous.catch(() => undefined).then(() => writeWorkspace(file, typeof state === "function" ? state() : state));
+  const task = previous.then(() => writeWorkspace(file, typeof state === "function" ? state() : state));
   saveTails.set(
     file,
     task.then(
@@ -105,7 +106,7 @@ export async function flushWorkspaceSaves(): Promise<void> {
 }
 
 async function writeWorkspace(file: string, state: WorkspaceState): Promise<void> {
-  const directory = join(file, "..");
+  const directory = dirname(file);
   const temporary = `${file}.${process.pid}.${Date.now()}-${++temporarySequence}.tmp`;
   const handle = await fs.open(temporary, "w", 0o600);
   try {
@@ -128,5 +129,17 @@ async function writeWorkspace(file: string, state: WorkspaceState): Promise<void
     }
   } catch {
     /* directory fsync unavailable */
+  }
+}
+
+/** Writes via a same-directory temp file + rename so a mid-write failure never leaves a torn file behind. */
+export async function writeFileAtomic(path: string, contents: string | Uint8Array): Promise<void> {
+  const temporaryPath = `${path}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(temporaryPath, contents);
+    await fs.rename(temporaryPath, path);
+  } catch (error) {
+    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
   }
 }

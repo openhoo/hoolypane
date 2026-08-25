@@ -1,7 +1,7 @@
 import { rm } from "node:fs/promises";
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { launchDesktopApp, pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
+import { launchDesktopApp, pollUntil, startFixtureServer, waitForFixturePanes, type FixtureServer } from "../helpers/harness.js";
 import { IPC_CHANNELS } from "@hoolypane/contracts";
 import { clickPaneSurface } from "./cdp-input.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
@@ -47,33 +47,14 @@ async function pressSourceEnter(): Promise<void> {
 
 async function selectSourceDark(): Promise<void> {
   await sourcePage().getByTestId("theme").focus();
-  await application.evaluate(async ({ webContents }, port) => {
-    const candidates = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`));
-    let source: (typeof candidates)[number] | undefined;
-    for (const candidate of candidates) {
-      if (await candidate.executeJavaScript("innerWidth") === 1440) { source = candidate; break; }
-    }
-    if (!source) throw new Error("desktop source pane missing");
-    await source.debugger.sendCommand("Input.dispatchKeyEvent", {
-      type: "keyDown", key: "d", code: "KeyD", text: "d", unmodifiedText: "d", windowsVirtualKeyCode: 68,
-    });
-    await source.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "d", code: "KeyD", windowsVirtualKeyCode: 68 });
-  }, FIXTURE_PORT);
+  await sourcePage().keyboard.press("d");
 }
 
 async function scrollSource(): Promise<void> {
   // Scrolls the source scroller programmatically: the observed scroll event drives the same
   // mirror pipeline (envelope -> apply-dom scrollTo replay) as a native wheel, without depending
   // on emulated-viewport pointer coordinates.
-  await application.evaluate(async ({ webContents }, port) => {
-    const candidates = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`));
-    let source: (typeof candidates)[number] | undefined;
-    for (const candidate of candidates) {
-      if (await candidate.executeJavaScript("innerWidth") === 1440) { source = candidate; break; }
-    }
-    if (!source) throw new Error("desktop source pane missing");
-    await source.executeJavaScript(`document.querySelector('[data-testid="scroller"]').scrollTo(0, document.querySelector('[data-testid="scroller"]').scrollHeight)`);
-  }, FIXTURE_PORT);
+  await sourcePage().getByTestId("scroller").evaluate((element) => element.scrollTo(0, element.scrollHeight));
 }
 
 beforeAll(async () => {
@@ -117,12 +98,7 @@ describe("direct Electron surfaces", () => {
 
   it("creates direct emulated panes with hardened sessions and tears them down", async () => {
     // Native child views expose no readiness event to Playwright; poll Electron's authoritative WebContents registry.
-    await pollUntil(async () => {
-      const count = await application.evaluate(({ webContents }, port) =>
-        webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`)).length,
-        FIXTURE_PORT);
-      return count === 5 || null;
-    }, 10_000);
+    await waitForFixturePanes(application, FIXTURE_PORT, 5);
     const chromeText = await chrome.locator("body").innerText();
     expect(chromeText).toContain("Desktop 1440");
     const initial = await application.evaluate(async ({ webContents }, port) => {
@@ -174,12 +150,7 @@ describe("direct Electron surfaces", () => {
     await withReloadRetry("scroll", scrollSource, (snapshots) => snapshots.every((snapshot) => snapshot.scrollRatio > 0.95));
 
     await chrome.getByRole("button", { name: "Add custom" }).click();
-    await pollUntil(async () => {
-      const count = await application.evaluate(({ webContents }, port) =>
-        webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`)).length,
-        FIXTURE_PORT);
-      return count === 6 || null;
-    }, 10_000);
+    await waitForFixturePanes(application, FIXTURE_PORT, 6);
     await chrome.getByRole("button", { name: "Rotate" }).first().click();
     // rotatePane swaps the viewport dimensions; the emulated pane must report them swapped.
     await pollUntil(async () => await application.evaluate(async ({ webContents }, port) => {
@@ -193,11 +164,6 @@ describe("direct Electron surfaces", () => {
     await chrome.getByRole("button", { name: "Unfocus" }).first().click();
     await pollUntil(async () => await chrome.locator(".pane-card.focused").count() === 0 || null, 10_000);
     await chrome.getByRole("button", { name: "Close" }).last().click();
-    await pollUntil(async () => {
-      const count = await application.evaluate(({ webContents }, port) =>
-        webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`)).length,
-        FIXTURE_PORT);
-      return count === 5 || null;
-    }, 10_000);
+    await waitForFixturePanes(application, FIXTURE_PORT, 5);
   }, 60_000);
 });

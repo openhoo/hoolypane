@@ -1,6 +1,4 @@
 import { app, BrowserWindow, dialog, ipcMain, type IpcMainEvent } from "electron";
-import { randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
 import { dirname, extname, isAbsolute, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -11,6 +9,8 @@ import {
   PaneObservedActionSchema,
   RecordFailureSchema,
   ReplayResultSchema,
+  RUNTIME_PANE_DEFAULTS,
+  staleGenerationMessage,
   type ActionEnvelope,
   type ChromeCommand,
   type ReplayRequest,
@@ -20,7 +20,8 @@ import { FlowDraft } from "./interactions/flow-draft.js";
 import { InteractionCoordinator } from "./interactions/interaction-coordinator.js";
 import { PaneRegistry } from "./panes/pane-registry.js";
 import { normalizeUrl } from "./panes/url.js";
-import { flushWorkspaceSaves, loadWorkspace, saveWorkspace, sweepStaleTemporaries } from "./persistence/workspace-store.js";
+import { flushWorkspaceSaves, loadWorkspace, saveWorkspace, sweepStaleTemporaries, writeFileAtomic } from "./persistence/workspace-store.js";
+import { report } from "./report.js";
 import { captureOverview, capturePane } from "./screenshots/screenshot-service.js";
 
 let chromeWindow: BrowserWindow | undefined;
@@ -30,7 +31,7 @@ let workspacePath = "";
 let nextActionId = 1;
 const coordinator = new InteractionCoordinator();
 const flowDraft = new FlowDraft();
-const pendingReplay = new Map<string, { resolve: (result: ReplayResult) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; epoch?: number | undefined }>();
+const pendingReplay = new Map<string, { resolve: (result: ReplayResult) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; epoch: number }>();
 let chromeStarting = false;
 let commandQueue = Promise.resolve();
 let flushBarrier = false;
@@ -58,9 +59,6 @@ function publishState(): void {
   chromeWindow.webContents.send(IPC_CHANNELS.state, { ...registry.getState(), recording: flowDraft.isActive, lastError });
 }
 
-function report(paneId: string, message: string): void {
-  console.error(`[hoolypane] ${paneId === "" ? "main" : `pane ${paneId}`}: ${message}`);
-}
 function testFlowSavePath(): string | undefined {
   if (process.env.HOOLYPANE_TEST_MODE !== "1") return undefined;
   if (process.env.HOOLYPANE_TEST_FLOW_SAVE_CANCEL === "1") return "";
@@ -88,70 +86,58 @@ function commitFlowDraft(): void {
 /** Record-stop outcome: "blocked" reports unresolved replay failures after the draft was discarded; "handled" covers persisted, empty, and abandoned saves. */
 type StopFlowOutcome = { kind: "blocked"; reasons: string[] } | { kind: "handled" };
 
-/** Writes via a same-directory temp file + rename so a mid-write failure never leaves a torn flow export. */
-async function writeFileAtomic(path: string, contents: string): Promise<void> {
-  const temporaryPath = `${path}.${randomUUID()}.tmp`;
-  try {
-    await fs.writeFile(temporaryPath, contents, "utf8");
-    await fs.rename(temporaryPath, path);
-  } catch (error) {
-    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
-    throw error;
-  }
-}
 
-async function stopAndSaveFlow(): Promise<StopFlowOutcome> {
-  const paneRegistry = registry;
-  const chrome = chromeWindow;
-  if (!paneRegistry || !chrome) return { kind: "handled" };
+/**
+ * Flush-barrier protocol shared by record-stop and navigate: every pane is told to flush its
+ * pending observations, actions observed while the barrier is up are buffered instead of applied
+ * (see acceptSourceAction), and the buffer drains once the barrier lifts.
+ */
+async function runWithFlushBarrier<T>(paneRegistry: PaneRegistry, settle: () => Promise<T>): Promise<T> {
   flushBarrier = true;
   try {
     for (const record of paneRegistry.panes.values()) record.view.webContents.send(IPC_CHANNELS.flush);
-    const { promise: flushed, resolve: flushSettled } = Promise.withResolvers<void>();
-    setTimeout(flushSettled, 325);
-    await flushed;
+    return await settle();
   } finally {
     flushBarrier = false;
     drainDeferredActions();
   }
-  // The drain spawned above runs asynchronously: let it finish so every buffered action is
+}
+async function stopAndSaveFlow(): Promise<StopFlowOutcome> {
+  const paneRegistry = registry;
+  const chrome = chromeWindow;
+  if (!paneRegistry || !chrome) return { kind: "handled" };
+  await runWithFlushBarrier(paneRegistry, async () => {
+    const { promise: flushed, resolve: flushSettled } = Promise.withResolvers<void>();
+    setTimeout(flushSettled, 325);
+    await flushed;
+  });
+  // The drain spawned by the barrier lift runs asynchronously: let it finish so every buffered action is
   // reflected in the draft BEFORE stop() computes the export outcome.
   if (activeDrain) await activeDrain;
+  // Every completed stop commits exactly once; a thrown writeFileAtomic skips the commit so a failed
+  // save leaves the recording retryable.
+  const finish = (outcome: StopFlowOutcome): StopFlowOutcome => { commitFlowDraft(); return outcome; };
   try {
     const stopped = flowDraft.stop();
     // A trailing replay failure is a discardable outcome, not a wedge: abandon the save
     // here so the draft can never stay active past record-stop; the caller surfaces the
     // reasons as a user-visible lastError instead of this throwing past cleanup.
-    if (stopped.kind === "blocked") {
-      commitFlowDraft();
-      return { kind: "blocked", reasons: stopped.reasons };
-    }
-    if (stopped.kind === "empty") {
-      commitFlowDraft();
-      return { kind: "handled" };
-    }
+    if (stopped.kind === "blocked") return finish({ kind: "blocked", reasons: stopped.reasons });
+    if (stopped.kind === "empty") return finish({ kind: "handled" });
     const directPath = testFlowSavePath();
-    if (directPath === "") {
-      commitFlowDraft();
-      return { kind: "handled" };
-    }
+    if (directPath === "") return finish({ kind: "handled" });
     if (directPath) {
       await writeFileAtomic(directPath, stopped.source);
-      commitFlowDraft();
-      return { kind: "handled" };
+      return finish({ kind: "handled" });
     }
     const selection = await dialog.showSaveDialog(chrome, {
       title: "Save Hoolypane flow",
       defaultPath: "hoolypane-flow.ts",
       filters: [{ name: "TypeScript", extensions: ["ts"] }],
     });
-    if (selection.canceled || !selection.filePath) {
-      commitFlowDraft();
-      return { kind: "handled" };
-    }
+    if (selection.canceled || !selection.filePath) return finish({ kind: "handled" });
     await writeFileAtomic(selection.filePath, stopped.source);
-    commitFlowDraft();
-    return { kind: "handled" };
+    return finish({ kind: "handled" });
   } finally {
     publishState();
   }
@@ -174,17 +160,7 @@ async function handleCommand(command: ChromeCommand): Promise<void> {
     case "rename": paneRegistry.rename(command.paneId, command.name); break;
     case "rotate": paneRegistry.rotate(command.paneId); break;
     case "focus": paneRegistry.focus(command.paneId); break;
-    case "navigate": {
-      flushBarrier = true;
-      try {
-        for (const record of paneRegistry.panes.values()) record.view.webContents.send(IPC_CHANNELS.flush);
-        await paneRegistry.navigate(command.url);
-      } finally {
-        flushBarrier = false;
-        drainDeferredActions();
-      }
-      break;
-    }
+    case "navigate": await runWithFlushBarrier(paneRegistry, () => paneRegistry.navigate(command.url)); break;
     case "back": paneRegistry.back(command.paneId); break;
     case "forward": paneRegistry.forward(command.paneId); break;
     case "reload": paneRegistry.reload(command.paneId); break;
@@ -201,7 +177,7 @@ async function handleCommand(command: ChromeCommand): Promise<void> {
       // Drop stale buffered actions so a previous session's leftovers never seed the new recording.
       deferredActions.length = 0;
       const firstPane = paneRegistry.getState().order[0];
-      if (firstPane) flowDraft.start(paneRegistry.getState().sharedUrl, firstPane, nextActionId++, Date.now());
+      if (firstPane) flowDraft.start(paneRegistry.getState().sharedUrl, firstPane, nextActionId++);
       break;
     }
     case "record-stop": {
@@ -234,7 +210,7 @@ function replayKey(paneId: string, actionId: number, phase: ReplayResult["phase"
   return `${paneId}:${actionId}:${phase}`;
 }
 
-function waitForReplayResult(paneId: string, actionId: number, phase: ReplayResult["phase"], epoch?: number): Promise<ReplayResult> {
+function waitForReplayResult(paneId: string, actionId: number, phase: ReplayResult["phase"], epoch: number): Promise<ReplayResult> {
   const key = replayKey(paneId, actionId, phase);
   const { promise, resolve, reject } = Promise.withResolvers<ReplayResult>();
   const timer = setTimeout(() => {
@@ -288,7 +264,7 @@ async function applyCdp(paneId: string, envelope: ActionEnvelope, resolved: Repl
   const record = registry?.getPane(paneId);
   const box = resolved.box;
   if (!record || !box) throw new Error("target did not provide an element box");
-  if (record.documentGeneration !== envelope.documentGeneration) throw new Error(`stale document generation ${envelope.documentGeneration}, current ${record.documentGeneration}`);
+  if (record.documentGeneration !== envelope.documentGeneration) throw new Error(staleGenerationMessage(envelope.documentGeneration, record.documentGeneration));
   const cdp = record.view.webContents.debugger;
   const scale = registry?.getInputScale(paneId) ?? 1;
   const x = (box.x + box.width / 2) * scale;
@@ -313,7 +289,7 @@ async function applyCdp(paneId: string, envelope: ActionEnvelope, resolved: Repl
     await cdp.sendCommand("Input.dispatchKeyEvent", pressKeyUpEvent(action.key));
   }
   // A navigation may start between resolve and native input delivery; refuse to count the action as applied then.
-  if (record.documentGeneration !== envelope.documentGeneration) throw new Error(`stale document generation ${envelope.documentGeneration}, current ${record.documentGeneration}`);
+  if (record.documentGeneration !== envelope.documentGeneration) throw new Error(staleGenerationMessage(envelope.documentGeneration, record.documentGeneration));
 }
 
 async function replayEnvelope(paneId: string, envelope: ActionEnvelope): Promise<void> {
@@ -368,7 +344,6 @@ async function acceptSourceAction(sourcePaneId: string, observed: unknown): Prom
     documentGeneration: source.documentGeneration,
     sourcePaneId,
     action: source.action,
-    recordedAtUnixMs: Date.now(),
   });
   flowDraft.append(envelope, draftGeneration);
   if (!paneRegistry.getState().syncEnabled) return;
@@ -431,7 +406,7 @@ async function createChrome(): Promise<void> {
   if (!loaded.persistable) lastError = "workspace.json was written by a newer Hoolypane version or is unreadable — automatic saving is disabled for this session";
   let workspace = {
     ...loaded.state,
-    panes: loaded.state.panes.map((pane) => ({ ...pane, canGoBack: false, canGoForward: false, loading: false, failure: null, outOfSync: null })),
+    panes: loaded.state.panes.map((pane) => ({ ...pane, ...RUNTIME_PANE_DEFAULTS })),
   };
   const urlIndex = process.argv.indexOf("--url");
   const requestedUrl = urlIndex >= 0 ? process.argv[urlIndex + 1] : undefined;
@@ -496,18 +471,18 @@ async function createChrome(): Promise<void> {
 }
 
 app.commandLine.appendSwitch("disable-background-timer-throttling");
-  // Surface relaunch failures instead of swallowing them: prefer the renderer error surface,
-  // fall back to quitting when no window exists to show anything in.
-  const handleLaunchFailure = (error: unknown): void => {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(message);
-    if (chromeWindow && !chromeWindow.isDestroyed()) {
-      lastError = `failed to (re)open the Hoolypane window: ${message}`;
-      publishState();
-    } else {
-      app.quit();
-    }
-  };
+// Surface relaunch failures instead of swallowing them: prefer the renderer error surface,
+// fall back to quitting when no window exists to show anything in.
+const handleLaunchFailure = (error: unknown): void => {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message);
+  if (chromeWindow && !chromeWindow.isDestroyed()) {
+    lastError = `failed to (re)open the Hoolypane window: ${message}`;
+    publishState();
+  } else {
+    app.quit();
+  }
+};
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   app.quit();
@@ -575,53 +550,51 @@ async function launchChrome(): Promise<void> {
   }
 }
 
-  ipcMain.on(IPC_CHANNELS.bounds, (event, value: unknown) => {
-    if (!trustedChrome(event)) return;
-    try { registry?.applyBounds(BoundsSnapshotSchema.parse(value)); } catch (error) { report("", error instanceof Error ? error.message : String(error)); }
-  });
-  ipcMain.on(IPC_CHANNELS.command, (event, value: unknown) => {
-    if (!trustedChrome(event)) return;
-    try {
-      commandQueue = commandQueue
-        .then(() => handleCommand(ChromeCommandSchema.parse(value)))
-        .catch((error: unknown) => {
-          lastError = error instanceof Error ? error.message : String(error);
-          report("", lastError);
-          publishState();
-        });
-    } catch (error) { report("", error instanceof Error ? error.message : String(error)); }
-  });
-  ipcMain.on(IPC_CHANNELS.stateRequest, (event) => { if (!trustedChrome(event)) return; if (chromeWindow && registry) publishState(); });
-  ipcMain.on(IPC_CHANNELS.paneAction, (event, value: unknown) => {
-    const paneId = sourcePane(event);
-    if (!paneId) return;
-    void acceptSourceAction(paneId, value).catch((error: unknown) => report(paneId, error instanceof Error ? error.message : String(error)));
-  });
-  ipcMain.on(IPC_CHANNELS.recordFailure, (event, value: unknown) => {
-    const paneId = sourcePane(event);
-    if (!paneId) return;
-    try {
-      const failure = RecordFailureSchema.parse(value);
-      // Only meaningful mid-recording: a failed recorded action must surface to the user.
-      if (!flowDraft.isActive) return;
-      lastError = `pane ${paneId}: recording failed: ${failure.reason}`;
-      report(paneId, `recording failed: ${failure.reason}`);
+ipcMain.on(IPC_CHANNELS.bounds, (event, value: unknown) => {
+  if (!trustedChrome(event)) return;
+  try { registry?.applyBounds(BoundsSnapshotSchema.parse(value)); } catch (error) { report("", error instanceof Error ? error.message : String(error)); }
+});
+ipcMain.on(IPC_CHANNELS.command, (event, value: unknown) => {
+  if (!trustedChrome(event)) return;
+  commandQueue = commandQueue
+    .then(() => handleCommand(ChromeCommandSchema.parse(value)))
+    .catch((error: unknown) => {
+      lastError = error instanceof Error ? error.message : String(error);
+      report("", lastError);
       publishState();
-    } catch (error) { report(paneId, error instanceof Error ? error.message : String(error)); }
-  });
-  ipcMain.on(IPC_CHANNELS.replayResult, (event, value: unknown) => {
-    const paneId = sourcePane(event);
-    if (!paneId) return;
-    try {
-      const parsed = ReplayResultSchema.parse(value);
-      const key = replayKey(paneId, parsed.actionId, parsed.phase);
-      const pending = pendingReplay.get(key);
-      if (!pending) return;
-      clearTimeout(pending.timer);
-      pendingReplay.delete(key);
-      // A result authored by a superseded surface (pane closed and recreated with the same id)
-      // belongs to no live waiter: drop it and let the requester's timeout clean up.
-      if (pending.epoch !== undefined && registry?.epochOf(paneId) !== pending.epoch) return;
-      pending.resolve({ ...parsed, paneId });
-    } catch (error) { report(paneId, error instanceof Error ? error.message : String(error)); }
-  });
+    });
+});
+ipcMain.on(IPC_CHANNELS.stateRequest, (event) => { if (!trustedChrome(event)) return; publishState(); });
+ipcMain.on(IPC_CHANNELS.paneAction, (event, value: unknown) => {
+  const paneId = sourcePane(event);
+  if (!paneId) return;
+  void acceptSourceAction(paneId, value).catch((error: unknown) => report(paneId, error instanceof Error ? error.message : String(error)));
+});
+ipcMain.on(IPC_CHANNELS.recordFailure, (event, value: unknown) => {
+  const paneId = sourcePane(event);
+  if (!paneId) return;
+  try {
+    const failure = RecordFailureSchema.parse(value);
+    // Only meaningful mid-recording: a failed recorded action must surface to the user.
+    if (!flowDraft.isActive) return;
+    lastError = `pane ${paneId}: recording failed: ${failure.reason}`;
+    report(paneId, `recording failed: ${failure.reason}`);
+    publishState();
+  } catch (error) { report(paneId, error instanceof Error ? error.message : String(error)); }
+});
+ipcMain.on(IPC_CHANNELS.replayResult, (event, value: unknown) => {
+  const paneId = sourcePane(event);
+  if (!paneId) return;
+  try {
+    const parsed = ReplayResultSchema.parse(value);
+    const key = replayKey(paneId, parsed.actionId, parsed.phase);
+    const pending = pendingReplay.get(key);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    pendingReplay.delete(key);
+    // A result authored by a superseded surface (pane closed and recreated with the same id)
+    // belongs to no live waiter: drop it and let the requester's timeout clean up.
+    if (registry?.epochOf(paneId) !== pending.epoch) return;
+    pending.resolve(parsed);
+  } catch (error) { report(paneId, error instanceof Error ? error.message : String(error)); }
+});

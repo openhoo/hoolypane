@@ -47,7 +47,7 @@ describe("real runner", () => {
   it("executes every action in isolated responsive contexts and records aligned artifacts", async () => {
     await fetch(`http://127.0.0.1:${FIXTURE_PORT}/reset`);
     const output = await outputDirectory("success");
-    const result = await runFlow({ command: "run", flowFile: resolve("tests/fixtures/responsive.flow.ts"), configFile: resolve("tests/fixtures/hoolypane.config.ts"), outputDir: output, headed: false });
+    const result = await runFlow({ flowFile: resolve("tests/fixtures/responsive.flow.ts"), configFile: resolve("tests/fixtures/hoolypane.config.ts"), outputDir: output, headed: false });
     if (result.status !== "success") {
       // Surface the per-viewport failure reasons recorded in the manifest instead of failing opaque.
       const diagnostics = await readFile(join(output, "manifest.json"), "utf8").then(JSON.parse).catch(() => null);
@@ -66,7 +66,7 @@ describe("real runner", () => {
 
   it("reports every viewport affected by a failed barrier", async () => {
     const output = await outputDirectory("failure");
-    const result = await runFlow({ command: "run", flowFile: resolve("tests/fixtures/failing.flow.ts"), configFile: resolve("tests/fixtures/hoolypane.config.ts"), outputDir: output, headed: false });
+    const result = await runFlow({ flowFile: resolve("tests/fixtures/failing.flow.ts"), configFile: resolve("tests/fixtures/hoolypane.config.ts"), outputDir: output, headed: false });
     expect(result.status).toBe("failed");
     const manifest = JSON.parse(await readFile(join(output, "manifest.json"), "utf8")) as { failures: Array<{ message: string }> };
     expect(manifest.failures[0]?.message).toMatch(/desktop/);

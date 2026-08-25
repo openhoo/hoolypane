@@ -14,7 +14,7 @@ import { VIEWPORT_PRESETS } from "@hoolypane/contracts";
 describe("runner CLI", () => {
   it("parses flow, config, output, and headed options", () => {
     expect(parseCliArguments(["run", "flows/example.ts", "--config", "custom.ts", "--output", "out", "--headed"])).toEqual({
-      command: "run", flowFile: "flows/example.ts", configFile: "custom.ts", outputDir: "out", headed: true,
+      flowFile: "flows/example.ts", configFile: "custom.ts", outputDir: "out", headed: true,
     });
   });
 

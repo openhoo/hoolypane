@@ -26,7 +26,7 @@ const directories: string[] = [];
 afterEach(async () => Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))));
 
 function options(outputDir: string) {
-  return { recording: { fps: 30 as const, jpegQuality: 85, layout: "grid" as const, compositeMaxSize: { width: 128, height: 128 }, compositeBackground: "#111318", keepRaw: false }, timeoutMs: 100, outputDir };
+  return { recording: { fps: 30 as const, jpegQuality: 85, compositeMaxSize: { width: 128, height: 128 }, compositeBackground: "#111318", keepRaw: false }, timeoutMs: 100, outputDir };
 }
 
 describe("recording session", () => {

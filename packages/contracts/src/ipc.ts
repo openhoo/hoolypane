@@ -44,7 +44,7 @@ export const ChromeCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("set-reduced-motion"), enabled: z.boolean() }),
   z.strictObject({ kind: z.literal("set-throttling"), mode: ThrottlingModeSchema }),
   z.strictObject({ kind: z.literal("set-overlay"), key: OverlayKeySchema, enabled: z.boolean() }),
-  z.strictObject({ kind: z.enum(["capture-pane"]), paneId }),
+  z.strictObject({ kind: z.literal("capture-pane"), paneId }),
   z.strictObject({ kind: z.enum(["capture-overview", "record-start", "record-stop"]) }),
 ]);
 
@@ -60,6 +60,9 @@ export const RecordFailureSchema = z.strictObject({
 export const PaneGenerationSchema = z.strictObject({
   documentGeneration: z.number().int().nonnegative(),
 });
+
+/** Single source for the user-visible staleness reason shared by main-process replay enforcement and pane preloads. */
+export const staleGenerationMessage = (expected: number, current: number): string => `stale document generation ${expected}, current ${current}`;
 const REPLAY_PHASES = ["resolve", "apply-dom", "end"] as const;
 export const ReplayRequestSchema = z.strictObject({
   actionId: z.number().int().positive(),
@@ -69,7 +72,6 @@ export const ReplayRequestSchema = z.strictObject({
 });
 export const ReplayResultSchema = z.strictObject({
   actionId: z.number().int().positive(),
-  paneId: paneId.optional(),
   phase: z.enum([...REPLAY_PHASES, "confirm"]),
   ok: z.boolean(),
   reason: z.string().max(512).optional(),

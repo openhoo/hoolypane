@@ -6,7 +6,7 @@ import type { ElectronApplication, Page } from "playwright";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { runFlow } from "../../packages/runner/src/run-flow.js";
-import { launchDesktopApp, pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
+import { launchDesktopApp, pollUntil, startFixtureServer, waitForFixturePanes, type FixtureServer } from "../helpers/harness.js";
 import { clickPaneSurface } from "./cdp-input.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
 
@@ -30,12 +30,6 @@ async function waitForFile(path: string): Promise<void> {
       return null; // writer not finished
     }
   }, 10_000);
-}
-
-async function paneCount(): Promise<number> {
-  return application.evaluate(({ webContents }, port) =>
-    webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`)).length,
-  FIXTURE_PORT);
 }
 
 async function appliedCount(): Promise<number> {
@@ -83,7 +77,7 @@ beforeAll(async () => {
   application = launch.application;
   chrome = launch.chrome;
   // Native child views expose no readiness event to Playwright; poll Electron's authoritative WebContents registry.
-  await pollUntil(async () => await paneCount() === 5 || null, 10_000);
+  await waitForFixturePanes(application, FIXTURE_PORT, 5);
 }, 30_000);
 
 let evidenceDirty = false;
@@ -134,7 +128,7 @@ describe("desktop screenshots and recorded flows", () => {
     const configPath = join(directory, "hoolypane.config.ts");
     await writeFile(configPath, `import { defineConfig } from "@hoolypane/runner"; export default defineConfig({ baseURL: "http://127.0.0.1:${FIXTURE_PORT}", viewports: [{ id: "one", name: "One", width: 320, height: 240, deviceScaleFactor: 1, isMobile: false, hasTouch: false }, { id: "two", name: "Two", width: 180, height: 320, deviceScaleFactor: 1, isMobile: true, hasTouch: true }], recording: { fps: 30, compositeMaxSize: { width: 640, height: 480 } } });`);
     const runOutput = join(directory, "runner-output");
-    const run = await runFlow({ command: "run", flowFile: flowPath, configFile: configPath, outputDir: runOutput, headed: false });
+    const run = await runFlow({ flowFile: flowPath, configFile: configPath, outputDir: runOutput, headed: false });
     expect(run.status).toBe("success");
     await waitForAppliedCount(2);
   }, 90_000);
@@ -165,7 +159,7 @@ describe("desktop screenshots and recorded flows", () => {
       if (!pane) throw new Error("pane missing for error-overview test");
       pane.close({ waitForBeforeUnload: false });
     }, FIXTURE_PORT);
-    await pollUntil(async () => await paneCount() === 4 || null, 10_000);
+    await waitForFixturePanes(application, FIXTURE_PORT, 4);
     await chrome.getByRole("button", { name: "Save Overview PNG" }).click();
     await waitForFile(errorOverviewPng);
     const errorPixels = await sharp(errorOverviewPng).ensureAlpha().raw().toBuffer();

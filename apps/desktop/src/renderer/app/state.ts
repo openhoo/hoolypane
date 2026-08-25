@@ -1,6 +1,5 @@
 import { defaultWorkspace, type ChromeState, type ViewportSpec } from "@hoolypane/contracts";
 
-export type { ChromeState };
 type ChromeAction = { type: "state"; state: ChromeState } | { type: "error"; message: string };
 
 export function initialChromeState(): ChromeState {

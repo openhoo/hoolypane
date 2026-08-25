@@ -8,7 +8,6 @@ describe("configuration", () => {
     expect(result.recording).toEqual({
       fps: 60,
       jpegQuality: 85,
-      layout: "grid",
       compositeMaxSize: { width: 3840, height: 2160 },
       compositeBackground: "#111318",
       outputDir: "hoolypane-results",
@@ -19,7 +18,7 @@ describe("configuration", () => {
   it("rejects unsupported recording values", () => {
     expect(HoolypaneConfigSchema.safeParse({ viewports: [VIEWPORT_PRESETS[0]], recording: { fps: 24 } }).success).toBe(false);
     expect(HoolypaneConfigSchema.safeParse({ viewports: [VIEWPORT_PRESETS[0]], recording: { jpegQuality: 100.5 } }).success).toBe(false);
-    expect(HoolypaneConfigSchema.safeParse({ viewports: [VIEWPORT_PRESETS[0]], recording: { layout: "rows" } }).success).toBe(false);
+    expect(HoolypaneConfigSchema.safeParse({ viewports: [VIEWPORT_PRESETS[0]], recording: { compositeMaxSize: { width: 16_384, height: 2160 } } }).success).toBe(false);
   });
 
   it("normalizes explicitly-undefined recording keys to defaults", () => {
@@ -43,7 +42,7 @@ describe("action language", () => {
       { kind: "scroll", locator, horizontalRatio: 0.25, verticalRatio: 0.75 },
     ];
     expect(actions.map((action) => ActionSchema.parse(action))).toEqual(actions);
-    expect(ActionEnvelopeSchema.parse({ actionId: 1, documentGeneration: 0, sourcePaneId: "pane-1", action: actions[1], recordedAtUnixMs: 1 }).action.kind).toBe("click");
+    expect(ActionEnvelopeSchema.parse({ actionId: 1, documentGeneration: 0, sourcePaneId: "pane-1", action: actions[1] }).action.kind).toBe("click");
   });
 });
 

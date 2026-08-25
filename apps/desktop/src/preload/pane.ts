@@ -1,5 +1,5 @@
 import { ipcRenderer } from "electron";
-import { IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, RecordFailureSchema, ReplayRequestSchema, type Action, type LocatorSpec, type ReplayRequest, type ReplayResult } from "@hoolypane/contracts";
+import { IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, RecordFailureSchema, ReplayRequestSchema, staleGenerationMessage, type Action, type LocatorSpec, type ReplayRequest, type ReplayResult } from "@hoolypane/contracts";
 
 let documentGeneration = 0;
 type SuppressionEntry = { generation: number; kind: Action["kind"]; box?: { x: number; y: number; width: number; height: number }; confirmed?: boolean };
@@ -29,6 +29,11 @@ let pendingFill: { element: HTMLInputElement | HTMLTextAreaElement; timer: numbe
 const pendingScrollTargets = new Map<HTMLElement, boolean>();
 let pendingScrollFrame = 0;
 
+/** True when the container sits within ±1px of a position this pane scrolled programmatically. */
+function isOwnScrollEcho(target: Element, programmed: { top: number; left: number }): boolean {
+  return Math.abs(target.scrollTop - programmed.top) <= 1 && Math.abs(target.scrollLeft - programmed.left) <= 1;
+}
+
 function drainScrollTargets(): void {
   pendingScrollFrame = 0;
   const targets = [...pendingScrollTargets];
@@ -39,7 +44,7 @@ function drainScrollTargets(): void {
     const programmed = programmaticScrolls.get(target);
     if (programmed) {
       programmaticScrolls.delete(target);
-      if (Math.abs(target.scrollTop - programmed.top) <= 1 && Math.abs(target.scrollLeft - programmed.left) <= 1) continue;
+      if (isOwnScrollEcho(target, programmed)) continue;
     }
     const horizontalRatio = target.scrollWidth === target.clientWidth ? 0 : Math.min(1, Math.max(0, target.scrollLeft / (target.scrollWidth - target.clientWidth)));
     const verticalRatio = target.scrollHeight === target.clientHeight ? 0 : Math.min(1, Math.max(0, target.scrollTop / (target.scrollHeight - target.clientHeight)));
@@ -95,7 +100,7 @@ function accessibleName(element: Element): string {
 }
 
 function unique(locator: LocatorSpec, labelElements?: readonly Element[]): boolean {
-  try { return elementsFor(locator, labelElements).length === 1; } catch { return false; }
+  return elementsFor(locator, labelElements).length === 1;
 }
 
 function cssPath(element: Element): string {
@@ -194,6 +199,11 @@ window.addEventListener("beforeunload", () => flushFill(true));
 // Wrapped so the IPC event object never leaks into flushFill's force parameter.
 ipcRenderer.on(IPC_CHANNELS.flush, () => flushFill());
 
+// Local-only control types shared by the fill and click guards below; the click list adds the
+// text-like types because clicking into them only focuses a control whose fills already mirror.
+const LOCAL_ONLY_FILL_TYPES: readonly string[] = ["checkbox", "radio", "password", "range", "color", "file", "date", "datetime-local", "month", "time", "week"];
+const LOCAL_ONLY_CLICK_TYPES: readonly string[] = [...LOCAL_ONLY_FILL_TYPES, "text", "email", "search", "url", "number", "tel"];
+
 document.addEventListener("input", (event) => {
   if (!event.isTrusted || suppressed.size > 0) return;
   const element = event.target;
@@ -201,7 +211,7 @@ document.addEventListener("input", (event) => {
   // range/color/file and the date/time pickers ignore inserted text, so recording a fill for them
   // would replay as a silent no-op on every mirror while sync reports the panes healthy. Exclude
   // them like password — the gesture stays local instead of claiming a mirrored write that never lands.
-  if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) || ["checkbox", "radio", "password", "range", "color", "file", "date", "datetime-local", "month", "time", "week"].includes(element.type)) return;
+  if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) || LOCAL_ONLY_FILL_TYPES.includes(element.type)) return;
   if (pendingFill) window.clearTimeout(pendingFill.timer);
   pendingFill = { element, timer: window.setTimeout(flushFill, 300) };
 }, true);
@@ -252,7 +262,7 @@ document.addEventListener("click", (event) => {
     if (matchedEntry.generation === documentGeneration) {
       ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId: matchedActionId, phase: "confirm", ok: true } satisfies ReplayResult);
     } else {
-      ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId: matchedActionId, phase: "confirm", ok: false, reason: `stale document generation ${matchedEntry.generation}, current ${documentGeneration}` } satisfies ReplayResult);
+      ipcRenderer.send(IPC_CHANNELS.replayResult, { actionId: matchedActionId, phase: "confirm", ok: false, reason: staleGenerationMessage(matchedEntry.generation, documentGeneration) } satisfies ReplayResult);
     }
     return;
   }
@@ -260,7 +270,7 @@ document.addEventListener("click", (event) => {
   // range/color/file and the date/time pickers are local-only for fills (see the input listener):
   // the trusted click ending their gesture (slider drag commit, picker toggle) stays local too, or
   // main mirrors a center-click that drags every sibling's slider while no fill ever reconciles it.
-  if (!target || target instanceof HTMLInputElement && ["checkbox", "radio", "text", "email", "search", "url", "number", "password", "tel", "range", "color", "file", "date", "datetime-local", "month", "time", "week"].includes(target.type)) return;
+  if (!target || target instanceof HTMLInputElement && LOCAL_ONLY_CLICK_TYPES.includes(target.type)) return;
   record(() => ({ kind: "click", locator: locatorFor(target) }));
 }, true);
 document.addEventListener("keydown", (event) => {
@@ -283,7 +293,7 @@ document.addEventListener("scroll", (event) => {
     if (programmed) {
       programmaticScrolls.delete(target);
       // An echo lands exactly where the replay scrolled; a diverging position means the user moved it.
-      takeover = Math.abs(target.scrollTop - programmed.top) > 1 || Math.abs(target.scrollLeft - programmed.left) > 1;
+      takeover = !isOwnScrollEcho(target, programmed);
       if (!takeover) return;
     }
   }
@@ -313,7 +323,7 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
   if (request.phase === "end") { suppressed.delete(request.actionId); drainDeferredFill(); }
   let result: ReplayResult = { actionId: request.actionId, phase: request.phase, ok: true };
   try {
-    if (request.documentGeneration !== documentGeneration) throw new Error(`stale document generation ${request.documentGeneration}, current ${documentGeneration}`);
+    if (request.documentGeneration !== documentGeneration) throw new Error(staleGenerationMessage(request.documentGeneration, documentGeneration));
     if (request.phase === "resolve" || request.phase === "apply-dom") {
       if (request.action.kind === "navigate") throw new Error("navigate has no element target");
       const matches = elementsFor(request.action.locator);

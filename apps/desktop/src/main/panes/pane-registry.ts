@@ -1,9 +1,10 @@
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, session, type Session, type WebContents, WebContentsView } from "electron";
 import { IPC_CHANNELS, PaneGenerationSchema, ViewportSpecSchema, type Action, type BoundsSnapshot, type ColorSchemeMode, type OverlayKey, type ThrottlingMode, type ViewportSpec } from "@hoolypane/contracts";
+import { report } from "../report.js";
 import { displayScale, validateBoundsSnapshot, type Bounds } from "./layout.js";
 import { isAllowedProtocol, normalizeUrl } from "./url.js";
-import { addPane, closePane, defaultWorkspace, removePane, rotatePane, uniquePaneId, updatePane, type PaneState, type WorkspaceState } from "./workspace.js";
+import { addPane, closePane, defaultWorkspace, hasPane, removePane, rotatePane, uniquePaneId, updatePane, type PaneState, type WorkspaceState } from "./workspace.js";
 
 type PaneFailure = { paneId: string; message: string };
 type PaneRecord = { id: string; view: WebContentsView; lastBounds?: Bounds; debuggerAttached: boolean; networkEmulationReady: boolean; initialized: boolean; documentGeneration: number; overlayCssKeys: Partial<Record<OverlayKey, string>>; creationEpoch: number; settingsChain?: Promise<void> };
@@ -149,11 +150,11 @@ export class PaneRegistry {
     this.emitChange();
   }
   rotate(paneId: string): void { this.workspace = rotatePane(this.workspace, paneId); const record = this.panes.get(paneId); if (record) void this.configureViewport(record); this.emitChange(); }
-  focus(paneId: string | null): void { if (paneId !== null && !this.workspace.order.includes(paneId)) throw new Error(`unknown pane: ${paneId}`); this.workspace = { ...this.workspace, focusedPaneId: paneId }; this.emitChange(); }
+  focus(paneId: string | null): void { if (paneId !== null && !hasPane(this.workspace, paneId)) throw new Error(`unknown pane: ${paneId}`); this.workspace = { ...this.workspace, focusedPaneId: paneId }; this.emitChange(); }
   setLayout(layout: WorkspaceState["layout"]): void { this.workspace = { ...this.workspace, layout }; this.emitChange(); }
 
   setPanePosition(paneId: string, x: number, y: number): void {
-    if (!this.workspace.order.includes(paneId)) throw new Error(`unknown pane: ${paneId}`);
+    if (!hasPane(this.workspace, paneId)) throw new Error(`unknown pane: ${paneId}`);
     this.workspace = { ...this.workspace, positions: { ...this.workspace.positions, [paneId]: { x, y } } };
     this.emitChange();
   }
@@ -174,10 +175,17 @@ export class PaneRegistry {
 
   /** Applies global emulation media/network state plus overlays to one pane via its CDP debugger; failures are logged only.
    * Invocations serialize per record through an in-flight promise chain: overlapping calls race shared CSS keys and debugger state otherwise. */
-  applyPaneSettings(record: PaneRecord): Promise<void> {
+  private applyPaneSettings(record: PaneRecord): Promise<void> {
     const task = (record.settingsChain ?? Promise.resolve()).then(() => this.writeEmulationSettings(record));
     record.settingsChain = task.then(() => undefined, () => undefined);
     return task;
+  }
+
+  /** Attaches the CDP debugger exactly once per record; shared by both emulation writers. */
+  private ensureDebugger(record: PaneRecord): void {
+    if (record.debuggerAttached) return;
+    record.view.webContents.debugger.attach("1.3");
+    record.debuggerAttached = true;
   }
 
   private async writeEmulationSettings(record: PaneRecord): Promise<void> {
@@ -185,7 +193,7 @@ export class PaneRegistry {
     const contents = record.view.webContents;
     const emulation = this.workspace.emulation;
     try {
-      if (!record.debuggerAttached) { contents.debugger.attach("1.3"); record.debuggerAttached = true; }
+      this.ensureDebugger(record);
       // The features list is replaced wholesale on every send: inactive settings are omitted so
       // Chromium resets them ("auto"/false) and no stale override can survive a toggle-off.
       const features: Array<{ name: string; value: string }> = [];
@@ -195,7 +203,7 @@ export class PaneRegistry {
       if (!record.networkEmulationReady) { await contents.debugger.sendCommand("Network.enable"); record.networkEmulationReady = true; }
       await contents.debugger.sendCommand("Network.emulateNetworkConditions", networkConditions(emulation.throttling));
     } catch (error) {
-      if (this.isLive(record)) console.error(`[hoolypane] pane ${record.id}: emulation failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (this.isLive(record)) report(record.id, `emulation failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     await this.applyOverlays(record);
   }
@@ -215,7 +223,7 @@ export class PaneRegistry {
         if (overlays[key]) record.overlayCssKeys[key] = await contents.insertCSS(OVERLAY_STYLES[key]);
       }
     } catch (error) {
-      if (this.isLive(record)) console.error(`[hoolypane] pane ${record.id}: overlay injection failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (this.isLive(record)) report(record.id, `overlay injection failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -314,11 +322,8 @@ export class PaneRegistry {
     if (!pane) return;
     const contents = record.view.webContents;
     try {
-      if (!record.debuggerAttached) { contents.debugger.attach("1.3"); record.debuggerAttached = true; }
-      const bounds = record.lastBounds;
-      const availableWidth = bounds && bounds.width > 0 ? bounds.width : 1;
-      const availableHeight = bounds && bounds.height > 0 ? bounds.height : 1;
-      const scale = displayScale(availableWidth, availableHeight, pane.viewport.width, pane.viewport.height);
+      this.ensureDebugger(record);
+      const scale = this.getInputScale(record.id);
       await contents.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width: pane.viewport.width, height: pane.viewport.height, deviceScaleFactor: pane.viewport.deviceScaleFactor, mobile: pane.viewport.isMobile, scale });
       await contents.debugger.sendCommand("Emulation.setTouchEmulationEnabled", { enabled: pane.viewport.hasTouch, configuration: pane.viewport.hasTouch ? "mobile" : "desktop" });
     } catch (error) { if (!this.isLive(record)) return; this.reportFailure(record.id, `viewport emulation failed: ${error instanceof Error ? error.message : String(error)}`); }

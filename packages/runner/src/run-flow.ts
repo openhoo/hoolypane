@@ -1,29 +1,22 @@
 import { chromium } from "playwright";
-import type { Browser, BrowserContext, CDPSession } from "playwright";
+import type { Browser, BrowserContext, CDPSession, Page } from "playwright";
 import { mkdir, access } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { HoolypaneConfigSchema } from "@hoolypane/contracts";
 import { resolve, dirname, join } from "node:path";
 import type { ResolvedHoolypaneConfig, ViewportSpec } from "@hoolypane/contracts";
 import { createFlowContext } from "@hoolypane/flow";
-import type { FlowDefinition, FlowEvent, Screen } from "@hoolypane/flow";
+import type { FlowDefinition, FlowEvent } from "@hoolypane/flow";
 import { RecordingSession } from "@hoolypane/recorder";
 import type { RecordingTarget, RecorderFailure } from "@hoolypane/recorder";
 import { compileModule, validateConfigExport, validateFlowExport } from "./module-loader.js";
 import type { CompiledModule } from "./module-loader.js";
 import type { RunArguments } from "./cli-arguments.js";
 
-interface RunnerDependencies {
-  readonly createRecorder?: (config: ResolvedHoolypaneConfig, timeoutMs: number, outputDir: string) => RecordingSession;
-  readonly chromiumType?: typeof chromium;
-}
-
 interface RunResult {
   readonly outputDir: string;
   readonly status: "success" | "failed" | "interrupted";
 }
-
-const defaultDependencies: RunnerDependencies = {};
 
 async function exists(path: string): Promise<boolean> {
   try {
@@ -56,7 +49,6 @@ function resolveExport<T>(module: Record<string, unknown>, names: readonly strin
 }
 
 function recorderTarget(id: string, viewport: ViewportSpec, cdp: CDPSession): RecordingTarget {
-  const wrappers = new Map<(params: unknown) => void, (params: unknown) => void>();
   return {
     id,
     viewport,
@@ -81,15 +73,11 @@ function recorderTarget(id: string, viewport: ViewportSpec, cdp: CDPSession): Re
     },
     on(event, listener): void {
       if (event !== "Page.screencastFrame") throw new Error(`unsupported recorder CDP event: ${event}`);
-      const wrapper = (params: unknown): void => listener(params);
-      wrappers.set(listener, wrapper);
-      cdp.on("Page.screencastFrame", wrapper);
+      cdp.on("Page.screencastFrame", listener);
     },
     off(event, listener): void {
       if (event !== "Page.screencastFrame") return;
-      const wrapper = wrappers.get(listener);
-      if (wrapper) cdp.off("Page.screencastFrame", wrapper);
-      wrappers.delete(listener);
+      cdp.off("Page.screencastFrame", listener);
     },
   };
 }
@@ -115,7 +103,7 @@ async function evaluateModule(path: string, deadlineMs: number, source: string):
   }
 }
 
-export async function runFlow(args: RunArguments, dependencies: RunnerDependencies = defaultDependencies): Promise<RunResult> {
+export async function runFlow(args: RunArguments): Promise<RunResult> {
   const projectDir = dirname(resolve(args.flowFile));
   const flowPath = resolve(args.flowFile);
   if (!(await exists(flowPath))) throw new Error(`Flow file not found: ${flowPath}`);
@@ -165,15 +153,14 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
     validateFlowExport(flow, flowPath);
     const outputDir = resolve(args.outputDir ?? config.recording.outputDir);
     await mkdir(join(outputDir, "traces"), { recursive: true });
-    const browserType = dependencies.chromiumType ?? chromium;
     try {
-      browser = await browserType.launch({ headless: !args.headed, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
+      browser = await chromium.launch({ headless: !args.headed, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (/executable|browser.*(not|missing)|ENOENT/i.test(message)) throw new Error(`${message}\nInstall the pinned Chromium browser with: npx playwright install chromium`);
       throw error;
     }
-    const screens: Screen[] = [];
+    const screens: { id: string; viewport: ViewportSpec; page: Page }[] = [];
     const targets: RecordingTarget[] = [];
     let tracesStopped = false;
     for (const viewport of config.viewports) {
@@ -189,12 +176,15 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
     // recorder.start() wipes the output directory: a SIGINT during browser/context setup must
     // never reach it, or a rerun into the same --output dir destroys the previous recording.
     if (!interrupted) {
-      recorder = dependencies.createRecorder?.(config, config.timeoutMs, outputDir) ?? new RecordingSession({ recording: config.recording, timeoutMs: config.timeoutMs, outputDir });
+      recorder = new RecordingSession({ recording: config.recording, timeoutMs: config.timeoutMs, outputDir });
       await recorder.start(targets);
     }
     let flowError: unknown;
     let flowFailed = false;
     let timedOut = false;
+    // Single source of truth for run-status precedence: capture/trace failures beat interruption,
+    // which beats flow failure. manifestFailed is only set after finalize, so it is false there.
+    const statusFor = (): RunResult["status"] => (manifestFailed || traceFailed ? "failed" : interrupted ? "interrupted" : flowFailed ? "failed" : "success");
     // Once the race below picks a terminal outcome, late settlements (an orphaned flow rejecting
     // after SIGINT or timeout) must not overwrite status or failures.
     let outcomeDecided = false;
@@ -266,7 +256,7 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
         failures.push(failureFrom(flowError));
       }
       if (interrupted) failures.push({ message: "Interrupted by SIGINT or SIGTERM" });
-      const finalizeResult = await recorder.finalize({ status: traceFailed ? "failed" : interrupted ? "interrupted" : flowFailed ? "failed" : "success", failures, events: finalizedEvents });
+      const finalizeResult = await recorder.finalize({ status: statusFor(), failures, events: finalizedEvents });
       recorderFinalized = true;
       // captureFailures (a pane's screencast ending early) flip the manifest to "failed" even when the flow
       // itself succeeded; the CLI must not exit 0 while the written manifest reports a failed recording.
@@ -275,7 +265,7 @@ export async function runFlow(args: RunArguments, dependencies: RunnerDependenci
       for (const failure of await stopTraces()) process.stderr.write(`tracing.stop failed: ${failure.message}\n`);
       clearTimeout(signalDeadline);
     }
-    return { outputDir, status: manifestFailed || traceFailed ? "failed" : interrupted ? "interrupted" : flowFailed ? "failed" : "success" };
+    return { outputDir, status: statusFor() };
   } finally {
     process.removeListener("SIGINT", onSignal);
     process.removeListener("SIGTERM", onSignal);

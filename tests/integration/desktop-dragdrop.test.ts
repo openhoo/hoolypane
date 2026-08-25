@@ -4,7 +4,7 @@ import type { ElectronApplication, Page } from "playwright";
 import { afterAll, it } from "vitest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { launchDesktopApp, pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
+import { launchDesktopApp, pollUntil, startFixtureServer, waitForFixturePanes, type FixtureServer } from "../helpers/harness.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
 
 const FIXTURE_PORT = FIXTURE_PORTS.dragdrop;
@@ -41,19 +41,14 @@ it("drag and drop moves a pane and persists the position", async () => {
   application = launched.application;
   chrome = launched.chrome;
   userDataDir = launched.userDataDir;
-  await pollUntil(async () => {
-    const count = await launched.application.evaluate(({ webContents }, port) =>
-      webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`)).length,
-      FIXTURE_PORT);
-    return count === 5 || null;
-  }, 15_000);
+  await waitForFixturePanes(launched.application, FIXTURE_PORT, 5, 15_000);
   await pollUntil(async () => (await cardBoxes(chrome)).size === 5 || null, 10_000);
 
   const before = (await cardBoxes(chrome)).get("desktop-1440");
   if (!before) throw new Error("source card missing");
 
   // Synthetic drag: verifies wiring without trusted input.
-  const synthetic = await chrome.evaluate(() => {
+  await chrome.evaluate(() => {
     const surface = document.querySelector('[data-pane-surface="desktop-1440"]');
     const card = surface?.parentElement;
     const headerElement = card?.querySelector("header");
@@ -68,14 +63,11 @@ it("drag and drop moves a pane and persists the position", async () => {
       guides: document.querySelectorAll('[aria-hidden="true"][class*="bg-accent"]').length,
     };
   });
-  console.log("SYNTHETIC", JSON.stringify(synthetic));
   await pollUntil(async () => {
     const boxes = await cardBoxes(chrome);
     const current = boxes.get("desktop-1440");
     return current && current.x !== before.x ? current : null;
   }, 8_000);
-  const afterSynthetic = (await cardBoxes(chrome)).get("desktop-1440");
-  console.log("AFTER SYNTHETIC", JSON.stringify(afterSynthetic));
 
   // Native-pointer drag of the desktop pane header toward the bottom-right.
   const header = chrome.locator('[data-pane-surface="desktop-1440"]').locator("xpath=..").locator("header");
@@ -111,7 +103,6 @@ it("drag and drop moves a pane and persists the position", async () => {
       }
       return current;
     }, 15_000);
-    console.log("DND moved to", moved.x, moved.y, "stored", JSON.stringify(stored));
 
     // Position persists across an app restart (workspace store).
     await application.close();
@@ -132,18 +123,16 @@ it("drag and drop moves a pane and persists the position", async () => {
       }
       return null;
     };
-    let persisted: CardBox;
     try {
-      persisted = await pollUntil(matches, 10_000);
+      await pollUntil(matches, 10_000);
     } catch {
       await chrome.evaluate(() => location.reload()).catch(() => undefined);
       try {
-        persisted = await pollUntil(matches, 15_000);
+        await pollUntil(matches, 15_000);
       } catch (cause) {
         throw new Error(`renderer never restored the dragged desktop-1440 position moved=${JSON.stringify(moved)} even after one forced reload`, { cause });
       }
     }
-    console.log("DND persisted", persisted.x, persisted.y);
   } catch (error) {
     // A fresh mkdtemp target needs no rmSync and can never clobber real evidence.
     const dumpDir = await mkdtemp(join(tmpdir(), "dnd-fail-dump-"));

@@ -16,7 +16,6 @@
   },
   "main": "dist/main/index.js",
   "scripts": {
-    "dev": "vite --config vite.renderer.config.ts",
     "icons": "node scripts/generate-icons.mjs",
     "build": "pnpm icons && vite build --config vite.main.config.ts && vite build --config vite.preload.config.ts --mode chrome && vite build --config vite.preload.config.ts --mode pane && vite build --config vite.renderer.config.ts",
     "start": "electron .",

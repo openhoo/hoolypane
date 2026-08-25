@@ -26,8 +26,10 @@ const OVERLAY_ITEMS = [
   { key: "showRoles", label: "Show roles" },
 ] as const;
 
-const selectClass = (active: boolean): string =>
-  `h-8 rounded-lg border bg-field px-1 text-xs text-ink outline-none transition-colors focus:border-accent/70 ${active ? "border-accent/70" : "border-edge"}`;
+const selectClass = (active: boolean, padding = "px-1"): string =>
+  `h-8 rounded-lg border bg-field ${padding} text-xs text-ink outline-none transition-colors focus:border-accent/70 ${active ? "border-accent/70" : "border-edge"}`;
+
+const fieldTone = (active: boolean): string => (active ? "border-accent/70 bg-accent/15 text-accent-text" : "border-edge bg-field text-mute hover:text-ink");
 
 function IconButton({
   label,
@@ -99,7 +101,7 @@ export function Toolbar({
           id="layout"
           value={state.layout}
           onChange={(event) => send({ kind: "set-layout", layout: (event.currentTarget as HTMLSelectElement).value as LayoutMode })}
-          class="h-8 rounded-lg border border-edge bg-field px-1.5 text-xs text-ink outline-none transition-colors focus:border-accent/70"
+          class={selectClass(false, "px-1.5")}
         >
           <option value="free">Free</option>
           <option value="grid">Grid</option>
@@ -168,9 +170,7 @@ export function Toolbar({
           aria-label="Reduced motion"
           title="Reduced motion"
           onClick={() => send({ kind: "set-reduced-motion", enabled: !state.emulation.reducedMotion })}
-          class={`h-8 shrink-0 whitespace-nowrap rounded-lg border px-2 text-xs transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent ${
-            state.emulation.reducedMotion ? "border-accent/70 bg-accent/15 text-accent-text" : "border-edge bg-field text-mute hover:text-ink"
-          }`}
+          class={`h-8 shrink-0 whitespace-nowrap rounded-lg border px-2 text-xs transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent ${fieldTone(state.emulation.reducedMotion)}`}
         >
           Motion
         </button>
@@ -190,11 +190,9 @@ export function Toolbar({
         <details class="relative">
           <summary
             aria-label="Overlays"
-            class={`flex h-8 shrink-0 cursor-pointer list-none items-center gap-1 whitespace-nowrap rounded-lg border px-2 text-xs transition-colors [&::-webkit-details-marker]:hidden ${
-              OVERLAY_ITEMS.some((item) => state.emulation.overlays[item.key])
-                ? "border-accent/70 bg-accent/15 text-accent-text"
-                : "border-edge bg-field text-mute hover:text-ink"
-            }`}
+            class={`flex h-8 shrink-0 cursor-pointer list-none items-center gap-1 whitespace-nowrap rounded-lg border px-2 text-xs transition-colors [&::-webkit-details-marker]:hidden ${fieldTone(
+              OVERLAY_ITEMS.some((item) => state.emulation.overlays[item.key]),
+            )}`}
           >
             Overlays
           </summary>

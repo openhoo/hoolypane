@@ -10,7 +10,10 @@ const canNotarize = Boolean(process.env.APPLE_ID && process.env.APPLE_APP_SPECIF
 const signed = target === "windows" ? hasCertificate : target === "mac" ? hasCertificate && canNotarize : false;
 const suffix = signed ? "signed" : "unsigned";
 const artifactName = `\${productName}-\${version}-\${os}-\${arch}-${suffix}.\${ext}`;
-const args = [targetFlag, "--publish", "never", "--config", "electron-builder.yml", `--config.artifactName=${artifactName}`];
+const args = [targetFlag, "--publish", "never", "--config", "electron-builder.yml"];
+// Unsigned builds keep electron-builder.yml's byte-identical -unsigned template effective;
+// only signed builds need the CLI override.
+if (signed) args.push(`--config.artifactName=${artifactName}`);
 if (target === "mac") {
   args.push(`--config.mac.notarize=${canNotarize}`);
   args.push(`--config.dmg.sign=${signed}`);

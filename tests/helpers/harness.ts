@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -25,8 +25,6 @@ export async function pollUntil<T>(
 }
 
 export interface FixtureServer {
-  readonly child: ChildProcess;
-  readonly port: number;
   /** Terminates the fixture promptly even when Chromium panes keep keep-alive sockets open. */
   close(): Promise<void>;
 }
@@ -56,8 +54,6 @@ export async function startFixtureServer(port: number): Promise<FixtureServer> {
   child.once("exit", (code) => ready.reject(new Error(`fixture server failed before readiness (code ${code}): ${output.trim()}`)));
   await ready.promise;
   return {
-    child,
-    port,
     async close(): Promise<void> {
       if (child.exitCode !== null || child.signalCode !== null) return;
       const exited = Promise.withResolvers<void>();
@@ -68,6 +64,23 @@ export async function startFixtureServer(port: number): Promise<FixtureServer> {
       clearTimeout(forceExitTimer);
     },
   };
+}
+
+/** Counts fixture-origin WebContents through Electron's authoritative registry. */
+export async function fixturePaneCount(application: ElectronApplication, port: number): Promise<number> {
+  return application.evaluate(({ webContents }, fixturePort) =>
+    webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${fixturePort}`)).length,
+  port);
+}
+
+/** Polls until exactly `expected` fixture panes exist in Electron's WebContents registry. */
+export async function waitForFixturePanes(
+  application: ElectronApplication,
+  port: number,
+  expected: number,
+  timeoutMs = 10_000,
+): Promise<void> {
+  await pollUntil(async () => await fixturePaneCount(application, port) === expected ? expected : null, timeoutMs);
 }
 
 interface DesktopLaunch {

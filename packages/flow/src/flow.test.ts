@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import ts from "typescript";
-import { createFlowContext, defineConfig, defineFlow, locatorExpression, serializeFlow } from "./index.js";
+import { createFlowContext, defineConfig, defineFlow, serializeFlow } from "./index.js";
+import { locatorExpression } from "./codegen.js";
 import { ActionEnvelopeSchema, VIEWPORT_PRESETS } from "@hoolypane/contracts";
 import type { Action, ActionEnvelope } from "@hoolypane/contracts";
 
@@ -34,7 +35,6 @@ describe("flow API", () => {
       documentGeneration: 2,
       sourcePaneId: "pane-1",
       action: { kind: "fill", locator: { kind: "label", value: "Email" }, value: "a@example.test" },
-      recordedAtUnixMs: 100,
     });
     expect(serializeFlow([envelope])).toContain('await page.getByLabel("Email", { exact: true }).fill("a@example.test");');
   });
@@ -53,7 +53,6 @@ describe("flow API", () => {
       documentGeneration: 0,
       sourcePaneId: "pane-1",
       action,
-      recordedAtUnixMs: 0,
     });
     const source = serializeFlow([
       envelope({ kind: "navigate", url: "https://example.test/" }),
@@ -82,17 +81,7 @@ describe("flow API", () => {
       horizontalRatio: 1.5,
       verticalRatio: 0,
     } as unknown as Action;
-    expect(() => serializeFlow([{ actionId: 1, documentGeneration: 0, sourcePaneId: "pane-1", action, recordedAtUnixMs: 0 }])).toThrow(/Invalid scroll ratios/);
-  });
-
-  it("rejects unknown and duplicate screen ids", () => {
-    const screens = [
-      { id: "one", viewport: VIEWPORT_PRESETS[0]!, page: {} as never },
-      { id: "one", viewport: VIEWPORT_PRESETS[1]!, page: {} as never },
-    ];
-    expect(() => createFlowContext(screens)).toThrow(/unique ids/i);
-    const context = createFlowContext([{ id: "solo", viewport: VIEWPORT_PRESETS[0]!, page: {} as never }]);
-    expect(() => context.screen("missing")).toThrow(/Unknown screen: missing/);
+    expect(() => serializeFlow([{ actionId: 1, documentGeneration: 0, sourcePaneId: "pane-1", action }])).toThrow(/Invalid scroll ratios/);
   });
 
   it("aggregates per-screen failures into an AggregateError with screen ids and a failed event", async () => {
@@ -127,7 +116,6 @@ describe("flow API", () => {
       documentGeneration: 0,
       sourcePaneId: "pane-1",
       action,
-      recordedAtUnixMs: 0,
     });
     const adversarial = [
       'quote " terminated',

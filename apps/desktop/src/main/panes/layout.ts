@@ -1,9 +1,8 @@
 import type { BoundsSnapshot } from "@hoolypane/contracts";
 
-export type Bounds = { x: number; y: number; width: number; height: number };
+export type Bounds = BoundsSnapshot["panes"][number]["bounds"];
 
 export function displayScale(availableWidth: number, availableHeight: number, width: number, height: number): number {
-  if (availableWidth <= 0 || availableHeight <= 0 || width <= 0 || height <= 0) return 0;
   return Math.min(1, availableWidth / width, availableHeight / height);
 }
 

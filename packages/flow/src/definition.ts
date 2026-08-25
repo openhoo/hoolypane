@@ -2,15 +2,13 @@ import type { HoolypaneConfig, ResolvedHoolypaneConfig, ViewportSpec, FlowEvent 
 import { HoolypaneConfigSchema } from "@hoolypane/contracts";
 import type { Page } from "playwright";
 
-export interface Screen {
+interface Screen {
   readonly id: string;
   readonly viewport: Readonly<ViewportSpec>;
   readonly page: Page;
 }
 
 export interface FlowContext {
-  readonly screens: readonly Screen[];
-  screen(id: string): Screen;
   all(label: string, action: (screen: Screen) => Promise<void>): Promise<void>;
 }
 
@@ -27,17 +25,7 @@ export function defineFlow(run: (context: FlowContext) => Promise<void>): FlowDe
 
 export function createFlowContext(screens: readonly Screen[], onEvent?: (event: FlowEvent) => void, signal?: AbortSignal): FlowContext {
   const immutableScreens = Object.freeze(screens.map((screen) => Object.freeze({ ...screen, viewport: Object.freeze({ ...screen.viewport }) })));
-  const byId = new Map(immutableScreens.map((screen) => [screen.id, screen]));
-  if (byId.size !== immutableScreens.length) {
-    throw new Error("Flow screens must have unique ids");
-  }
   return Object.freeze({
-    screens: immutableScreens,
-    screen(id: string): Screen {
-      const found = byId.get(id);
-      if (!found) throw new Error(`Unknown screen: ${id}`);
-      return found;
-    },
     async all(label: string, action: (screen: Screen) => Promise<void>): Promise<void> {
       // Checked BETWEEN user steps: in-flight screen actions finish, but the next step refuses to
       // start once the runner signaled cancellation.

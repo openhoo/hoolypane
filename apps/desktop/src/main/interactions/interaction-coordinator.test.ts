@@ -8,7 +8,6 @@ const envelope = ActionEnvelopeSchema.parse({
   documentGeneration: 1,
   sourcePaneId: "source",
   action: { kind: "click", locator: { kind: "testId", value: "save" } },
-  recordedAtUnixMs: 1,
 });
 
 describe("interaction coordinator", () => {
@@ -75,7 +74,7 @@ describe("interaction coordinator", () => {
   it("keeps a mixed multi-pane action blocked with the failing reason intact", async () => {
     const coordinator = new InteractionCoordinator();
     const draft = new FlowDraft();
-    draft.start("https://example.test", "desktop", 1, 1);
+    draft.start("https://example.test", "desktop", 1);
     const pending = coordinator.dispatch(envelope, ["phone", "desktop"], async (paneId) => {
       if (paneId === "phone") throw new Error("locator resolved 0 elements");
     });
@@ -87,7 +86,7 @@ describe("interaction coordinator", () => {
 
     // Main replay loop contract (per-pane blocking keys): a sibling pane's success must
     // never erase another pane's failure reasons for the same actionId.
-    draft.append(envelope);
+    draft.append(envelope, draft.sessionGeneration);
     for (const outcome of outcomes) {
       if (outcome.ok) draft.unblock(envelope.actionId, outcome.paneId);
       else draft.block(envelope.actionId, outcome.paneId, outcome.reason ?? "unknown replay failure");
@@ -100,31 +99,31 @@ describe("interaction coordinator", () => {
 describe("flow draft", () => {
   it("writes deterministic runnable source and blocks misses", () => {
     const draft = new FlowDraft();
-    draft.start("https://example.test", "source", 1, 1);
-    draft.append({ ...envelope, actionId: 2 });
+    draft.start("https://example.test", "source", 1);
+    draft.append({ ...envelope, actionId: 2 }, draft.sessionGeneration);
     expect(draft.stop()).toEqual({ kind: "saved", source: expect.stringContaining('import { defineFlow } from "@hoolypane/runner";') });
 
-    draft.start("https://example.test", "source", 3, 3);
-    draft.append({ ...envelope, actionId: 4 });
+    draft.start("https://example.test", "source", 3);
+    draft.append({ ...envelope, actionId: 4 }, draft.sessionGeneration);
     draft.block(4, "phone", "locator resolved 0 elements");
     expect(draft.stop()).toEqual({ kind: "blocked", reasons: ["action 4 (phone): locator resolved 0 elements"] });
   });
 
   it("drops appends while inactive and reports empty stops", () => {
     const draft = new FlowDraft();
-    draft.append({ ...envelope, actionId: 9 });
+    draft.append({ ...envelope, actionId: 9 }, draft.sessionGeneration);
     expect(draft.stop()).toEqual({ kind: "empty" });
     expect(draft.isActive).toBe(false);
 
-    draft.start("https://example.test", "source", 1, 1);
+    draft.start("https://example.test", "source", 1);
     expect(draft.stop()).toEqual({ kind: "empty" });
     expect(draft.isActive).toBe(true); // empty stop leaves the recording armed until commit
   });
 
   it("stays active on a blocked stop so recovery can clear it", () => {
     const draft = new FlowDraft();
-    draft.start("https://example.test", "source", 1, 1);
-    draft.append({ ...envelope, actionId: 2 });
+    draft.start("https://example.test", "source", 1);
+    draft.append({ ...envelope, actionId: 2 }, draft.sessionGeneration);
     draft.block(2, "phone", "navigation raced the replay");
     expect(draft.stop()).toEqual({ kind: "blocked", reasons: ["action 2 (phone): navigation raced the replay"] });
     expect(draft.isActive).toBe(true);
@@ -132,8 +131,8 @@ describe("flow draft", () => {
 
   it("unblock removes recovered reasons so a later stop exports", () => {
     const draft = new FlowDraft();
-    draft.start("https://example.test", "source", 1, 1);
-    draft.append({ ...envelope, actionId: 2 });
+    draft.start("https://example.test", "source", 1);
+    draft.append({ ...envelope, actionId: 2 }, draft.sessionGeneration);
     draft.block(2, "phone", "replay timed out");
     draft.block(2, "phone", "replay timed out again");
     draft.unblock(2, "phone");
@@ -146,18 +145,18 @@ describe("flow draft", () => {
 
   it("start resets blocking from a previous recording", () => {
     const draft = new FlowDraft();
-    draft.start("https://example.test", "source", 1, 1);
-    draft.append({ ...envelope, actionId: 2 });
+    draft.start("https://example.test", "source", 1);
+    draft.append({ ...envelope, actionId: 2 }, draft.sessionGeneration);
     draft.block(2, "phone", "stale");
-    draft.start("https://example.test", "source", 5, 5);
-    draft.append({ ...envelope, actionId: 6 });
+    draft.start("https://example.test", "source", 5);
+    draft.append({ ...envelope, actionId: 6 }, draft.sessionGeneration);
     expect(draft.stop()).toEqual({ kind: "saved", source: expect.any(String) });
   });
 
   it("cancel discards envelopes and deactivates", () => {
     const draft = new FlowDraft();
-    draft.start("https://example.test", "source", 1, 1);
-    draft.append({ ...envelope, actionId: 2 });
+    draft.start("https://example.test", "source", 1);
+    draft.append({ ...envelope, actionId: 2 }, draft.sessionGeneration);
     draft.cancel();
     expect(draft.isActive).toBe(false);
     expect(draft.stop()).toEqual({ kind: "empty" });

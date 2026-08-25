@@ -81,12 +81,15 @@ export const ChromeStateSchema = WorkspaceStateSchema.safeExtend({
 });
 export type ChromeState = z.infer<typeof ChromeStateSchema>;
 
-function paneFromViewport(viewport: ViewportSpec, id: string, url: string): PaneState {
-  return { id, name: viewport.name, viewport, url, canGoBack: false, canGoForward: false, loading: false, failure: null, outOfSync: null };
+/** PaneState fields with no persistence lifecycle: reset on add and on load-time sanitize. */
+export const RUNTIME_PANE_DEFAULTS = { canGoBack: false, canGoForward: false, loading: false, failure: null, outOfSync: null } as const;
+
+export function paneFromViewport(viewport: ViewportSpec, id: string, url: string): PaneState {
+  return { id, name: viewport.name, viewport, url, ...RUNTIME_PANE_DEFAULTS };
 }
 
 export function defaultWorkspace(url = "https://example.com/"): WorkspaceState {
   const viewports = VIEWPORT_PRESETS;
   const panes = viewports.map((viewport) => paneFromViewport(viewport, viewport.id, url));
-  return { version: 1, panes, order: panes.map((pane) => pane.id), layout: "free", positions: {}, emulation: { colorScheme: "auto", reducedMotion: false, throttling: "none", overlays: { outlines: false, disableImages: false, showRoles: false } }, focusedPaneId: null, syncEnabled: true, sharedUrl: url };
+  return { version: 1, panes, order: panes.map((pane) => pane.id), layout: "free", positions: {}, emulation: EmulationSettingsSchema.parse({}), focusedPaneId: null, syncEnabled: true, sharedUrl: url };
 }

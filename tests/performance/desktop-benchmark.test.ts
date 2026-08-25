@@ -2,7 +2,8 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { launchDesktopApp, pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
+import { launchDesktopApp, pollUntil, startFixtureServer, fixturePaneCount, type FixtureServer } from "../helpers/harness.js";
+import { clickPaneSurface } from "../integration/cdp-input.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
 
 const FIXTURE_PORT = FIXTURE_PORTS.benchmark;
@@ -25,12 +26,9 @@ function remotePages(): Page[] {
 }
 
 async function waitForPaneCount(expected: number): Promise<void> {
-  await pollUntil(async () => {
-    const count = await application.evaluate(({ webContents }, port) =>
-      webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`)).length,
-      FIXTURE_PORT);
-    return count === expected && remotePages().length === expected || null;
-  }, 10_000);
+  await pollUntil(async () =>
+    await fixturePaneCount(application, FIXTURE_PORT) === expected && remotePages().length === expected || null,
+  10_000);
 }
 
 async function waitForMirrorCount(expected: number): Promise<void> {
@@ -41,32 +39,7 @@ async function waitForMirrorCount(expected: number): Promise<void> {
 }
 
 async function clickDesktopSource(): Promise<void> {
-  const surface = await chrome.locator('[data-pane-surface="desktop-1440"]').boundingBox();
-  if (!surface) throw new Error("desktop source surface missing");
-  const scale = Math.min(1, surface.width / 1440, surface.height / 900);
-  await application.evaluate(async ({ webContents }, input) => {
-    const candidates = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${input.port}`));
-    let source: (typeof candidates)[number] | undefined;
-    for (const candidate of candidates) {
-      if (await candidate.executeJavaScript("innerWidth") === 1440) { source = candidate; break; }
-    }
-    if (!source) throw new Error("desktop source pane missing");
-    // Click with verification + retry: a missed click would silently starve the mirror-count gate.
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const box = await source.executeJavaScript(`(() => {
-        const element = document.querySelector('[data-testid="apply"]');
-        element.scrollIntoView({ block: "center", inline: "center" });
-        return element.getBoundingClientRect().toJSON();
-      })()`);
-      const x = (box.x + box.width / 2) * input.scale;
-      const y = (box.y + box.height / 2) * input.scale;
-      await source.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-      await source.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
-      const status = await source.executeJavaScript(`document.querySelector('[data-testid="status"]')?.textContent`);
-      if (status === "applied") return;
-    }
-    throw new Error("source apply click did not activate after 3 attempts");
-  }, { port: FIXTURE_PORT, scale });
+  await clickPaneSurface(application, chrome, { port: FIXTURE_PORT, testId: "apply", expectedStatus: "applied" });
 }
 
 async function waitForFinalInput(expected: string): Promise<boolean> {

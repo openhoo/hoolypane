@@ -44,7 +44,6 @@ export const ActionEnvelopeSchema = z.strictObject({
   documentGeneration: z.number().int().nonnegative(),
   sourcePaneId: nonEmpty,
   action: ActionSchema,
-  recordedAtUnixMs: z.number().int().nonnegative(),
 });
 export type ActionEnvelope = z.infer<typeof ActionEnvelopeSchema>;
 

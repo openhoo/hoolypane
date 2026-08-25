@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { rm } from "node:fs/promises";
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { IPC_CHANNELS } from "../../packages/contracts/src/index.js";
+import { IPC_CHANNELS } from "@hoolypane/contracts";
 import { launchDesktopApp, pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
 

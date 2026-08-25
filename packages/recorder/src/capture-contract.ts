@@ -1,4 +1,4 @@
-import { encodedDimension, type ViewportSpec } from "@hoolypane/contracts";
+import { encodedDimension, MAX_ENCODED_DIMENSION, type ViewportSpec } from "@hoolypane/contracts";
 
 export const CAPTURE_CONTRACT = "multi-viewport-cfr-v1" as const;
 export const VALIDATOR_VERSION = 1;
@@ -6,10 +6,8 @@ export const POST_ROLL_US = 250_000;
 export const MAX_QUEUED_FRAMES = 8;
 export const MAX_QUEUED_BYTES = 32 * 1024 * 1024;
 
-// libvpx's VP8 encoder rejects any dimension above 16383 px ("Invalid parameter", verified against the pinned
-// ffmpeg-static build); the contracts schema caps encoded dimensions at this same limit, and folding the codec
-// limit into the composite fit scale keeps grid outputs encodable while preserving aspect ratio.
-const VP8_MAX_DIMENSION = 16_383;
+// Folding the shared codec limit (MAX_ENCODED_DIMENSION from @hoolypane/contracts) into the composite
+// fit scale keeps grid outputs encodable while preserving aspect ratio.
 
 export type RecordingState = "awaiting-initial-frames" | "recording" | "post-roll" | "stopping" | "aligning" | "encoding" | "validating" | "complete" | "failed";
 const NEXT_STATES: Readonly<Record<RecordingState, readonly RecordingState[]>> = {
@@ -57,7 +55,7 @@ export function compositeGeometry(tracks: readonly TrackGeometry[], maximum: { r
   const tileHeight = Math.max(...tracks.map((track) => track.encodedHeight));
   const unscaledWidth = tileWidth * columns;
   const unscaledHeight = tileHeight * rows;
-  const scale = Math.min(1, maximum.width / unscaledWidth, maximum.height / unscaledHeight, VP8_MAX_DIMENSION / unscaledWidth, VP8_MAX_DIMENSION / unscaledHeight);
+  const scale = Math.min(1, maximum.width / unscaledWidth, maximum.height / unscaledHeight, MAX_ENCODED_DIMENSION / unscaledWidth, MAX_ENCODED_DIMENSION / unscaledHeight);
   return {
     columns,
     rows,
@@ -75,7 +73,9 @@ export function durationFrameCount(t0Us: number, t1Us: number, fps: 30 | 60): nu
   return Math.max(1, Math.ceil((t1Us - t0Us) * fps / 1_000_000));
 }
 
-export function alignFrames(frames: readonly SourceFrame[], t0Us: number, durationFrames: number, fps: 30 | 60): { mappings: SlotMapping[]; heldFrames: number; maximumSkewUs: number } {
+export interface AlignmentResult { readonly mappings: SlotMapping[]; readonly heldFrames: number; readonly maximumSkewUs: number }
+
+export function alignFrames(frames: readonly SourceFrame[], t0Us: number, durationFrames: number, fps: 30 | 60): AlignmentResult {
   if (frames.length === 0) throw new Error("cannot align an empty frame track");
   const sorted = [...frames].sort((left, right) => left.timestampUs - right.timestampUs || left.sequence - right.sequence);
   let selected = sorted.findLastIndex((frame) => frame.timestampUs <= t0Us);

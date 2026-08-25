@@ -6,6 +6,18 @@ import { join, resolve } from "node:path";
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const npx = process.platform === "win32" ? "npx.cmd" : "npx";
+
+// Explicit screen geometry: xvfb-run's default 640x480 clamps the Electron window below its
+// minimum, shrinking masonry seeds until native drag input hits the wrong card (documented
+// phantom-drag failure mode). The same args and environment are used everywhere desktop
+// E2E or packaging smoke runs locally.
+const xvfb = ["--", "xvfb-run", "-a", "--server-args=-screen 0 1920x1080x24"];
+const linuxDesktopEnvironment = () => {
+  const environment = { ...process.env, LIBGL_ALWAYS_SOFTWARE: "1" };
+  delete environment.DBUS_SESSION_BUS_ADDRESS;
+  delete environment.WAYLAND_DISPLAY;
+  return environment;
+};
 function run(command, args, environment = process.env, cwd) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -45,15 +57,8 @@ await run(pnpm, ["test:runner"]);
 await run(pnpm, ["prepare:electron"]);
 await run(pnpm, ["build"]);
 if (process.platform === "linux") {
-  const environment = { ...process.env, LIBGL_ALWAYS_SOFTWARE: "1" };
-  delete environment.DBUS_SESSION_BUS_ADDRESS;
-  delete environment.WAYLAND_DISPLAY;
-  // Explicit screen geometry: xvfb-run's default 640x480 clamps the Electron window below its
-  // minimum, shrinking masonry seeds until native drag input hits the wrong card (documented
-  // phantom-drag failure mode). The same args are used everywhere desktop E2E runs locally.
-  const xvfb = ["--", "xvfb-run", "-a", "--server-args=-screen 0 1920x1080x24"];
-  await run("dbus-run-session", [...xvfb, pnpm, "test:desktop"], environment);
-  await run("dbus-run-session", [...xvfb, pnpm, "benchmark:desktop"], environment);
+  await run("dbus-run-session", [...xvfb, pnpm, "test:desktop"], linuxDesktopEnvironment());
+  await run("dbus-run-session", [...xvfb, pnpm, "benchmark:desktop"], linuxDesktopEnvironment());
 } else {
   await run(pnpm, ["test:desktop"]);
   await run(pnpm, ["benchmark:desktop"]);
@@ -95,10 +100,7 @@ for (const entry of await readdir("dist/desktop").catch(() => [])) {
 const packageScript = process.platform === "win32" ? "package:windows" : process.platform === "darwin" ? "package:mac" : "package:linux";
 await run(pnpm, [packageScript]);
 if (process.platform === "linux") {
-  const environment = { ...process.env, LIBGL_ALWAYS_SOFTWARE: "1" };
-  delete environment.DBUS_SESSION_BUS_ADDRESS;
-  delete environment.WAYLAND_DISPLAY;
-  await run("dbus-run-session", ["--", "xvfb-run", "-a", "--server-args=-screen 0 1920x1080x24", pnpm, "smoke:desktop-package", "--", "dist/desktop"], environment);
+  await run("dbus-run-session", [...xvfb, pnpm, "smoke:desktop-package", "--", "dist/desktop"], linuxDesktopEnvironment());
 } else {
   await run(pnpm, ["smoke:desktop-package", "--", "dist/desktop"]);
 }

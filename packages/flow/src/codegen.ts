@@ -4,14 +4,14 @@ function literal(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export function locatorExpression(locator: LocatorSpec, page = "page"): string {
+export function locatorExpression(locator: LocatorSpec): string {
   switch (locator.kind) {
-    case "testId": return `${page}.getByTestId(${literal(locator.value)})`;
-    case "role": return `${page}.getByRole(${literal(locator.role)}, { name: ${literal(locator.name)}, exact: true })`;
-    case "label": return `${page}.getByLabel(${literal(locator.value)}, { exact: true })`;
-    case "placeholder": return `${page}.getByPlaceholder(${literal(locator.value)}, { exact: true })`;
-    case "text": return `${page}.getByText(${literal(locator.value)}, { exact: true })`;
-    case "css": return `${page}.locator(${literal(locator.value)})`;
+    case "testId": return `page.getByTestId(${literal(locator.value)})`;
+    case "role": return `page.getByRole(${literal(locator.role)}, { name: ${literal(locator.name)}, exact: true })`;
+    case "label": return `page.getByLabel(${literal(locator.value)}, { exact: true })`;
+    case "placeholder": return `page.getByPlaceholder(${literal(locator.value)}, { exact: true })`;
+    case "text": return `page.getByText(${literal(locator.value)}, { exact: true })`;
+    case "css": return `page.locator(${literal(locator.value)})`;
   }
 }
 
@@ -44,9 +44,9 @@ function actionStatements(action: Action): readonly string[] {
   }
 }
 
-export function serializeFlow(envelopes: readonly ActionEnvelope[], importPath = "@hoolypane/runner"): string {
+export function serializeFlow(envelopes: readonly ActionEnvelope[]): string {
   const lines = [
-    `import { defineFlow } from ${literal(importPath)};`,
+    `import { defineFlow } from ${literal("@hoolypane/runner")};`,
     "",
     "export default defineFlow(async ({ all }) => {",
   ];

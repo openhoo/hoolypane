@@ -11,23 +11,20 @@ export class FlowDraft {
   // so a drain that outlives its recording cannot pollute the next one.
   private generation = 0;
 
-  start(url: string, sourcePaneId: string, actionId: number, recordedAtUnixMs: number): void {
-    const envelope = ActionEnvelopeSchema.parse({ actionId, documentGeneration: 0, sourcePaneId, action: { kind: "navigate", url }, recordedAtUnixMs });
+  start(url: string, sourcePaneId: string, actionId: number): void {
+    const envelope = ActionEnvelopeSchema.parse({ actionId, documentGeneration: 0, sourcePaneId, action: { kind: "navigate", url } });
     this.generation += 1;
     this.active = true;
     this.blocking.clear();
     this.envelopes = [envelope];
   }
 
-  append(envelope: ActionEnvelope, generation: number = this.generation): void {
+  append(envelope: ActionEnvelope, generation: number): void {
     if (!this.active || generation !== this.generation) return;
     this.envelopes.push(ActionEnvelopeSchema.parse(envelope));
     // A later successful action recorded ON a pane proves it recovered: drop that pane's stale
     // replay-failure reasons so one transient miss cannot wedge the session until app restart.
-    const suffix = `:${envelope.sourcePaneId}`;
-    for (const key of [...this.blocking.keys()]) {
-      if (key.endsWith(suffix)) this.blocking.delete(key);
-    }
+    this.clearBlockingForPane(envelope.sourcePaneId);
   }
 
   block(actionId: number, paneId: string, reason: string): void {
@@ -42,13 +39,17 @@ export class FlowDraft {
     this.blocking.delete(`${actionId}:${paneId}`);
   }
 
-  /** Drops a closed pane's blocking entries: its replay failures can never recover via a later
-   *  recorded action on it, so keeping them would wedge every future stop() as blocked. */
-  discardPane(paneId: string): void {
+  private clearBlockingForPane(paneId: string): void {
     const suffix = `:${paneId}`;
     for (const key of [...this.blocking.keys()]) {
       if (key.endsWith(suffix)) this.blocking.delete(key);
     }
+  }
+
+  /** Drops a closed pane's blocking entries: its replay failures can never recover via a later
+   *  recorded action on it, so keeping them would wedge every future stop() as blocked. */
+  discardPane(paneId: string): void {
+    this.clearBlockingForPane(paneId);
   }
 
   /** Computes the export outcome without mutating the draft; callers commit only after a successful save. */
@@ -64,7 +65,7 @@ export class FlowDraft {
       return { kind: "blocked", reasons };
     }
     if (this.envelopes.length <= 1) return { kind: "empty" };
-    return { kind: "saved", source: serializeFlow(this.envelopes, "@hoolypane/runner") };
+    return { kind: "saved", source: serializeFlow(this.envelopes) };
   }
 
   /** Discards the recording. Only call once persistence succeeded (or the user abandoned the save). */
@@ -75,9 +76,7 @@ export class FlowDraft {
   }
 
   cancel(): void {
-    this.active = false;
-    this.envelopes = [];
-    this.blocking.clear();
+    this.commit();
   }
 
   get sessionGeneration(): number { return this.generation; }

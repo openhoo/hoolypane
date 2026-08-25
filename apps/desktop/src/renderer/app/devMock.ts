@@ -14,6 +14,7 @@ import { initialChromeState } from "./state.js";
 // Imported verbatim from the main process so the mock can never drift from the real
 // navigation-normalization pipeline (slashless special schemes, userinfo stripping).
 import { normalizeUrl } from "../../main/panes/url.js";
+import { addPane, uniquePaneId } from "../../main/panes/workspace.js";
 
 let mockState: ChromeState = initialChromeState();
 const listeners = new Set<(value: unknown) => void>();
@@ -47,14 +48,6 @@ function settleLoading(paneIds: readonly string[]): void {
   }, 600);
 }
 
-function uniqueId(base: string): string {
-  const taken = new Set(mockState.panes.map((pane) => pane.id));
-  let candidate = base;
-  let counter = 2;
-  while (taken.has(candidate)) candidate = `${base}-${counter++}`;
-  return candidate;
-}
-
 function apply(command: ChromeCommand): void {
   switch (command.kind) {
     case "navigate": {
@@ -84,19 +77,8 @@ function apply(command: ChromeCommand): void {
       settleLoading([command.paneId]);
       break;
     case "create": {
-      const id = uniqueId(command.viewport.id);
-      const pane: PaneState = {
-        id,
-        name: command.viewport.name,
-        viewport: command.viewport,
-        url: mockState.sharedUrl,
-        canGoBack: false,
-        canGoForward: false,
-        loading: false,
-        failure: null,
-        outOfSync: null,
-      };
-      patch({ panes: [...mockState.panes, pane], order: [...mockState.order, id] });
+      const next = addPane(mockState, command.viewport, mockState.sharedUrl, uniquePaneId(new Set(mockState.panes.map((pane) => pane.id)), command.viewport.id));
+      patch({ panes: next.panes, order: next.order });
       break;
     }
     case "close": {

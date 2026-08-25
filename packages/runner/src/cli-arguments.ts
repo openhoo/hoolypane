@@ -1,5 +1,4 @@
 export interface RunArguments {
-  readonly command: "run";
   readonly flowFile: string;
   readonly configFile: string;
   readonly outputDir?: string;
@@ -55,5 +54,5 @@ export function parseCliArguments(argv: readonly string[]): RunArguments {
     throw new Error(`Unknown argument: ${argument}\n${USAGE}`);
   }
 
-  return { command: "run", flowFile: argv[1], configFile, headed, ...(outputDir === undefined ? {} : { outputDir }) };
+  return { flowFile: argv[1], configFile, headed, ...(outputDir === undefined ? {} : { outputDir }) };
 }

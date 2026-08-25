@@ -114,7 +114,7 @@ describe("recording session guards", () => {
       off: () => undefined,
     };
     const session = new RecordingSession({
-      recording: { fps: 30, jpegQuality: 85, layout: "grid", compositeMaxSize: { width: 128, height: 128 }, compositeBackground: "#111318", keepRaw: false },
+      recording: { fps: 30, jpegQuality: 85, compositeMaxSize: { width: 128, height: 128 }, compositeBackground: "#111318", keepRaw: false },
       timeoutMs: 100,
       outputDir: directory,
     });

@@ -53,7 +53,7 @@ async function probe(executable: string, file: string): Promise<{ stream: ProbeS
   return { stream, packets: data.packets ?? [] };
 }
 
-async function sha256File(path: string): Promise<string> {
+export async function sha256File(path: string): Promise<string> {
   const handle = await open(path, "r");
   try {
     const hash = createHash("sha256");

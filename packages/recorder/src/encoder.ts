@@ -9,7 +9,7 @@ import type { FrameSpool } from "./spool.js";
 
 interface EncoderPaths { readonly ffmpeg: string; readonly ffprobe: string }
 interface AlignedTrack { readonly id: string; readonly spool: FrameSpool; readonly mappings: readonly SlotMapping[]; readonly geometry: TrackGeometry }
-interface EncodingResult { readonly geometry: CompositeGeometry }
+export interface EncodingResult { readonly geometry: CompositeGeometry }
 
 async function executable(path: string, envVariable?: string): Promise<string> {
   try {

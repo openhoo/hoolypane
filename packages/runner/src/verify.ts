@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { verifyArtifacts } from "@hoolypane/recorder";
+import type { TrackGeometry } from "@hoolypane/recorder";
 
 export async function verifyDirectory(path: string): Promise<number> {
   const outputDir = resolve(path);
@@ -29,7 +30,7 @@ export async function verifyDirectory(path: string): Promise<number> {
       : "";
     throw new Error(`${manifestPath} records status "${String(manifestRecord.status)}"${reasons ? `: ${reasons}` : ""}`);
   }
-  let tracks: Array<{ id: string; encodedWidth: number; encodedHeight: number }> = [];
+  let tracks: TrackGeometry[] = [];
   if (manifestRecord.viewports !== undefined) {
     if (!Array.isArray(manifestRecord.viewports)) throw new Error(`${manifestPath} has a malformed viewports field: expected an array`);
     // A present-but-empty array must fail loudly for the same reason: ViewportListSchema
@@ -47,7 +48,7 @@ export async function verifyDirectory(path: string): Promise<number> {
       tracks.push({ id: entry.id as string, encodedWidth: entry.encodedWidth as number, encodedHeight: entry.encodedHeight as number });
     }
   }
-  let expectedGeometry: { tracks: Array<{ id: string; encodedWidth: number; encodedHeight: number }>; composite: { width: number; height: number } } | undefined;
+  let expectedGeometry: { tracks: TrackGeometry[]; composite: { width: number; height: number } } | undefined;
   if (manifestRecord.geometry !== undefined) {
     // A present-but-malformed geometry must fail loudly: silently treating it as absent
     // would degrade geometry verification to timeline-only while claiming success.
