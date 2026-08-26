@@ -7,7 +7,7 @@ import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { runFlow } from "../../packages/runner/src/run-flow.js";
 import { OVERVIEW_ERROR_TILE_COLOR } from "../../apps/desktop/src/main/screenshots/overview-shared.js";
-import { launchDesktopApp, pollUntil, startFixtureServer, waitForFixturePanes, type FixtureServer } from "../helpers/harness.js";
+import { launchDesktopApp, pollUntil, startFixtureServer, teardownDesktopSuite, waitForFixturePanes, type FixtureServer } from "../helpers/harness.js";
 import { clickPaneSurface } from "./cdp-input.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
 
@@ -169,20 +169,38 @@ describe("desktop screenshots and recorded flows", () => {
   }, 30_000);
 
   it("marks missing panes in the overview export", async () => {
-    await application.evaluate((_electron, path) => { process.env.HOOLYPANE_TEST_OVERVIEW_PNG = path; }, errorOverviewPng);
-    await application.evaluate(({ webContents }, port) => {
-      const pane = webContents.getAllWebContents().find((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`));
-      if (!pane) throw new Error("pane missing for error-overview test");
-      pane.close({ waitForBeforeUnload: false });
-    }, FIXTURE_PORT);
-    await waitForFixturePanes(application, FIXTURE_PORT, 4);
-    await chrome.getByRole("button", { name: "Save Overview PNG" }).click();
-    await waitForFile(errorOverviewPng);
-    const errorPixels = await sharp(errorOverviewPng).ensureAlpha().raw().toBuffer();
-    const [errorRed, errorGreen, errorBlue] = [1, 3, 5].map((index) => Number.parseInt(OVERVIEW_ERROR_TILE_COLOR.slice(index, index + 2), 16));
-    let errorBackgroundPixels = 0;
-    for (let offset = 0; offset < errorPixels.length; offset += 4) if (errorPixels[offset] === errorRed && errorPixels[offset + 1] === errorGreen && errorPixels[offset + 2] === errorBlue) errorBackgroundPixels += 1;
-    expect(errorBackgroundPixels).toBeGreaterThan(1_000);
-    expect(await readFile(errorOverviewPng)).not.toEqual(await readFile(overviewPng));
-  }, 30_000);
+    // This test overrides export env and closes a pane, so it runs against a dedicated
+    // app instance; the shared app keeps its baseline env and all five panes intact.
+    const isolatedDir = await mkdtemp(join(tmpdir(), "hoolypane-artifacts-error-"));
+    const launch = await launchDesktopApp({
+      port: FIXTURE_PORT,
+      userDataDir: isolatedDir,
+      extraEnv: {
+        HOOLYPANE_TEST_MODE: "1",
+        HOOLYPANE_TEST_PANE_PNG: join(isolatedDir, "pane.png"),
+        HOOLYPANE_TEST_OVERVIEW_PNG: errorOverviewPng,
+        HOOLYPANE_TEST_FLOW_PATH: join(isolatedDir, "recorded.flow.ts"),
+      },
+    });
+    try {
+      await waitForFixturePanes(launch.application, FIXTURE_PORT, 5);
+      await launch.application.evaluate(({ webContents }, port) => {
+        const pane = webContents.getAllWebContents().find((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`));
+        if (!pane) throw new Error("pane missing for error-overview test");
+        pane.close({ waitForBeforeUnload: false });
+      }, FIXTURE_PORT);
+      await waitForFixturePanes(launch.application, FIXTURE_PORT, 4);
+      await launch.chrome.getByRole("button", { name: "Save Overview PNG" }).click();
+      await waitForFile(errorOverviewPng);
+      const errorPixels = await sharp(errorOverviewPng).ensureAlpha().raw().toBuffer();
+      const [errorRed, errorGreen, errorBlue] = [1, 3, 5].map((index) => Number.parseInt(OVERVIEW_ERROR_TILE_COLOR.slice(index, index + 2), 16));
+      let errorBackgroundPixels = 0;
+      for (let offset = 0; offset < errorPixels.length; offset += 4) if (errorPixels[offset] === errorRed && errorPixels[offset + 1] === errorGreen && errorPixels[offset + 2] === errorBlue) errorBackgroundPixels += 1;
+      expect(errorBackgroundPixels).toBeGreaterThan(1_000);
+      expect(await readFile(errorOverviewPng)).not.toEqual(await readFile(overviewPng));
+    } finally {
+      // Tolerant of an already-closed launch; the shared fixture server stays untouched.
+      await teardownDesktopSuite(launch.application, undefined, isolatedDir);
+    }
+  }, 60_000);
 });

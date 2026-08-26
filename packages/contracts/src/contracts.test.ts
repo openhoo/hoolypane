@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ActionSchema } from "./action.js";
-import { FAILURE_REASON_MAX_LENGTH } from "./errors.js";
+import { FAILURE_REASON_MAX_LENGTH, errorMessage, failureReason, isErrnoException } from "./errors.js";
 import { ActionEnvelopeSchema, BoundsSnapshotSchema, ChromeCommandSchema, ChromeStateSchema, HoolypaneConfigSchema, PaneGenerationSchema, REPLAY_RESULT_PHASES, RecordFailureSchema, ReplayRequestSchema, ReplayResultSchema, VIEWPORT_PRESETS, WorkspaceStateSchema, defaultWorkspace, staleGenerationMessage } from "./index.js";
 
 describe("configuration", () => {
@@ -76,6 +76,19 @@ describe("workspace state", () => {
     expect(ChromeStateSchema.safeParse({ ...chrome, focusedPaneId: "missing-pane" }).success).toBe(false);
     expect(ChromeStateSchema.safeParse({ ...chrome, order: [...chrome.order].reverse().slice(1) }).success).toBe(false);
     expect(ChromeStateSchema.safeParse({ ...chrome, sharedUrl: "file:///etc/passwd" }).success).toBe(false);
+  });
+
+  it("rejects duplicate pane ids and duplicated order entries", () => {
+    const workspace = defaultWorkspace();
+    const [first] = workspace.panes;
+    const duplicatePanes = WorkspaceStateSchema.safeParse({ ...workspace, panes: [first!, first!], order: [first!.id, first!.id] });
+    if (duplicatePanes.success) throw new Error("expected duplicate pane ids to be rejected");
+    expect(duplicatePanes.error.issues.some((issue) => issue.path.join(".") === "panes")).toBe(true);
+    const duplicatedOrder = [...workspace.order];
+    duplicatedOrder[1] = workspace.order[0]!;
+    const result = WorkspaceStateSchema.safeParse({ ...workspace, order: duplicatedOrder });
+    if (result.success) throw new Error("expected duplicated order entries to be rejected");
+    expect(result.error.issues.some((issue) => issue.path.join(".") === "order")).toBe(true);
   });
 
   it("restricts recorded action kinds to the action language", () => {
@@ -178,5 +191,27 @@ describe("ipc wire schemas", () => {
     expect(PaneGenerationSchema.safeParse({ documentGeneration: -1 }).success).toBe(false);
     expect(PaneGenerationSchema.safeParse({ documentGeneration: 1.5 }).success).toBe(false);
     expect(staleGenerationMessage(3, 7)).toBe("stale document generation 3, current 7");
+  });
+});
+
+describe("error normalization", () => {
+  it("normalizes throwables and caps reasons to the contractual length", () => {
+    expect(errorMessage(new Error("boom"))).toBe("boom");
+    expect(errorMessage("raw")).toBe("raw");
+    expect(failureReason(new Error("short"))).toBe("short");
+    expect(failureReason("x".repeat(FAILURE_REASON_MAX_LENGTH + 5))).toHaveLength(FAILURE_REASON_MAX_LENGTH);
+    expect(failureReason(new Error("y".repeat(FAILURE_REASON_MAX_LENGTH + 5)))).toHaveLength(FAILURE_REASON_MAX_LENGTH);
+  });
+
+  it("discriminates errno codes on caught values of any shape", () => {
+    const gone = Object.assign(new Error("gone"), { code: "ENOENT" });
+    expect(isErrnoException(gone, "ENOENT")).toBe(true);
+    expect(isErrnoException(gone, "EACCES")).toBe(false);
+    expect(isErrnoException(null, "ENOENT")).toBe(false);
+    expect(isErrnoException(undefined, "ENOENT")).toBe(false);
+    expect(isErrnoException("ENOENT", "ENOENT")).toBe(false);
+    expect(isErrnoException(42, "ENOENT")).toBe(false);
+    expect(isErrnoException({ code: "EACCES" }, "ENOENT")).toBe(false);
+    expect(isErrnoException({ code: null }, "ENOENT")).toBe(false);
   });
 });

@@ -21,11 +21,13 @@ import {
 
 export type SendCommand = (command: ChromeCommand) => void;
 
-const OVERLAY_ITEMS = [
-  { key: "outlines", label: "Outlines" },
-  { key: "disableImages", label: "Disable images" },
-  { key: "showRoles", label: "Show roles" },
-] as const satisfies readonly { key: OverlayKey; label: string }[];
+const OVERLAY_LABELS = {
+  outlines: "Outlines",
+  disableImages: "Disable images",
+  showRoles: "Show roles",
+} satisfies Record<OverlayKey, string>;
+
+const OVERLAY_ITEMS = Object.entries(OVERLAY_LABELS).map(([key, label]) => ({ key: key as OverlayKey, label }));
 
 // Option tables derive from the contract unions: adding or renaming a mode fails compilation
 // here instead of drifting into hand-synced literals rejected only at runtime by main's zod.
@@ -298,7 +300,7 @@ function PaneName({ pane, onRename }: { pane: PaneState; onRename(name: string):
     return (
       <span
         ref={nameRef}
-        title="Double-click or press Enter/Space to rename"
+        title="Double-click or press Enter/F2/Space to rename"
         role="button"
         tabIndex={0}
         aria-label={`Rename ${pane.name}`}

@@ -102,6 +102,12 @@ function roleFor(element: Element): string {
     if (element.type === "checkbox") return "checkbox";
     if (element.type === "radio") return "radio";
     if (["button", "submit", "reset"].includes(element.type)) return "button";
+    // Playwright resolves these native types under their real implicit ARIA roles; recording them
+    // as textbox produced getByRole steps that can never match, deadlocking exported flows.
+    if (element.type === "search") return "searchbox";
+    if (element.type === "number") return "spinbutton";
+    if (element.type === "range") return "slider";
+    if (element.type === "file") return "button";
     return "textbox";
   }
   return "";
@@ -388,11 +394,16 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
       // as in-sync and never flagged outOfSync. Validated before the suppression entry is armed,
       // mirroring the other hard failures in this handler.
       if (request.phase === "apply-dom") assertApplyDomTarget(request, element);
-      const entry: SuppressionEntry = { generation: request.documentGeneration, kind: request.action.kind };
-      suppressed.set(request.actionId, entry);
+      // focus() is a documented no-op on unfocusable elements: without this check a drifted
+      // locator arms suppression and reports ok:true while the native keystroke/insertText lands
+      // on whatever held focus before. Validated before the suppression entry is armed, mirroring
+      // the other hard failures in this handler.
       if (request.phase === "resolve" && (request.action.kind === "fill" || request.action.kind === "press") && element instanceof HTMLElement) {
         element.focus({ preventScroll: true });
+        if (document.activeElement !== element) throw new Error("resolved target did not take focus");
       }
+      const entry: SuppressionEntry = { generation: request.documentGeneration, kind: request.action.kind };
+      suppressed.set(request.actionId, entry);
       if (request.phase === "apply-dom") applyDomWrite(request, element);
       // Mirrored native input is routed at viewport coordinates: bring the target into view first,
       // exactly like a real user (or Playwright's auto-scroll) would, before measuring its box.

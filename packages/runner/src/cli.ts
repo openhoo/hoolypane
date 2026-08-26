@@ -2,7 +2,7 @@
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { errorMessage } from "@hoolypane/contracts";
-import { EXIT_INTERRUPTED, parseCliArguments, TOP_LEVEL_USAGE } from "./cli-arguments.js";
+import { EXIT_INTERRUPTED, parseCliArguments, TOP_LEVEL_USAGE, VERIFY_USAGE } from "./cli-arguments.js";
 import { runFlow } from "./run-flow.js";
 import { verifyDirectory } from "./verify.js";
 
@@ -13,7 +13,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       return 0;
     }
     if (argv[0] === "verify") {
-      if (!argv[1] || argv.length !== 2) throw new Error("Usage: hoolypane verify <output-dir>");
+      if (!argv[1] || argv.length !== 2) throw new Error(VERIFY_USAGE);
       return await verifyDirectory(argv[1]);
     }
     const args = parseCliArguments(argv);

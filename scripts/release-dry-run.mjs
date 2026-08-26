@@ -2,23 +2,12 @@ import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 // Node strips types natively; plain-node scripts need the exact .ts specifier.
-import { applyLinuxSoftwareRenderingEnv, runCommand } from "../tests/helpers/desktop-runtime.ts";
+import { runCommand } from "../tests/helpers/desktop-runtime.ts";
 
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const npx = process.platform === "win32" ? "npx.cmd" : "npx";
 
-// Explicit screen geometry: xvfb-run's default 640x480 clamps the Electron window below its
-// minimum, shrinking masonry seeds until native drag input hits the wrong card (documented
-// phantom-drag failure mode). The same args and environment are used everywhere desktop
-// E2E or packaging smoke runs locally.
-const xvfb = ["--", "xvfb-run", "-a", "--server-args=-screen 0 1920x1080x24"];
-const linuxDesktopEnvironment = () => {
-  const environment = applyLinuxSoftwareRenderingEnv({ ...process.env });
-  delete environment.DBUS_SESSION_BUS_ADDRESS;
-  delete environment.WAYLAND_DISPLAY;
-  return environment;
-};
 // Local adapters over the shared runner in tests/helpers/desktop-runtime.ts: gates stream live
 // output while the consumer --help probe captures regardless of exit code. Win32 .cmd shims
 // (pnpm.cmd/npm.cmd/npx.cmd) resolve only through cmd.exe; args stay fixed literals, which is
@@ -40,8 +29,8 @@ await run(pnpm, ["test:runner"]);
 await run(pnpm, ["prepare:electron"]);
 await run(pnpm, ["build"]);
 if (process.platform === "linux") {
-  await run("dbus-run-session", [...xvfb, pnpm, "test:desktop"], linuxDesktopEnvironment());
-  await run("dbus-run-session", [...xvfb, pnpm, "benchmark:desktop"], linuxDesktopEnvironment());
+  await run(pnpm, ["test:desktop:xvfb"]);
+  await run(pnpm, ["benchmark:desktop:xvfb"]);
 } else {
   await run(pnpm, ["test:desktop"]);
   await run(pnpm, ["benchmark:desktop"]);
@@ -83,7 +72,7 @@ for (const entry of await readdir("dist/desktop").catch(() => [])) {
 const packageScript = process.platform === "win32" ? "package:windows" : process.platform === "darwin" ? "package:mac" : "package:linux";
 await run(pnpm, [packageScript]);
 if (process.platform === "linux") {
-  await run("dbus-run-session", [...xvfb, pnpm, "smoke:desktop-package", "--", "dist/desktop"], linuxDesktopEnvironment());
+  await run(pnpm, ["smoke:desktop-package:xvfb", "--", "dist/desktop"]);
 } else {
   await run(pnpm, ["smoke:desktop-package", "--", "dist/desktop"]);
 }

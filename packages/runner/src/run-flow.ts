@@ -15,7 +15,6 @@ import { EXIT_INTERRUPTED } from "./cli-arguments.js";
 import type { RunArguments } from "./cli-arguments.js";
 
 interface RunResult {
-  readonly outputDir: string;
   readonly status: RunStatus;
 }
 
@@ -314,10 +313,10 @@ export async function runFlow(args: RunArguments): Promise<RunResult> {
       // contents must stay intact, so discard the partial traces instead of writing them
       // over the preserved directory. context.close() below drops the unfinished buffers.
       state.tracesStopped = true;
-      return { outputDir, status: "interrupted" };
+      return { status: "interrupted" };
     }
     await finalizeRecording(state.recorder, config, outputDir, state);
-    return { outputDir, status: statusFor(state) };
+    return { status: statusFor(state) };
   } finally {
     process.removeListener("SIGINT", onSignal);
     process.removeListener("SIGTERM", onSignal);

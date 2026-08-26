@@ -17,13 +17,16 @@ async function syncParentDirectory(path: string): Promise<void> {
 }
 
 export const ARTIFACT_MODE = 0o600;
+/** Suffix of writeFileAtomic's crash-safe temporary; sweep helpers must match via
+ *  hasAtomicTempSuffix instead of re-encoding this literal by hand. */
+export const ARTIFACT_TEMP_SUFFIX = ".tmp";
 
 /** Writes `data` durably via a unique same-directory temporary: wx-open (private-artifact 0o600)
  *  -> write -> content fsync -> rename -> unlink temp on failure -> parent-dir fsync.
  *  Single source for recorder spool artifacts and desktop persistence; import via this
  *  "@hoolypane/contracts/fsync" subpath, never the browser-facing barrel. */
 export async function writeFileAtomic(path: string, data: string | Uint8Array): Promise<void> {
-  const temporary = `${path}.${randomBytes(8).toString("hex")}.tmp`;
+  const temporary = `${path}.${randomBytes(8).toString("hex")}${ARTIFACT_TEMP_SUFFIX}`;
   const handle = await fs.open(temporary, "wx", ARTIFACT_MODE);
   try {
     await handle.writeFile(data);
@@ -36,4 +39,9 @@ export async function writeFileAtomic(path: string, data: string | Uint8Array): 
     await handle.close();
   }
   await syncParentDirectory(path);
+}
+
+/** True when a directory entry is a writeFileAtomic temporary left behind by an interrupted save. */
+export function hasAtomicTempSuffix(name: string): boolean {
+  return name.endsWith(ARTIFACT_TEMP_SUFFIX);
 }

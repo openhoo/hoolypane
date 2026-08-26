@@ -67,8 +67,8 @@ jobs:
       - run: pnpm build
       - name: Run Linux desktop E2E
         if: runner.os == 'Linux'
-        # Wrapper pins the documented 1920x1080x24 Xvfb geometry and software-rendering env
-        # (canonical values: tests/helpers/desktop-runtime.ts); default 640x480 breaks drag E2E.
+        # Wrapper pins the documented Xvfb geometry and software-rendering env
+        # (canonical values: scripts/xvfb.env via the package.json desktop:xvfb script); default 640x480 breaks drag E2E.
         run: pnpm test:desktop:xvfb
       - name: Run native desktop E2E
         if: runner.os != 'Linux'
@@ -90,8 +90,8 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       - name: Smoke Linux package
         if: runner.os == 'Linux'
-        # Geometry mirrors scripts/release-dry-run.mjs; flags anchored in tests/helpers/desktop-runtime.ts.
-        run: env -u DBUS_SESSION_BUS_ADDRESS -u WAYLAND_DISPLAY LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a --server-args='-screen 0 1920x1080x24' pnpm smoke:desktop-package -- dist/desktop
+        # Geometry/env come from the desktop:xvfb wrapper script (canonical: scripts/xvfb.env); do not re-inline.
+        run: pnpm smoke:desktop-package:xvfb -- dist/desktop
       - name: Smoke native package
         if: runner.os != 'Linux'
         run: pnpm smoke:desktop-package -- dist/desktop

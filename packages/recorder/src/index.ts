@@ -4,3 +4,4 @@ export { verifyArtifacts } from "./verifier.js";
 export type { TrackGeometry } from "./capture-contract.js";
 export type { RunStatus } from "./capture-contract.js";
 export { ffmpegArguments, filterGraph } from "./encoder.js";
+export { sha256File } from "./spool.js";

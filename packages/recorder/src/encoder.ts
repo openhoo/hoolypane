@@ -9,6 +9,8 @@ import { asError, CHILD_GRACE_MS, COMPOSITE_VIDEO_NAME, compositeGeometry, track
 import type { FrameSpool } from "./spool.js";
 
 interface EncoderPaths { readonly ffmpeg: string; readonly ffprobe: string }
+/** stdin fd of ffmpeg's first image2pipe input: stdio is [ignore, ignore, stderr pipe, ...input pipes]. */
+const INPUT_PIPE_STDIO_BASE = 3;
 interface AlignedTrack { readonly id: string; readonly spool: FrameSpool; readonly mappings: readonly SlotMapping[]; readonly geometry: TrackGeometry }
 export interface EncodingResult { readonly geometry: CompositeGeometry }
 
@@ -40,12 +42,19 @@ export function filterGraph(tracks: readonly AlignedTrack[], grid: CompositeGeom
   const color = background.replace(/^#/, "0x");
   const filters: string[] = [];
   for (const [index, track] of tracks.entries()) {
+    if (tracks.length === 1) {
+      // Solo input: compositeGeometry's max-of-one makes tile dims equal encoded dims, so the old
+      // tile stage resampled an already-matching frame. One resample feeds both the [track0] map
+      // (a label can be consumed once) and the composite scale through a zero-cost split.
+      filters.push(`[${index}:v]settb=AVTB,setpts=N/(${fps}*TB),scale=${track.geometry.encodedWidth}:${track.geometry.encodedHeight}:force_original_aspect_ratio=decrease,pad=${track.geometry.encodedWidth}:${track.geometry.encodedHeight}:(ow-iw)/2:(oh-ih)/2:color=${color},split=2[track${index}][compositesrc${index}]`);
+      continue;
+    }
     filters.push(`[${index}:v]settb=AVTB,setpts=N/(${fps}*TB),split=2[raw${index}][gridraw${index}]`);
     filters.push(`[raw${index}]scale=${track.geometry.encodedWidth}:${track.geometry.encodedHeight}:force_original_aspect_ratio=decrease,pad=${track.geometry.encodedWidth}:${track.geometry.encodedHeight}:(ow-iw)/2:(oh-ih)/2:color=${color}[track${index}]`);
     filters.push(`[gridraw${index}]scale=${grid.tileWidth}:${grid.tileHeight}:force_original_aspect_ratio=decrease,pad=${grid.tileWidth}:${grid.tileHeight}:(ow-iw)/2:(oh-ih)/2:color=${color}[tile${index}]`);
   }
   if (tracks.length === 1) {
-    filters.push(`[tile0]scale=${grid.outputWidth}:${grid.outputHeight}[composite]`);
+    filters.push(`[compositesrc0]scale=${grid.outputWidth}:${grid.outputHeight}[composite]`);
   } else {
     const layout = tracks.map((_track, index) => `${index % grid.columns * grid.tileWidth}_${Math.floor(index / grid.columns) * grid.tileHeight}`).join("|");
     const inputs = tracks.map((_track, index) => `[tile${index}]`).join("");
@@ -72,7 +81,7 @@ export function ffmpegArguments(outputDir: string, tracks: readonly AlignedTrack
   const composite = join(outputDir, "videos", COMPOSITE_VIDEO_NAME);
   const args: string[] = ["-hide_banner", "-loglevel", "error", "-y", "-nostdin"];
   for (let index = 0; index < tracks.length; index += 1) {
-    args.push("-probesize", "32", "-analyzeduration", "0", "-c:v", "mjpeg", "-f", "image2pipe", "-framerate", String(fps), "-i", `pipe:${index + 3}`);
+    args.push("-probesize", "32", "-analyzeduration", "0", "-c:v", "mjpeg", "-f", "image2pipe", "-framerate", String(fps), "-i", `pipe:${index + INPUT_PIPE_STDIO_BASE}`);
   }
   args.push("-filter_complex", filterGraph(tracks, geometry, fps, background));
   const outputOptions = ["-an", "-frames:v", String(durationFrames), "-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8", "-fps_mode", "passthrough"];
@@ -139,6 +148,7 @@ export async function encodeAligned(
   const geometry = compositeGeometry(tracks.map((track) => track.geometry), recording.compositeMaxSize);
   const args = ffmpegArguments(outputDir, tracks, geometry, fps, durationFrames, recording.compositeBackground);
 
+  // stdio[0..1] ignore stdout/stderr sinks, [2] stderr pipe; input pipe i lives at stdio[i + INPUT_PIPE_STDIO_BASE].
   const child = spawn(paths.ffmpeg, args, { stdio: ["ignore", "ignore", "pipe", ...tracks.map(() => "pipe" as const)] });
   const stderrStream = child.stderr;
   if (!stderrStream) throw new Error("ffmpeg stderr pipe unavailable");
@@ -151,7 +161,7 @@ export async function encodeAligned(
   // await of completion.promise; spawn errors are captured by the listener above instead.
   completion.promise.catch(() => undefined);
   const pipes = tracks.map((_track, index) => {
-    const pipe = child.stdio[index + 3];
+    const pipe = child.stdio[index + INPUT_PIPE_STDIO_BASE];
     if (!pipe || !("write" in pipe)) throw new Error(`ffmpeg input pipe ${index} unavailable`);
     const writable = pipe as Writable;
     writable.on("error", () => undefined);

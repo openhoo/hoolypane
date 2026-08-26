@@ -332,11 +332,14 @@ async function replayEnvelope(paneId: string, envelope: ActionEnvelope): Promise
   }
 }
 
-async function acceptSourceAction(sourcePaneId: string, observed: unknown): Promise<void> {
+async function acceptSourceAction(sourcePaneId: string, observed: unknown, fromDrain = false): Promise<void> {
   const paneRegistry = registry;
   if (!paneRegistry) return;
-  if (flushBarrier) {
-    // Buffer instead of dropping: actions observed during a navigate/stop flush are processed once the barrier lifts.
+  // Actions submitted while a drain is replaying earlier buffered actions must not overtake
+  // them: queue behind the in-flight replay so the draft keeps observation order. The drain's
+  // own dispatches pass fromDrain — buffering those would re-enqueue every item the drain just
+  // dequeued and spin forever.
+  if (!fromDrain && (flushBarrier || drainingDeferredActions)) {
     deferredActions.push({ paneId: sourcePaneId, observed });
     return;
   }
@@ -400,7 +403,7 @@ function drainDeferredActions(): void {
       while (!flushBarrier && registry && deferredActions.length > 0) {
         const next = deferredActions.shift()!;
         try {
-          await acceptSourceAction(next.paneId, next.observed);
+          await acceptSourceAction(next.paneId, next.observed, true);
         } catch (error) {
           report(next.paneId, errorMessage(error));
         }

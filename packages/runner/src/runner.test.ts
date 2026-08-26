@@ -127,17 +127,34 @@ function runFfmpeg(args: readonly string[]): Promise<void> {
 const FIXTURE_TRACK_SIZE = 64;
 const FIXTURE_BACKGROUND = "#111318";
 
-// Encodes one 64x64 CFR track plus a composite, hand-mirroring the recorder encoder's argv shape
-// while feeding real files instead of input pipes; the parity test below pins that mirror to
-// @hoolypane/recorder's exported production builders so encoder drift fails loudly here.
+// Encodes one 64x64 CFR track plus a composite using @hoolypane/recorder's exported
+// production filter_complex builder over a single-track stub, while feeding real files
+// instead of input pipes; the parity test below pins the assembled argv tail to the
+// encoder's production builders so encoder drift fails loudly here.
 function recordingEncodeArguments(directory: string, fps: 30 | 60, frames: number): readonly string[] {
-  const scale = `scale=${FIXTURE_TRACK_SIZE}:${FIXTURE_TRACK_SIZE}:force_original_aspect_ratio=decrease,pad=${FIXTURE_TRACK_SIZE}:${FIXTURE_TRACK_SIZE}:(ow-iw)/2:(oh-ih)/2:color=0x${FIXTURE_BACKGROUND.slice(1)}`;
-  const filter = `[0:v]settb=AVTB,setpts=N/(${fps}*TB),split=2[raw0][gridraw0];[raw0]${scale}[track0];[gridraw0]${scale}[tile0];[tile0]scale=${FIXTURE_TRACK_SIZE}:${FIXTURE_TRACK_SIZE}[composite]`;
+  const tracks = [
+    {
+      id: "one",
+      spool: null,
+      mappings: [],
+      geometry: { id: "one", encodedWidth: FIXTURE_TRACK_SIZE, encodedHeight: FIXTURE_TRACK_SIZE },
+    },
+  ] as unknown as Parameters<typeof filterGraph>[0];
+  const grid = {
+    columns: 1,
+    rows: 1,
+    tileWidth: FIXTURE_TRACK_SIZE,
+    tileHeight: FIXTURE_TRACK_SIZE,
+    unscaledWidth: FIXTURE_TRACK_SIZE,
+    unscaledHeight: FIXTURE_TRACK_SIZE,
+    outputWidth: FIXTURE_TRACK_SIZE,
+    outputHeight: FIXTURE_TRACK_SIZE,
+  } as unknown as Parameters<typeof filterGraph>[1];
   const outputOptions = ["-an", "-frames:v", String(frames), "-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8", "-fps_mode", "passthrough"];
   return [
     "-hide_banner", "-loglevel", "error", "-y",
     "-probesize", "32", "-analyzeduration", "0", "-c:v", "mjpeg", "-f", "image2pipe", "-framerate", String(fps), "-i", join(directory, "frames.mjpeg"),
-    "-filter_complex", filter,
+    "-filter_complex", filterGraph(tracks, grid, fps, FIXTURE_BACKGROUND),
     "-map", "[track0]", ...outputOptions, join(directory, "videos", "one.webm"),
     "-map", "[composite]", ...outputOptions, join(directory, "videos", "composite.webm"),
   ];

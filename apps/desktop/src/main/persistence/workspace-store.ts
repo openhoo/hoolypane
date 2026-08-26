@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { errorMessage, isErrnoException, WORKSPACE_VERSION } from "@hoolypane/contracts";
-import { writeFileAtomic } from "@hoolypane/contracts/fsync";
+import { hasAtomicTempSuffix, writeFileAtomic } from "@hoolypane/contracts/fsync";
 import { WorkspaceStateSchema, defaultWorkspace, type WorkspaceState } from "../panes/workspace.js";
 import { report } from "../report.js";
 
@@ -80,7 +80,7 @@ export async function sweepStaleTemporaries(file: string): Promise<void> {
   }
   await Promise.all(
     entries
-      .filter((entry) => entry.startsWith(prefix) && entry.endsWith(".tmp"))
+      .filter((entry) => entry.startsWith(prefix) && hasAtomicTempSuffix(entry))
       .map((entry) => fs.unlink(join(directory, entry)).catch(() => undefined)),
   );
 }

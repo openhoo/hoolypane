@@ -7,14 +7,17 @@
 # Usage: scripts/e2e-vm.sh [suite...]     e.g. scripts/e2e-vm.sh desktop runner
 # Env:   VM_SSH (default "hoolypane@127.0.0.1"), VM_PORT (52223), VM_KEY (~/.ssh/id_ed25519),
 #        VM_DIR (home-relative dir inside the VM, resolved as ~/$VM_DIR; default
-#        "Projects/hoolypane"), VM_SCREEN (1920x1080x24) for the Xvfb screen size.
+#        "Projects/hoolypane"), VM_SCREEN (default: scripts/xvfb.env) for the Xvfb screen size.
 set -euo pipefail
+
+# Canonical Xvfb geometry shared with every local desktop entry point (scripts/xvfb.env).
+. "$(dirname "$0")/xvfb.env"
 
 VM_SSH="${VM_SSH:-hoolypane@127.0.0.1}"
 VM_PORT="${VM_PORT:-52223}"
 VM_KEY="${VM_KEY:-$HOME/.ssh/id_ed25519}"
 VM_DIR="${VM_DIR:-Projects/hoolypane}"
-VM_SCREEN="${VM_SCREEN:-1920x1080x24}"
+VM_SCREEN="${VM_SCREEN:-$HOOLYPANE_XVFB_GEOMETRY}"
 
 # VM_DIR must be home-relative: every remote path is formed as "~/$VM_DIR".
 # Tolerate one stray leading "/" (absolute-style habit), reject "~..." forms.

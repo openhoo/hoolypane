@@ -24,7 +24,7 @@ interface SpoolIndex {
 
 const DROP_NOTE_INTERVAL_MS = 1_000;
 
-async function sha256File(path: string): Promise<string> {
+export async function sha256File(path: string): Promise<string> {
   const handle = await fs.open(path, "r");
   try {
     const hash = createHash("sha256");

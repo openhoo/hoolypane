@@ -1,8 +1,7 @@
-import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { errorMessage, RECORDING_FPS_VALUES } from "@hoolypane/contracts";
-import { verifyArtifacts } from "@hoolypane/recorder";
+import { sha256File, verifyArtifacts } from "@hoolypane/recorder";
 import type { TrackGeometry } from "@hoolypane/recorder";
 
 // JSON-boundary guard shared by every hand-rolled manifest check below: value must be a
@@ -73,7 +72,7 @@ async function certifyManifestHashes(outputDir: string, manifestPath: string, re
     if (typeof expected !== "string") throw new Error(`${manifestPath} artifact ${key} lacks a string sha256 digest`);
     let actual: string;
     try {
-      actual = verifiedHashes[key] ?? createHash("sha256").update(await readFile(resolve(outputDir, key))).digest("hex");
+      actual = verifiedHashes[key] ?? (await sha256File(resolve(outputDir, key)));
     } catch {
       throw new Error(`${manifestPath} artifact ${key} fails sha256 certification`);
     }

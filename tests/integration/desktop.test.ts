@@ -1,7 +1,7 @@
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fixturePages, launchDesktopApp, locateSourcePane, pollUntil, startFixtureServer, teardownDesktopSuite, waitForFixturePanes, type FixtureServer } from "../helpers/harness.js";
-import { IPC_CHANNELS } from "@hoolypane/contracts";
+import { errorMessage, IPC_CHANNELS } from "@hoolypane/contracts";
 import { clickPaneSurface } from "./cdp-input.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
 
@@ -131,7 +131,7 @@ describe("direct Electron surfaces", () => {
           await waitForPaneState(predicate, label);
           return;
         } catch (error) {
-          if (attempt === 1) throw new Error(`${label} failed on retry (first attempt: ${firstError instanceof Error ? firstError.message : String(firstError)})`, { cause: error });
+          if (attempt === 1) throw new Error(`${label} failed on retry (first attempt: ${errorMessage(firstError)})`, { cause: error });
           firstError = error;
         }
       }

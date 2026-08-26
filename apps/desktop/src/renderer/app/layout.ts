@@ -79,7 +79,7 @@ function focusTiles(
   innerHeight: number,
 ): Map<string, PaneTile> {
   const tiles = new Map<string, PaneTile>();
-  const visible = focusedPaneId === null ? panes[0] : panes.find((pane) => pane.id === focusedPaneId) ?? panes[0];
+  const visible = panes.find((pane) => pane.id === focusedPaneId) ?? panes[0];
   if (visible) tiles.set(visible.id, tileFor(visible, innerWidth, innerHeight, LAYOUT_PADDING, LAYOUT_PADDING));
   // Explicit zero-size entries keep sibling cards mounted so surfaces.length always matches
   // expectedSurfaceCount and bounds emission never stalls.

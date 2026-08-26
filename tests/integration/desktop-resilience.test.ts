@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { IPC_CHANNELS } from "@hoolypane/contracts";
+import { errorMessage, IPC_CHANNELS } from "@hoolypane/contracts";
 import { fixturePages, launchDesktopApp, pollUntil, startFixtureServer, teardownDesktopSuite, type FixtureServer } from "../helpers/harness.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
 
@@ -16,7 +16,7 @@ async function sourcePage(path = "/"): Promise<Page> {
   try {
     return await pollUntil(async () => fixturePages(application, FIXTURE_PORT, path)[0] ?? null, 5_000);
   } catch (error) {
-    throw new Error(`no fixture page at ${path} for port ${FIXTURE_PORT} within 5s (${error instanceof Error ? error.message : String(error)})`);
+    throw new Error(`no fixture page at ${path} for port ${FIXTURE_PORT} within 5s (${errorMessage(error)})`);
   }
 }
 
@@ -125,7 +125,14 @@ describe("desktop replay and security resilience", () => {
     expect(downloadState).toBe("cancelled");
 
     await page.evaluate((url) => window.open(url), `http://127.0.0.1:${FIXTURE_PORT}/popup`);
-    expect(application.context().pages()).toHaveLength(pageCount);
+    let popupStableSince = 0;
+    await pollUntil(async () => {
+      if (application.context().pages().length === pageCount) {
+        if (popupStableSince === 0) popupStableSince = Date.now();
+        else if (Date.now() - popupStableSince >= 300) return true;
+      } else popupStableSince = 0;
+      return null;
+    }, 2_000);
     await waitForRemotePages("/popup", 1);
   }, 20_000);
 

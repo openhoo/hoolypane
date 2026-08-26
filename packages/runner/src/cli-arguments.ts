@@ -8,6 +8,7 @@ export interface RunArguments {
 const RUN_OPTIONS = "[--config <path>] [--output <dir>] [--headed]";
 
 const USAGE = `Usage: hoolypane run <flow-file> ${RUN_OPTIONS}`;
+export const VERIFY_USAGE = "Usage: hoolypane verify <output-dir>";
 
 export const TOP_LEVEL_USAGE = [
   "Usage: hoolypane <command>",
@@ -15,7 +16,7 @@ export const TOP_LEVEL_USAGE = [
   "Commands:",
   `  run <flow-file> ${RUN_OPTIONS}`,
   "      Record a flow across all configured viewports.",
-  "  verify <output-dir>",
+  `  ${VERIFY_USAGE.slice("Usage: hoolypane ".length)}`,
   "      Verify the manifest and encoded frames of a finished recording.",
   "",
   "Options:",

@@ -7,9 +7,9 @@ const inputs = (specs: readonly { id: string; width: number; height: number }[])
 const ALL_INPUTS = inputs(VIEWPORT_PRESETS);
 
 // Grid/free/focus pack inside the padding origin and extent except under severe compression:
-// horizontal rows may pass the right padding (unscaled gaps), and masonry packs may pass the
-// bottom padding (unscaled 28px header band); both drifts are asserted explicitly with their
-// exact envelopes.
+// horizontal rows may pass the right padding (unscaled gaps, exact envelope (n - 1) *
+// LAYOUT_GAP), and masonry packs may pass the bottom padding (unscaled 28px header band) within
+// the provable universal envelope y + height <= areaHeight - LAYOUT_PADDING + PANE_HEADER_HEIGHT.
 function expectPaddedDomain(tiles: Map<string, PaneTile>, areaWidth: number, areaHeight: number): void {
   for (const tile of tiles.values()) {
     if (tile.hidden) continue;
@@ -42,8 +42,10 @@ describe("renderer layout engine", () => {
   it("keeps heavily compressed grid packs inside the workspace with intact header bands", () => {
     // Under severe masonry compression the unscaled 28px header band pushes the deepest card
     // past the bottom padding (scaled bottom = 36 + (span - 36) * fit exceeds the domain once
-    // fit drops below ~28/36). Headers never clip and cards never leave the workspace area;
-    // widths carry no unscaled band, so left/right/top stay inside the padded domain.
+    // fit drops below ~28/36). Headers never clip; widths carry no unscaled band, so
+    // left/right/top stay inside the padded domain, and every bottom respects the derived
+    // universal ceiling below: drift past the padding is caused solely by the retained
+    // unscaled header band.
     const areas = [
       [1280, 800],
       [628, 420],
@@ -57,6 +59,9 @@ describe("renderer layout engine", () => {
         expect(tile.x + tile.width, `${tile.id} right`).toBeLessThanOrEqual(areaWidth - LAYOUT_PADDING);
         expect(tile.height, `${tile.id} header band`).toBeGreaterThanOrEqual(PANE_HEADER_HEIGHT);
         expect(tile.y + tile.height, `${tile.id} inside workspace`).toBeLessThanOrEqual(areaHeight);
+        expect(tile.y + tile.height, `${tile.id} unscaled-header envelope`).toBeLessThanOrEqual(
+          areaHeight - LAYOUT_PADDING + PANE_HEADER_HEIGHT,
+        );
       }
     }
   });
@@ -137,7 +142,7 @@ describe("renderer layout engine", () => {
     const movedId = ALL_INPUTS[0]!.id;
     const auto = computePaneTiles("free", 2000, 1400, ALL_INPUTS, null, {});
     const stored = computePaneTiles("free", 2000, 1400, ALL_INPUTS, null, { [movedId]: { x: 64, y: 96 } });
-    expect(stored.get(movedId)).toMatchObject({ x: 64, y: 96 });
+    expect(stored.get(movedId)).toEqual({ ...auto.get(movedId)!, x: 64, y: 96 });
     // Panes without a stored entry keep their freshly packed placement.
     expect(stored.get(ALL_INPUTS[1]!.id)).toEqual(auto.get(ALL_INPUTS[1]!.id));
     const stale = computePaneTiles("free", 2000, 1400, ALL_INPUTS, null, { [movedId]: { x: 999_999, y: 999_999 } });

@@ -191,7 +191,7 @@ export class RecordingSession {
       signal?.aborted !== true &&
       this.contexts.some((context) => context.initialTimestampUs === undefined && context.captureError === undefined) &&
       Date.now() < deadline
-    ) await this.cancellableDelay(10);
+    ) await this.delay(10);
     if (this.state !== "awaiting-initial-frames") throw new Error("recording session was finalized while waiting for initial frames");
     if (signal?.aborted) throw new Error("waiting for initial screencast frames was aborted");
     const failure = this.contexts.find((context) => context.captureError)?.captureError;
@@ -234,17 +234,13 @@ export class RecordingSession {
     await Promise.allSettled([this.pruneRawBins(), fs.rm(join(this.options.outputDir, "videos"), { recursive: true, force: true })]);
   }
 
-  private async cancellableDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
-    if (signal?.aborted) throw signal.reason;
+  private async delay(milliseconds: number): Promise<void> {
     const completion = Promise.withResolvers<void>();
     const timer = setTimeout(completion.resolve, milliseconds);
-    const onAbort = () => completion.reject(signal!.reason);
-    signal?.addEventListener("abort", onAbort, { once: true });
     try {
       await completion.promise;
     } finally {
       clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
     }
   }
 
@@ -341,7 +337,7 @@ export class RecordingSession {
   private async runCapturePipeline(): Promise<CapturePipelineResult> {
     const elapsedUs = Math.max(0, monotonicUs() - (this.flowStartUs ?? monotonicUs()));
     await this.transition("post-roll");
-    await this.cancellableDelay(POST_ROLL_US / 1000);
+    await this.delay(POST_ROLL_US / 1000);
     const t1Us = this.t0Us! + elapsedUs + POST_ROLL_US;
     await this.transition("stopping");
     await this.stopCapture();

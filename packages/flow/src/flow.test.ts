@@ -61,6 +61,11 @@ describe("flow API", () => {
     expect(locatorExpression({ kind: "role", role: `a"b\\c`, name: "hello" })).toBe(`page.locator(${JSON.stringify(adversarialSelector)})`);
   });
 
+  it("routes Object.prototype role names through the attribute fallback instead of getByRole", () => {
+    expect(locatorExpression({ kind: "role", role: "constructor", name: "hello" })).toBe('page.locator("[role=\\"constructor\\"]")');
+    expect(locatorExpression({ kind: "role", role: "__proto__", name: "hello" })).toBe('page.locator("[role=\\"__proto__\\"]")');
+  });
+
   it("emits exact matching for every name-based locator kind", () => {
     expect(locatorExpression({ kind: "text", value: "Submit order" })).toBe('page.getByText("Submit order", { exact: true })');
     expect(locatorExpression({ kind: "label", value: "Email" })).toBe('page.getByLabel("Email", { exact: true })');
