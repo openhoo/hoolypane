@@ -6,11 +6,10 @@ type DevMockBridge = {
   send(command: ChromeCommand): void;
 };
 
-// Minimal window stand-in: installDevMock only touches setTimeout/clearTimeout
-// and defines hoolypaneChrome; the node test env has no DOM window to borrow.
+// Minimal window stand-in: installDevMock only touches setTimeout and defines
+// hoolypaneChrome; the node test env has no DOM window to borrow.
 interface WindowStub {
   setTimeout(handler: () => void, timeout?: number): number;
-  clearTimeout(id: number): void;
   hoolypaneChrome?: DevMockBridge;
 }
 
@@ -36,9 +35,8 @@ beforeEach(async () => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   globals.window = {
     // Delegate to the faked global timers so settleLoading stays deterministic.
-    // The number/Timeout casts only paper over DOM-vs-node timer typings.
+    // The number cast only papers over DOM-vs-node timer typings.
     setTimeout: (handler, timeout) => setTimeout(handler, timeout) as unknown as number,
-    clearTimeout: (id) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>),
   };
   const devMock = await import("./devMock.js");
   devMock.installDevMock();

@@ -125,6 +125,11 @@ function accessibleName(element: Element): string {
   // label/placeholder/css strategies in locatorFor. No .value fallback: a live value is not part
   // of standard accName for form fields and a value-keyed role locator could never resolve.
   if (element.labels?.length) return normalizedText([...element.labels].map((label) => label.textContent).join(" "));
+  // Unlike the live text-field values rejected above, a button-type input's value attribute IS
+  // its standard accname (HTML-AAM): Chromium resolves getByRole("button", { name }) from it.
+  if (element instanceof HTMLInputElement && ["button", "submit", "reset"].includes(element.type)) {
+    return normalizedText(element.getAttribute("value") ?? "");
+  }
   return "";
 }
 

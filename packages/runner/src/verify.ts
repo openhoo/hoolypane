@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { errorMessage, RECORDING_FPS_VALUES } from "@hoolypane/contracts";
-import { sha256File, verifyArtifacts } from "@hoolypane/recorder";
+import { MANIFEST_FILE, sha256File, verifyArtifacts } from "@hoolypane/recorder";
 import type { TrackGeometry } from "@hoolypane/recorder";
 
 // JSON-boundary guard shared by every hand-rolled manifest check below: value must be a
@@ -82,7 +82,7 @@ async function certifyManifestHashes(outputDir: string, manifestPath: string, re
 
 export async function verifyDirectory(path: string): Promise<number> {
   const outputDir = resolve(path);
-  const manifestPath = resolve(outputDir, "manifest.json");
+  const manifestPath = resolve(outputDir, MANIFEST_FILE);
   const { fps, durationFrames, record: manifestRecord } = await parseManifestHeader(manifestPath);
   // A manifest whose own status records a non-success run must not certify: timeline and geometry
   // can both be intact (alignFrames fills held frames) while a pane's capture ended early or

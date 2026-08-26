@@ -33,6 +33,11 @@ export interface TrackGeometry { readonly id: string; readonly encodedWidth: num
 export function trackVideoName(id: string): string { return `${id}.webm`; }
 export const COMPOSITE_VIDEO_NAME = "composite.webm";
 
+/** Artifact layout shared by the recorder writer/pruner, the verifier, and the runner's trace-stop path. */
+export const ARTIFACT_DIRECTORIES = { videos: "videos", traces: "traces", raw: "raw" } as const;
+export const MANIFEST_FILE = "manifest.json";
+export const DIAGNOSTICS_FILE = "diagnostics.json";
+
 export interface CompositeGeometry { readonly columns: number; readonly rows: number; readonly tileWidth: number; readonly tileHeight: number; readonly unscaledWidth: number; readonly unscaledHeight: number; readonly outputWidth: number; readonly outputHeight: number }
 export interface RecorderFailure { readonly message: string; readonly viewportId?: string; readonly stack?: string }
 export type RunStatus = "success" | "failed" | "interrupted";

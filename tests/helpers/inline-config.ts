@@ -1,7 +1,7 @@
 import type { ViewportSpec } from "@hoolypane/contracts";
 
 // Hand-synced recording tail of the inline integration configs; both suites must parse identical values.
-const RECORDING_TAIL = "recording: { fps: 30, compositeMaxSize: { width: 640, height: 480 } }";
+const RECORDING_TAIL = "recording: { fps: 30, jpegQuality: 70, compositeMaxSize: { width: 640, height: 480 }, keepRaw: false }";
 
 function viewportLiteral(viewport: ViewportSpec): string {
   return `{ id: ${JSON.stringify(viewport.id)}, name: ${JSON.stringify(viewport.name)}, width: ${viewport.width}, height: ${viewport.height}, deviceScaleFactor: ${viewport.deviceScaleFactor}, isMobile: ${viewport.isMobile}, hasTouch: ${viewport.hasTouch} }`;

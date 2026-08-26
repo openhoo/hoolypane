@@ -5,7 +5,8 @@
  * every consumer can depend on this platform-neutral module.
  */
 
-/** Column-major sqrt grid: enough columns to cover `count` tiles roughly square, rows take the remainder. */
+/** Row-major sqrt grid: ceil(sqrt(count)) columns cover `count` tiles roughly square, rows take
+ *  the remainder; consecutive indices fill each row left-to-right before wrapping downward. */
 export function gridDimensions(count: number): { columns: number; rows: number } {
   const columns = Math.ceil(Math.sqrt(count));
   return { columns, rows: Math.ceil(count / columns) };

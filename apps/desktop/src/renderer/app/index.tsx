@@ -341,7 +341,11 @@ function useKeyboardMoveMode({
       } else if (event.key === "Escape") {
         setKeyboardMove(null);
         const origin = kbOriginRef.current;
-        if (origin) send({ kind: "move-pane", paneId: current.id, x: origin.x, y: origin.y });
+        // Same changed-position guard as the arrow branch: restoring an untouched session
+        // would only clear lastError and dismiss an unacknowledged error toast.
+        if (origin && (origin.x !== current.x || origin.y !== current.y)) {
+          send({ kind: "move-pane", paneId: current.id, x: origin.x, y: origin.y });
+        }
       } else {
         return;
       }

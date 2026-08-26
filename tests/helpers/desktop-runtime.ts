@@ -19,17 +19,21 @@ export function applyLinuxSoftwareRenderingEnv(environment: NodeJS.ProcessEnv): 
 
 /**
  * Graceful child teardown: SIGTERM, then SIGKILL after graceMs, resolving once the
- * child exits. Children that already terminated — by code OR signal — resolve
- * immediately instead of waiting forever.
+ * child settles. Children that already terminated — by code OR signal — resolve
+ * immediately instead of waiting forever. A failed spawn (ENOENT/EACCES/ENOEXEC)
+ * emits 'error' and never 'exit'; Node ≥24 follows it with 'close', so all three
+ * events count as settled and failed children cannot hang teardown forever.
  */
 export async function stopChildProcess(child: ChildProcess | null | undefined, graceMs = 2_000): Promise<void> {
   if (!child) return;
-  // Attach before the liveness check so an exit racing the check cannot hang the await below.
+  // Attach before the liveness check so an exit/close/error racing the check cannot hang the await below.
   const exited = new Promise<void>((resolveExit) => child.once("exit", () => resolveExit()));
+  const closed = new Promise<void>((resolveClose) => child.once("close", () => resolveClose()));
+  const errored = new Promise<void>((resolveError) => child.once("error", () => resolveError()));
   if (child.exitCode !== null || child.signalCode !== null) return;
   child.kill("SIGTERM");
   const forceExitTimer = setTimeout(() => child.kill("SIGKILL"), graceMs);
-  await exited;
+  await Promise.race([exited, closed, errored]);
   clearTimeout(forceExitTimer);
   // Release piped streams so short-lived scripts are not kept alive by open descriptors.
   child.stdout?.destroy();
@@ -85,7 +89,8 @@ export interface FixtureServer {
 }
 
 /**
- * Spawns tests/fixtures/server.mjs and resolves once it reports readiness.
+ * Spawns tests/fixtures/server.mjs and resolves once it reports readiness; the wait is
+ * bounded and kills the child on expiry so a wedged server cannot leak its fixed port.
  * The child's stdout/stderr are piped so startup errors (e.g. EADDRINUSE) surface
  * in failure messages instead of being discarded.
  */
@@ -104,7 +109,22 @@ export async function startFixtureServer(port: number): Promise<FixtureServer> {
   child.stderr?.on("data", (chunk) => { output += chunk.toString(); });
   child.once("error", ready.reject);
   child.once("exit", (code) => ready.reject(new Error(`fixture server failed before readiness (code ${code}): ${output.trim()}`)));
-  await ready.promise;
+  const readyTimeoutMs = 10_000;
+  let readyTimer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      ready.promise,
+      new Promise<never>((_resolve, reject) => {
+        readyTimer = setTimeout(() => {
+          child.kill("SIGKILL");
+          reject(new Error(`fixture server not ready within ${readyTimeoutMs}ms: ${output.trim()}`));
+        }, readyTimeoutMs);
+      }),
+    ]);
+  } finally {
+    // A readiness win must disarm the timer, or it would later SIGKILL the healthy server.
+    clearTimeout(readyTimer);
+  }
   return {
     async close(): Promise<void> {
       await stopChildProcess(child);

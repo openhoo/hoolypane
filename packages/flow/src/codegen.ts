@@ -28,7 +28,7 @@ export function locatorExpression(locator: LocatorSpec): string {
   switch (locator.kind) {
     case "testId": return `page.getByTestId(${literal(locator.value)})`;
     case "role":
-      if (!Object.hasOwn(GET_BY_ROLE_ROLES, locator.role.trim().toLowerCase())) return `page.locator(${literal(roleAttributeSelector(locator.role))})`;
+      if (!Object.hasOwn(GET_BY_ROLE_ROLES, locator.role)) return `page.locator(${literal(roleAttributeSelector(locator.role))})`;
       return `page.getByRole(${literal(locator.role)}, { name: ${literal(locator.name)}, exact: true })`;
     case "label": return `page.getByLabel(${literal(locator.value)}, { exact: true })`;
     case "placeholder": return `page.getByPlaceholder(${literal(locator.value)}, { exact: true })`;

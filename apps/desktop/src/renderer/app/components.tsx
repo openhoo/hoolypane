@@ -325,6 +325,7 @@ function PaneName({ pane, onRename }: { pane: PaneState; onRename(name: string):
       <span
         ref={nameRef}
         title="Double-click or press Enter/F2/Space to rename"
+        data-pane-name=""
         role="button"
         tabIndex={0}
         aria-label={`Rename ${pane.name}`}
@@ -411,7 +412,7 @@ export const PaneCard = memo(function PaneCard({
         data-pane-id={pane.id}
         tabIndex={0}
         aria-label={`${pane.name} pane header`}
-        onPointerDown={(event) => { const target = event.target as HTMLElement; if (target.closest("button, input, select")) return; event.preventDefault(); onHeaderPointerDown?.(event); }}
+        onPointerDown={(event) => { const target = event.target as HTMLElement; if (target.closest("button, input, select") || target.closest("[data-pane-name]")) return; event.preventDefault(); onHeaderPointerDown?.(event); }}
         onKeyDown={(event) => { const target = event.target as HTMLElement; if (target.closest("button, input, select")) return; onHeaderKeyDown?.(event); }}
         style={{ height: PANE_HEADER_HEIGHT }}
         class={`flex shrink-0 cursor-grab items-center gap-0.5 border-b border-edge bg-elevated pl-1 pr-1 ${focusRing} active:cursor-grabbing ${dragging ? "bg-field" : ""}`}

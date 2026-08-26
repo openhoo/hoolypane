@@ -48,11 +48,14 @@ describe("loadWorkspace", () => {
 
   it("quarantines a schema-invalid payload", async () => {
     const file = await workspaceFile();
-    await writeFile(file, JSON.stringify({ version: 1, panes: "nope" }), "utf8");
+    const invalid = JSON.stringify({ version: 1, panes: "nope" });
+    await writeFile(file, invalid, "utf8");
     const loaded = await loadWorkspace(file);
     expect(loaded.persistable).toBe(true);
     const siblings = await readdir(join(file, ".."));
-    expect(siblings.some((entry) => entry.startsWith("workspace.json.corrupt-"))).toBe(true);
+    const quarantined = siblings.find((entry) => entry.startsWith("workspace.json.corrupt-"));
+    expect(quarantined).toBeDefined();
+    expect(await readFile(join(join(file, ".."), quarantined!), "utf8")).toBe(invalid);
   });
 
   it("refuses to touch a file written by a newer version", async () => {
@@ -141,5 +144,16 @@ describe("flushWorkspaceSaves", () => {
     expect(JSON.parse(await readFile(file, "utf8")).sharedUrl).toBe("https://example.com/flushed");
     const siblings = await readdir(join(file, ".."));
     expect(siblings.filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
+  });
+  it("rejects a failed write to its caller but keeps the tail and flush resolved", async () => {
+    const file = await workspaceFile();
+    const state = (await loadWorkspace(file)).state;
+    await chmod(dirname(file), 0o555); // writeFileAtomic's temp open fails with EACCES for non-root
+    try {
+      await expect(saveWorkspace(file, state)).rejects.toThrow();
+      await expect(flushWorkspaceSaves()).resolves.toBeUndefined(); // sanitized tails never reject
+    } finally {
+      await chmod(dirname(file), 0o700); // let afterEach remove the temporary directory
+    }
   });
 });

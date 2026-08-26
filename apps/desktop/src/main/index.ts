@@ -305,6 +305,19 @@ async function applyCdp(paneId: string, envelope: ActionEnvelope, resolved: Repl
   } else if (action.kind === "press") {
     await cdp.sendCommand("Input.dispatchKeyEvent", pressKeyDownEvent(action.key));
     await cdp.sendCommand("Input.dispatchKeyEvent", pressKeyUpEvent(action.key));
+  } else {
+    switch (action.kind) {
+      case "navigate":
+      case "select":
+      case "scroll":
+        throw new Error(`${action.kind} actions replay outside native input delivery`);
+      default: {
+        // Compile-time drift guard: a new ActionSchema kind must add an explicit native-input arm
+        // above, not vacuously succeed past the trailing generation check below.
+        const exhaustive: never = action;
+        return exhaustive;
+      }
+    }
   }
   // A navigation may start between resolve and native input delivery; refuse to count the action as applied then.
   if (record.documentGeneration !== envelope.documentGeneration) throw new Error(staleGenerationMessage(envelope.documentGeneration, record.documentGeneration));
@@ -392,11 +405,11 @@ async function acceptSourceAction(sourcePaneId: string, observed: unknown, fromD
       // Scope the clear to the succeeded action: a success for one action must not hide a
       // different unresolved failure on the same pane.
       paneRegistry.clearOutOfSync(outcome.paneId, envelope.actionId);
-      flowDraft.unblock(envelope.actionId, outcome.paneId);
+      flowDraft.unblock(envelope.actionId, outcome.paneId, draftGeneration);
     } else {
       const reason = outcome.reason ?? "unknown replay failure";
       paneRegistry.markOutOfSync(outcome.paneId, envelope.actionId, envelope.action.kind, reason);
-      flowDraft.block(envelope.actionId, outcome.paneId, reason);
+      flowDraft.block(envelope.actionId, outcome.paneId, reason, draftGeneration);
     }
   }
   publishState();

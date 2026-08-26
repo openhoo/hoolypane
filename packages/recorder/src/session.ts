@@ -6,12 +6,15 @@ import { errorMessage, type ResolvedRecordingConfig, type ViewportSpec, type Flo
 import { writeFileAtomic } from "@hoolypane/contracts/fsync";
 import {
   alignFrames,
+  ARTIFACT_DIRECTORIES,
   asError,
   assertStateTransition,
   CAPTURE_CONTRACT,
   compositeGeometry,
+  DIAGNOSTICS_FILE,
   durationFrameCount,
   geometryForViewport,
+  MANIFEST_FILE,
   POST_ROLL_US,
   VALIDATOR_VERSION,
   type AlignmentResult,
@@ -133,10 +136,10 @@ export class RecordingSession {
     await fs.mkdir(this.options.outputDir, { recursive: true });
     // A rerun into the same outputDir must never inherit artifacts from a previous run.
     await Promise.all([
-      ...["videos", "traces", "raw"].map((entry) => fs.rm(join(this.options.outputDir, entry), { recursive: true, force: true })),
-      ...["manifest.json", "diagnostics.json", RUN_STATE_FILE].map((file) => fs.rm(join(this.options.outputDir, file), { force: true })),
+      ...Object.values(ARTIFACT_DIRECTORIES).map((entry) => fs.rm(join(this.options.outputDir, entry), { recursive: true, force: true })),
+      ...[MANIFEST_FILE, DIAGNOSTICS_FILE, RUN_STATE_FILE].map((file) => fs.rm(join(this.options.outputDir, file), { force: true })),
     ]);
-    await this.spools.create(targets, join(this.options.outputDir, "raw"));
+    await this.spools.create(targets, join(this.options.outputDir, ARTIFACT_DIRECTORIES.raw));
     try {
       // Inside the guard: a failing initial state write must dispose the opened spools.
       await this.writeRunState();
@@ -226,12 +229,12 @@ export class RecordingSession {
   /** keepRaw=false: raw bins never survive any exit path. */
   private async pruneRawBins(): Promise<void> {
     if (this.options.recording.keepRaw) return;
-    await fs.rm(join(this.options.outputDir, "raw"), { recursive: true, force: true }).catch(() => undefined);
+    await fs.rm(join(this.options.outputDir, ARTIFACT_DIRECTORIES.raw), { recursive: true, force: true }).catch(() => undefined);
   }
 
   /** Failed exits additionally discard partially encoded videos; success keeps every artifact the manifest certifies. */
   private async pruneFailedArtifacts(): Promise<void> {
-    await Promise.allSettled([this.pruneRawBins(), fs.rm(join(this.options.outputDir, "videos"), { recursive: true, force: true })]);
+    await Promise.allSettled([this.pruneRawBins(), fs.rm(join(this.options.outputDir, ARTIFACT_DIRECTORIES.videos), { recursive: true, force: true })]);
   }
 
   private async delay(milliseconds: number): Promise<void> {
@@ -250,7 +253,7 @@ export class RecordingSession {
     let failureDiagnostics: { readonly contract: typeof CAPTURE_CONTRACT; readonly status: FinalizeInput["status"]; readonly pipelineErrorMessage: string } | undefined;
     try {
       if (this.t0Us === undefined) return await this.finalizeWithoutFrames(input);
-      const manifestPath = join(this.options.outputDir, "manifest.json");
+      const manifestPath = join(this.options.outputDir, MANIFEST_FILE);
       let manifestOnDisk = false;
       let manifestWritten = false;
       try {
@@ -269,7 +272,7 @@ export class RecordingSession {
         // AFTER stopCapture() so close-time spool notes and captureCloseFailures are included.
         failureDiagnostics = {
           contract: CAPTURE_CONTRACT,
-          status: input.status,
+          status: "failed" as const,
           pipelineErrorMessage: `finalize pipeline failed: ${errorMessage(error)}`,
         };
         await this.discardPartialRun(manifestPath, manifestOnDisk, manifestWritten);
@@ -281,7 +284,7 @@ export class RecordingSession {
       } catch { /* cleanup errors must not mask the original failure */ }
       if (failureDiagnostics !== undefined) {
         try {
-          await atomicJson(join(this.options.outputDir, "diagnostics.json"), {
+          await atomicJson(join(this.options.outputDir, DIAGNOSTICS_FILE), {
             contract: failureDiagnostics.contract,
             status: failureDiagnostics.status,
             failures: this.baseFailures(
@@ -311,7 +314,7 @@ export class RecordingSession {
     if (this.state !== "failed") await this.transition("failed");
     await this.stopCapture();
     const spoolNotes = this.contexts.flatMap((context) => [...context.spool.drainFailureNotes()]);
-    const diagnosticsPath = join(this.options.outputDir, "diagnostics.json");
+    const diagnosticsPath = join(this.options.outputDir, DIAGNOSTICS_FILE);
     await atomicJson(diagnosticsPath, {
       contract: null,
       status: input.status,
@@ -373,8 +376,8 @@ export class RecordingSession {
   private async buildManifest(input: FinalizeInput, pipeline: CapturePipelineResult): Promise<RecordingManifest> {
     const artifacts: Record<string, string> = { ...pipeline.verifiedArtifacts };
     const hashes: Record<string, string> = { ...pipeline.verifiedHashes };
-    await collectDirectoryArtifacts(this.options.outputDir, "traces", artifacts, hashes);
-    if (this.options.recording.keepRaw) await collectDirectoryArtifacts(this.options.outputDir, "raw", artifacts, hashes);
+    await collectDirectoryArtifacts(this.options.outputDir, ARTIFACT_DIRECTORIES.traces, artifacts, hashes);
+    if (this.options.recording.keepRaw) await collectDirectoryArtifacts(this.options.outputDir, ARTIFACT_DIRECTORIES.raw, artifacts, hashes);
     return {
       contract: CAPTURE_CONTRACT,
       validatorVersion: VALIDATOR_VERSION,

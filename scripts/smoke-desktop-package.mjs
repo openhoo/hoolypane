@@ -62,7 +62,9 @@ try {
 
   fixture = await startFixtureServer(fixturePort);
   let executable;
-  let launchArgs = [`--remote-debugging-port=${debuggingPort}`, "--url", `http://127.0.0.1:${fixturePort}`];
+  // Isolated user-data dir: without it the packaged app resolves userData from the host
+  // profile, restores its saved panes, and persists fixture URLs into the real workspace.
+  let launchArgs = [`--remote-debugging-port=${debuggingPort}`, `--user-data-dir=${join(temporary, "user-data")}`, "--url", `http://127.0.0.1:${fixturePort}`];
   let environment = { ...process.env };
 
   if (process.platform === "linux") {
@@ -75,6 +77,7 @@ try {
   } else if (process.platform === "win32") {
     const installer = soleArtifact(".exe");
     installedDirectory = join(temporary, "installed");
+    if (/\s/.test(installedDirectory)) throw new Error(`NSIS /D= must be passed unquoted, so the install directory cannot contain whitespace, got: ${installedDirectory}`);
     await runCommand(join(artifactDir, installer), ["/S", `/D=${installedDirectory}`]);
     executable = join(installedDirectory, "Hoolypane.exe");
     await fs.access(executable);
@@ -91,6 +94,14 @@ try {
 
   app = spawn(executable, launchArgs, { env: environment, stdio: ["ignore", "pipe", "pipe"] });
   app.once("exit", (code, signal) => { appExit = { code, signal }; });
+  // A failed spawn emits 'error' instead of 'exit'; record it so waitForDesktop reports
+  // the failure through the normal path and the finally block can still tear down.
+  app.once("error", (error) => {
+    appExit = { code: null, signal: `spawn failed: ${String(error)}` };
+    app.stdout?.destroy();
+    app.stderr?.destroy();
+    app = undefined;
+  });
   app.stdout?.on("data", (data) => { logs += data; });
   app.stderr?.on("data", (data) => { logs += data; });
   await waitForDesktop();

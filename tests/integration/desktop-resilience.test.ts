@@ -35,26 +35,26 @@ async function waitForMirroredName(value: string): Promise<void> {
   }, 10_000);
 }
 
-async function waitForNoOutOfSync(): Promise<void> {
-  let clearSince = 0;
-  await pollUntil(async () => {
-    if (await chrome.getByText(/out of sync/i).count() === 0) {
-      if (clearSince === 0) clearSince = Date.now();
-      else if (Date.now() - clearSince >= 300) return true;
-    } else clearSince = 0;
-    return null;
-  }, 10_000);
-}
+const STABLE_HOLD_MS = 300;
 
-async function waitForStablePageCount(pageCount: number, timeoutMs = 2_000): Promise<void> {
+/** Accepts once `observed` holds continuously for `holdMs`; any failing poll resets the stability clock. */
+async function pollUntilStable(observed: () => Promise<boolean>, holdMs: number, timeoutMs: number): Promise<void> {
   let stableSince = 0;
   await pollUntil(async () => {
-    if (application.context().pages().length === pageCount) {
+    if (await observed()) {
       if (stableSince === 0) stableSince = Date.now();
-      else if (Date.now() - stableSince >= 300) return true;
+      else if (Date.now() - stableSince >= holdMs) return true;
     } else stableSince = 0;
     return null;
   }, timeoutMs);
+}
+
+async function waitForNoOutOfSync(): Promise<void> {
+  await pollUntilStable(async () => (await chrome.getByText(/out of sync/i).count()) === 0, STABLE_HOLD_MS, 10_000);
+}
+
+async function waitForStablePageCount(pageCount: number, timeoutMs = 2_000): Promise<void> {
+  await pollUntilStable(() => Promise.resolve(application.context().pages().length === pageCount), STABLE_HOLD_MS, timeoutMs);
 }
 
 beforeAll(async () => {

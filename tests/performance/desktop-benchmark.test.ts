@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { errorMessage } from "@hoolypane/contracts";
 import { fixturePaneCount, fixturePages, launchDesktopApp, locateSourcePane, pollUntil, startFixtureServer, teardownDesktopSuite, type FixtureServer } from "../helpers/harness.js";
 import { clickPaneSurface } from "../integration/cdp-input.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
@@ -47,6 +48,19 @@ async function waitForFinalInput(expected: string): Promise<boolean> {
     }, 10_000);
   } catch {
     return false;
+  }
+}
+
+/** Retries a sampled evaluate once when a transient renderer reload invalidates its execution context mid-run. */
+async function withReloadRetry<T>(label: string, action: () => Promise<T>): Promise<T> {
+  try {
+    return await action();
+  } catch (firstError) {
+    try {
+      return await action();
+    } catch (error) {
+      throw new Error(`${label} failed on retry (first attempt: ${errorMessage(firstError)})`, { cause: error });
+    }
   }
 }
 
@@ -122,7 +136,9 @@ describe("six-pane direct compositor", () => {
     const finalStatePreserved = await waitForFinalInput(expectedFinalValue);
     rssSamples.push(await mainProcessRssBytes());
 
-    const displayCadenceP95Ms = await chrome.evaluate(() => {
+    // A transient renderer reload invalidates execution contexts mid-sample; retry the
+    // steady-state cadence sample once instead of failing the gate opaquely.
+    const displayCadenceP95Ms = await withReloadRetry("display cadence sample", () => chrome.evaluate(() => {
       const { promise, resolve } = Promise.withResolvers<number>();
       const intervals: number[] = [];
       let previous = performance.now();
@@ -137,11 +153,19 @@ describe("six-pane direct compositor", () => {
       };
       requestAnimationFrame(sample);
       return promise;
-    });
+    }));
     const rafP95LimitMs = Math.max(20, displayCadenceP95Ms * 1.05);
     const rafP95ByPane = await application.evaluate(async ({ webContents }, port) => {
       const panes = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`));
-      const values = await Promise.all(panes.map((contents) => contents.executeJavaScript(`new Promise(resolve => { const values=[]; let previous=performance.now(); const frame=now=>{ values.push(now-previous); previous=now; if(values.length===1800){values.sort((a,b)=>a-b); resolve({id:innerWidth+'x'+innerHeight,p95:values[Math.floor(values.length*0.95)]});}else requestAnimationFrame(frame)}; requestAnimationFrame(frame); })`)));
+      const values = await Promise.all(panes.map(async (contents) => {
+        const sampleSource = "new Promise(resolve => { const values=[]; let previous=performance.now(); const frame=now=>{ values.push(now-previous); previous=now; if(values.length===1800){values.sort((a,b)=>a-b); resolve({id:innerWidth+'x'+innerHeight,p95:values[Math.floor(values.length*0.95)]});}else requestAnimationFrame(frame)}; requestAnimationFrame(frame); })";
+        try {
+          return await contents.executeJavaScript(sampleSource);
+        } catch {
+          // Same transient-reload tolerance as the chrome sampler above.
+          return await contents.executeJavaScript(sampleSource);
+        }
+      }));
       return Object.fromEntries(values.map((value: { id: string; p95: number }) => [value.id, value.p95]));
     }, FIXTURE_PORT);
     rssSamples.push(await mainProcessRssBytes());

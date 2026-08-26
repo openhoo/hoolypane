@@ -50,8 +50,9 @@ describe("flow API", () => {
     expect(serializeFlow([envelope({ kind: "fill", locator: { kind: "label", value: "Email" }, value: "a@example.test" })])).toContain('await page.getByLabel("Email", { exact: true }).fill("a@example.test");');
   });
 
-  it("keeps known ARIA roles on the getByRole path regardless of case or padding", () => {
-    expect(locatorExpression({ kind: "role", role: " BUTTON ", name: "Save" })).toBe('page.getByRole(" BUTTON ", { name: "Save", exact: true })');
+  it("routes padded or cased recordings of valid roles through the attribute fallback", () => {
+    expect(locatorExpression({ kind: "role", role: " BUTTON ", name: "Save" })).toBe('page.locator("[role=\\" BUTTON \\"]")');
+    expect(locatorExpression({ kind: "role", role: "Button", name: "Save" })).toBe('page.locator("[role=\\"Button\\"]")');
     expect(locatorExpression({ kind: "role", role: "textbox", name: "Search" })).toBe('page.getByRole("textbox", { name: "Search", exact: true })');
   });
 

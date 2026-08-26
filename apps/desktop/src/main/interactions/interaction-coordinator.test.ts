@@ -202,6 +202,39 @@ describe("flow draft", () => {
     expect(draft.stop()).toEqual({ kind: "saved", source: expect.any(String) });
   });
 
+  it("drops block() outcomes captured under an older session generation", () => {
+    const draft = new FlowDraft();
+    draft.start("https://example.test", "source", 1);
+    const staleGeneration = draft.sessionGeneration;
+    draft.start("https://example.test", "source", 5);
+    draft.append({ ...envelope, actionId: 6 }, draft.sessionGeneration);
+    draft.block(6, "phone", "replay lost a navigation race", staleGeneration);
+    // The stale outcome must be fenced off: the restart's stop() stays exportable instead of
+    // reporting session N+1 as blocked over a phantom key injected by session N.
+    expect(draft.stop()).toEqual({ kind: "saved", source: expect.any(String) });
+    // Positive control: the same block with the live generation wedges the stop, so this test
+    // pins the generation fence and not an unrelated drop of every block.
+    draft.block(6, "phone", "replay lost a navigation race");
+    expect(draft.stop()).toEqual({ kind: "blocked", reasons: ["action 6 (phone): replay lost a navigation race"] });
+  });
+
+  it("drops unblock() outcomes captured under an older session generation", () => {
+    const draft = new FlowDraft();
+    draft.start("https://example.test", "source", 1);
+    const staleGeneration = draft.sessionGeneration;
+    draft.start("https://example.test", "source", 5);
+    draft.append({ ...envelope, actionId: 6 }, draft.sessionGeneration);
+    draft.block(6, "phone", "replay lost a navigation race");
+    draft.unblock(6, "phone", staleGeneration);
+    // The stale recovery must be fenced off: without the fence the composite key collides with
+    // the restart's own failure and its stop() would silently export.
+    expect(draft.stop()).toEqual({ kind: "blocked", reasons: ["action 6 (phone): replay lost a navigation race"] });
+    // Positive control: the same unblock with the live generation clears the failure, so this
+    // test pins the generation fence and not an unrelated drop of every unblock.
+    draft.unblock(6, "phone");
+    expect(draft.stop()).toEqual({ kind: "saved", source: expect.any(String) });
+  });
+
   it("stays active on a blocked stop so recovery can clear it", () => {
     const draft = new FlowDraft();
     draft.start("https://example.test", "source", 1);

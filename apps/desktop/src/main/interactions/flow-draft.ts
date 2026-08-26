@@ -11,7 +11,8 @@ export class FlowDraft {
   private blocking = new Map<string, BlockingEntry>();
   private active = false;
   // Bumped by every start(): envelopes captured under an older session are ignored on append,
-  // so a drain that outlives its recording cannot pollute the next one.
+  // and its block()/unblock() mutations are dropped, so a drain or late replay that outlives
+  // its recording cannot pollute the next one.
   private generation = 0;
 
   start(url: string, sourcePaneId: string, actionId: number): void {
@@ -35,15 +36,18 @@ export class FlowDraft {
     return `${actionId}:${paneId}`;
   }
 
-  block(actionId: number, paneId: string, reason: string): void {
-    if (!this.active) return;
+  // Omitted generation means "the current session": production callers must pass the generation
+  // captured before their awaits so outcomes settling after commit()/start() are dropped.
+  block(actionId: number, paneId: string, reason: string, generation: number = this.generation): void {
+    if (!this.active || generation !== this.generation) return;
     const key = this.keyFor(actionId, paneId);
     const entry = this.blocking.get(key) ?? { actionId, paneId, reasons: [] };
     entry.reasons.push(reason);
     this.blocking.set(key, entry);
   }
 
-  unblock(actionId: number, paneId: string): void {
+  unblock(actionId: number, paneId: string, generation: number = this.generation): void {
+    if (!this.active || generation !== this.generation) return;
     this.blocking.delete(this.keyFor(actionId, paneId));
   }
 

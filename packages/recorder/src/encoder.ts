@@ -5,7 +5,7 @@ import { join } from "node:path";
 import ffmpegStaticPath from "ffmpeg-static";
 import ffprobeStatic from "ffprobe-static";
 import { errorMessage, gridCellPosition } from "@hoolypane/contracts";
-import { asError, CHILD_GRACE_MS, COMPOSITE_VIDEO_NAME, compositeGeometry, trackVideoName, type CompositeGeometry, type SlotMapping, type TrackGeometry } from "./capture-contract.js";
+import { ARTIFACT_DIRECTORIES, asError, CHILD_GRACE_MS, COMPOSITE_VIDEO_NAME, compositeGeometry, trackVideoName, type CompositeGeometry, type SlotMapping, type TrackGeometry } from "./capture-contract.js";
 import type { FrameSpool } from "./spool.js";
 
 interface EncoderPaths { readonly ffmpeg: string; readonly ffprobe: string }
@@ -80,8 +80,8 @@ function writeChunk(stream: Writable, data: Buffer): Promise<void> {
 
 /** Pure ffmpeg argv assembly: per-track image2pipe inputs, filter graph, and per-output map pushes. */
 export function ffmpegArguments(outputDir: string, tracks: readonly AlignedTrack[], geometry: CompositeGeometry, fps: 30 | 60, durationFrames: number, background: string): string[] {
-  const videos = tracks.map((track) => join(outputDir, "videos", trackVideoName(track.id)));
-  const composite = join(outputDir, "videos", COMPOSITE_VIDEO_NAME);
+  const videos = tracks.map((track) => join(outputDir, ARTIFACT_DIRECTORIES.videos, trackVideoName(track.id)));
+  const composite = join(outputDir, ARTIFACT_DIRECTORIES.videos, COMPOSITE_VIDEO_NAME);
   const args: string[] = ["-hide_banner", "-loglevel", "error", "-y", "-nostdin"];
   for (let index = 0; index < tracks.length; index += 1) {
     args.push("-probesize", "32", "-analyzeduration", "0", "-c:v", "mjpeg", "-f", "image2pipe", "-framerate", String(fps), "-i", `pipe:${index + INPUT_PIPE_STDIO_BASE}`);
@@ -146,7 +146,7 @@ export async function encodeAligned(
   recording: { readonly compositeMaxSize: { readonly width: number; readonly height: number }; readonly compositeBackground: string },
 ): Promise<EncodingResult> {
   if (tracks.length === 0) throw new Error("encoding requires at least one track");
-  await mkdir(join(outputDir, "videos"), { recursive: true });
+  await mkdir(join(outputDir, ARTIFACT_DIRECTORIES.videos), { recursive: true });
   const paths = await resolveEncoders();
   const geometry = compositeGeometry(tracks.map((track) => track.geometry), recording.compositeMaxSize);
   const args = ffmpegArguments(outputDir, tracks, geometry, fps, durationFrames, recording.compositeBackground);

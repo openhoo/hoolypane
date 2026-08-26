@@ -70,7 +70,17 @@ it("drag and drop moves a pane and persists the position", async () => {
   const header = chrome.locator('[data-pane-surface="desktop-1440"]').locator("xpath=..").locator("header");
   const headerBox = await header.boundingBox();
   if (!headerBox) throw new Error("header box missing");
-  const startX = headerBox.x + 30;
+  // Grab a neutral point midway between the rename label's right edge and the
+  // header's right edge: [data-pane-name] is exempt from the drag guard, so the
+  // legacy fixed 30 px offset would land on the label and never start a drag.
+  // Fall back to that offset when the label is absent or hidden (narrow layouts).
+  const nameLabel = header.locator("[data-pane-name]");
+  const nameBox =
+    (await nameLabel.count()) > 0 ? await nameLabel.boundingBox() : null;
+  const startX =
+    nameBox === null
+      ? headerBox.x + 30
+      : (nameBox.x + nameBox.width + headerBox.x + headerBox.width) / 2;
   const startY = headerBox.y + headerBox.height / 2;
   await chrome.mouse.move(startX, startY);
   await chrome.mouse.down();

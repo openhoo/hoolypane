@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { errorMessage } from "@hoolypane/contracts";
-import { CHILD_GRACE_MS, COMPOSITE_VIDEO_NAME, trackVideoName, type TrackGeometry } from "./capture-contract.js";
+import { ARTIFACT_DIRECTORIES, CHILD_GRACE_MS, COMPOSITE_VIDEO_NAME, trackVideoName, type TrackGeometry } from "./capture-contract.js";
 import { awaitChildExit, resolveEncoders } from "./encoder.js";
 import { certifyArtifact } from "./spool.js";
 
@@ -128,10 +128,10 @@ function assertGeometry(geometry: readonly { file: string; width: number; height
 export async function verifyArtifacts(outputDir: string, fps: 30 | 60, durationFrames: number, expected?: ExpectedArtifacts): Promise<VerificationResult> {
   try {
     const encoders = await resolveEncoders();
-    const names = (await readdir(join(outputDir, "videos"))).filter((file) => file.endsWith(".webm")).sort();
+    const names = (await readdir(join(outputDir, ARTIFACT_DIRECTORIES.videos))).filter((file) => file.endsWith(".webm")).sort();
     if (names.length === 0) throw new Error("no encoded WebM artifacts");
     assertArtifactSet(names, expected);
-    const probed = await Promise.all(names.map((name) => probe(encoders.ffprobe, join(outputDir, "videos", name))));
+    const probed = await Promise.all(names.map((name) => probe(encoders.ffprobe, join(outputDir, ARTIFACT_DIRECTORIES.videos, name))));
     assertConstantFrameRate(names, probed, fps, durationFrames);
     const geometry = probed.map(({ stream }, index) => {
       if (stream.width === undefined || stream.height === undefined || stream.width <= 0 || stream.height <= 0) {
@@ -142,7 +142,7 @@ export async function verifyArtifacts(outputDir: string, fps: 30 | 60, durationF
     if (expected) assertGeometry(geometry, expected);
     const artifacts: Record<string, string> = {};
     const hashes: Record<string, string> = {};
-    for (const name of names) await certifyArtifact(outputDir, "videos", name, artifacts, hashes);
+    for (const name of names) await certifyArtifact(outputDir, ARTIFACT_DIRECTORIES.videos, name, artifacts, hashes);
     return {
       success: true,
       geometry,

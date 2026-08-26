@@ -7,7 +7,7 @@ import { resolve, dirname, join } from "node:path";
 import type { FlowEvent, ResolvedHoolypaneConfig, ViewportSpec } from "@hoolypane/contracts";
 import { createFlowContext } from "@hoolypane/flow";
 import type { FlowDefinition, Screen } from "@hoolypane/flow";
-import { RecordingSession } from "@hoolypane/recorder";
+import { ARTIFACT_DIRECTORIES, RecordingSession } from "@hoolypane/recorder";
 import type { RecordingTarget, RecorderFailure, RunStatus } from "@hoolypane/recorder";
 import { compileModule, validateConfigExport, validateFlowExport } from "./module-loader.js";
 import type { CompiledModule } from "./module-loader.js";
@@ -191,7 +191,7 @@ function recordFlowFailure(state: FlowRunState, error: unknown): void {
 async function stopTraces(outputDir: string, state: FlowRunState): Promise<readonly RecorderFailure[]> {
   if (state.tracesStopped) return [];
   state.tracesStopped = true;
-  const results = await Promise.allSettled(state.contexts.map(({ context, viewportId }) => context.tracing.stop({ path: join(outputDir, "traces", `${viewportId}.zip`) })));
+  const results = await Promise.allSettled(state.contexts.map(({ context, viewportId }) => context.tracing.stop({ path: join(outputDir, ARTIFACT_DIRECTORIES.traces, `${viewportId}.zip`) })));
   return results.flatMap((result, index) => (result.status === "rejected" ? [{ ...failureFrom(result.reason), viewportId: state.contexts[index]!.viewportId }] : []));
 }
 

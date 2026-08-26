@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { alignFrames, type SlotMapping, type TrackGeometry } from "./capture-contract.js";
+import { ARTIFACT_DIRECTORIES, alignFrames, type SlotMapping, type TrackGeometry } from "./capture-contract.js";
 import { FrameSpool } from "./spool.js";
 
 interface AlignedTrackSpec {
@@ -29,17 +29,21 @@ export async function buildAlignedTracks(
   options: { readonly swallowCloseErrors?: boolean } = {},
 ): Promise<BuiltAlignedTrack[]> {
   return Promise.all(specs.map(async (spec): Promise<BuiltAlignedTrack> => {
-    const spool = new FrameSpool(spec.id, join(directory, "raw"));
+    const spool = new FrameSpool(spec.id, join(directory, ARTIFACT_DIRECTORIES.raw));
     await spool.open();
+    let primaryError: unknown;
     try {
       for (let sequence = 0; sequence < spec.frames; sequence += 1) {
         await spool.append(await spec.jpeg(sequence), { sequence, width: spec.width, height: spec.height, timestampUs: spec.timestampUs(sequence) });
       }
-    } finally {
-      await spool.close().catch((error: unknown) => {
-        if (options.swallowCloseErrors !== true) throw error;
-      });
+    } catch (error) {
+      primaryError = error;
     }
+    // A cleanup close failure must never mask the capture failure that caused it.
+    await spool.close().catch((error: unknown) => {
+      if (primaryError === undefined && options.swallowCloseErrors !== true) throw error;
+    });
+    if (primaryError !== undefined) throw primaryError;
     const alignment = alignFrames(spool.index.frames, t0Us, durationFrames, fps);
     return { id: spec.id, spool, mappings: alignment.mappings, geometry: { id: spec.id, encodedWidth: spec.width, encodedHeight: spec.height } };
   }));

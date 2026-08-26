@@ -24,8 +24,8 @@ class FakeTarget implements RecordingTarget {
 const directories: string[] = [];
 afterEach(async () => Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))));
 
-function options(outputDir: string) {
-  return { recording: { fps: 30 as const, jpegQuality: 85, compositeMaxSize: { width: 128, height: 128 }, compositeBackground: "#111318", keepRaw: false }, timeoutMs: 100, outputDir };
+function options(outputDir: string, overrides: { readonly keepRaw?: boolean } = {}) {
+  return { recording: { fps: 30 as const, jpegQuality: 85, compositeMaxSize: { width: 128, height: 128 }, compositeBackground: "#111318", keepRaw: overrides.keepRaw ?? false }, timeoutMs: 100, outputDir };
 }
 
 describe("recording session", () => {
@@ -57,6 +57,27 @@ describe("recording session", () => {
     if (result.kind === "manifest") {
       expect(result.manifest).toMatchObject({ contract: "multi-viewport-cfr-v1", validationSuccess: true, status: "interrupted" });
       expect(result.manifest.durationFrames).toBe(durationFrameCount(result.manifest.t0UnixUs, result.manifest.t1UnixUs, result.manifest.fps));
+    }
+  }, 30_000);
+
+  it("certifies raw bins into the manifest and retains them when keepRaw=true", async () => {
+    const outputDir = await mkdtemp(join(tmpdir(), "hoolypane-keep-raw-"));
+    directories.push(outputDir);
+    const target = new FakeTarget();
+    const session = new RecordingSession(options(outputDir, { keepRaw: true }));
+    await session.start([target]);
+    const jpeg = await sharp({ create: { width: 2, height: 2, channels: 3, background: "#0088ff" } }).jpeg().toBuffer();
+    target.emit({ data: jpeg.toString("base64"), sessionId: 1, metadata: { timestamp: 1_800_000_000, deviceWidth: 2, deviceHeight: 2 } });
+    await session.awaitInitialFrames();
+    session.markFlowStart();
+    const result = await session.finalize({ status: "interrupted", failures: [{ message: "SIGINT" }] });
+    expect(result.kind).toBe("manifest");
+    if (result.kind === "manifest") {
+      expect(Object.keys(result.manifest.artifacts)).toContain("raw/phone.jpeg.bin");
+      expect(Object.keys(result.manifest.artifacts)).toContain("raw/phone.index.json");
+      expect(Object.keys(result.manifest.sha256)).toContain("raw/phone.jpeg.bin");
+      expect(Object.keys(result.manifest.sha256)).toContain("raw/phone.index.json");
+      expect(existsSync(join(outputDir, "raw"))).toBe(true);
     }
   }, 30_000);
 
