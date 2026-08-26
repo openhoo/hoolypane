@@ -334,10 +334,11 @@ function PaneName({ pane, onRename }: { pane: PaneState; onRename(name: string):
           // The name control owns its keys: neither the header delegate (closest("button,
           // input, select") never matches this span) nor any other guard stops Enter/F2
           // here, so stopPropagation is the only thing keeping rename keys from arming
-          // keyboard-move.
-          event.stopPropagation();
+          // keyboard-move. Other keys still bubble so an armed keyboard-move session keeps
+          // handling its bindings while this span holds focus.
           const key = event.key;
           if (key === "Enter" || key === "F2" || key === " ") {
+            event.stopPropagation();
             event.preventDefault();
             setEditing(true);
           }

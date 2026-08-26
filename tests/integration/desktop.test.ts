@@ -55,6 +55,10 @@ async function scrollSource(): Promise<void> {
   await sourcePage().getByTestId("scroller").evaluate((element) => element.scrollTo(0, element.scrollHeight));
 }
 
+async function waitForRenderedWorkspace(): Promise<void> {
+  await pollUntil(async () => (await chrome.locator(".pane-card").count()) === 5 || null, 15_000);
+  await pollUntil(async () => (await chrome.locator("#address").inputValue()).startsWith(fixtureOrigin(FIXTURE_PORT)) || null, 10_000);
+}
 beforeAll(async () => {
   fixture = await startFixtureServer(FIXTURE_PORT);
   const launch = await launchDesktopApp({ port: FIXTURE_PORT, extraEnv: { ELECTRON_ENABLE_LOGGING: "1" } });
@@ -69,8 +73,7 @@ describe("direct Electron surfaces", () => {
   it("receives published state through the preload stateRequest pull handshake", async () => {
     // Pane cards can only render from a received ChromeState snapshot, so their presence
     // plus a populated address input proves the renderer got published state after launch.
-    await pollUntil(async () => (await chrome.locator(".pane-card").count()) === 5 || null, 15_000);
-    await pollUntil(async () => (await chrome.locator("#address").inputValue()).startsWith(fixtureOrigin(FIXTURE_PORT)) || null, 10_000);
+    await waitForRenderedWorkspace();
 
     // Regression pin for the lost-initial-push bug: subscribe() must PULL state via
     // stateRequest exactly once per subscription. A fresh chrome reload is one clean
@@ -84,8 +87,7 @@ describe("direct Electron surfaces", () => {
       state.__stateRequestCount = 0;
     }, IPC_CHANNELS.stateRequest);
     await chrome.evaluate(() => location.reload());
-    await pollUntil(async () => (await chrome.locator(".pane-card").count()) === 5 || null, 15_000);
-    await pollUntil(async () => (await chrome.locator("#address").inputValue()).startsWith(fixtureOrigin(FIXTURE_PORT)) || null, 10_000);
+    await waitForRenderedWorkspace();
     const stateRequests = await application.evaluate(() => (globalThis as typeof globalThis & { __stateRequestCount?: number }).__stateRequestCount ?? -1);
     expect(stateRequests).toBe(1);
   }, 30_000);

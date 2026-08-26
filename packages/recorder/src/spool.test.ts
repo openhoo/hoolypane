@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Writable } from "node:stream";
@@ -7,11 +7,9 @@ import type { ViewportSpec } from "@hoolypane/contracts";
 import { MAX_QUEUED_BYTES, MAX_QUEUED_FRAMES } from "./capture-contract.js";
 import { CaptureSpool, FrameSpool } from "./spool.js";
 import type { RecordingTarget } from "./session.js";
+import { removeScratchDirectories, trackScratchDirectory } from "./test-support.js";
 
-const directories: string[] = [];
-afterEach(async () => {
-  await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
-});
+afterEach(removeScratchDirectories);
 
 const FRAME = Buffer.alloc(16, 7);
 const frameMeta = (sequence: number) => ({ sequence, width: 2, height: 2, timestampUs: sequence * 20_000 });
@@ -24,7 +22,7 @@ function streamOf(spool: FrameSpool): Writable | undefined {
 describe("frame spool", () => {
   it("drops over-cap frames without rejecting: acks proceed, drops counted, notes throttled", async () => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-spool-cap-"));
-    directories.push(directory);
+    trackScratchDirectory(directory);
     const spool = new FrameSpool("capped", directory);
     await spool.open();
     const attempts = Array.from({ length: MAX_QUEUED_FRAMES + 1 }, (_unused, sequence) =>
@@ -58,7 +56,7 @@ describe("frame spool", () => {
 
   it("poisons failure state on write errors: later appends reject, records stay out of the index", async () => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-spool-poison-"));
-    directories.push(directory);
+    trackScratchDirectory(directory);
     const spool = new FrameSpool("poisoned", directory);
     await spool.open();
     await expect(spool.append(FRAME, frameMeta(0))).resolves.toMatchObject({ sequence: 0 });
@@ -73,7 +71,7 @@ describe("frame spool", () => {
 
   it("writes the index exactly once across repeated closes", async () => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-spool-close-"));
-    directories.push(directory);
+    trackScratchDirectory(directory);
     const spool = new FrameSpool("once", directory);
     await spool.open();
     await spool.append(FRAME, frameMeta(0));
@@ -86,7 +84,7 @@ describe("frame spool", () => {
 
   it("rolls back a duplicate create without leaving index files behind", async () => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-spool-rollback-"));
-    directories.push(directory);
+    trackScratchDirectory(directory);
     const capture = new CaptureSpool();
     const target = (id: string): RecordingTarget => ({
       id,

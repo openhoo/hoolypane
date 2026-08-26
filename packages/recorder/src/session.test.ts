@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Writable } from "node:stream";
@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_COMPOSITE_BACKGROUND, type ViewportSpec } from "@hoolypane/contracts";
 import type { FrameSpool } from "./spool.js";
 import { RecordingSession, type RecordingTarget } from "./session.js";
+import { removeScratchDirectories, trackScratchDirectory } from "./test-support.js";
 
 class FakeTarget implements RecordingTarget {
   readonly id = "phone";
@@ -21,8 +22,7 @@ class FakeTarget implements RecordingTarget {
   emit(params: unknown): void { this.listener?.(params); }
 }
 
-const directories: string[] = [];
-afterEach(async () => Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))));
+afterEach(removeScratchDirectories);
 
 function options(outputDir: string, overrides: { readonly keepRaw?: boolean } = {}) {
   return { recording: { fps: 30 as const, jpegQuality: 85, compositeMaxSize: { width: 128, height: 128 }, compositeBackground: DEFAULT_COMPOSITE_BACKGROUND, keepRaw: overrides.keepRaw ?? false }, timeoutMs: 100, outputDir };
@@ -31,7 +31,7 @@ function options(outputDir: string, overrides: { readonly keepRaw?: boolean } = 
 describe("recording session", () => {
   it("writes diagnostics only when T0 was never established", async () => {
     const outputDir = await mkdtemp(join(tmpdir(), "hoolypane-pre-t0-"));
-    directories.push(outputDir);
+    trackScratchDirectory(outputDir);
     const session = new RecordingSession(options(outputDir));
     await session.start([new FakeTarget()]);
     const result = await session.finalize({ status: "failed", failures: [{ message: "before initial frame" }] });
@@ -44,7 +44,7 @@ describe("recording session", () => {
 
   it("encodes and validates a post-T0 partial run", async () => {
     const outputDir = await mkdtemp(join(tmpdir(), "hoolypane-post-t0-"));
-    directories.push(outputDir);
+    trackScratchDirectory(outputDir);
     const target = new FakeTarget();
     const session = new RecordingSession(options(outputDir));
     await session.start([target]);
@@ -62,7 +62,7 @@ describe("recording session", () => {
 
   it("certifies raw bins into the manifest and retains them when keepRaw=true", async () => {
     const outputDir = await mkdtemp(join(tmpdir(), "hoolypane-keep-raw-"));
-    directories.push(outputDir);
+    trackScratchDirectory(outputDir);
     const target = new FakeTarget();
     const session = new RecordingSession(options(outputDir, { keepRaw: true }));
     await session.start([target]);
@@ -83,7 +83,7 @@ describe("recording session", () => {
 
   it("routes close()-surfaced stream errors into a failed manifest instead of throwing", async () => {
     const outputDir = await mkdtemp(join(tmpdir(), "hoolypane-close-fail-"));
-    directories.push(outputDir);
+    trackScratchDirectory(outputDir);
     const target = new FakeTarget();
     const session = new RecordingSession(options(outputDir));
     await session.start([target]);
@@ -112,7 +112,7 @@ describe("recording session", () => {
 
   it("clears stale outputs from a previous run before opening spools", async () => {
     const outputDir = await mkdtemp(join(tmpdir(), "hoolypane-stale-"));
-    directories.push(outputDir);
+    trackScratchDirectory(outputDir);
     await mkdir(join(outputDir, "videos"), { recursive: true });
     await mkdir(join(outputDir, "traces"), { recursive: true });
     await writeFile(join(outputDir, "videos", "stale.webm"), "stale");
@@ -133,7 +133,7 @@ describe("recording session", () => {
 
   it("removes raw bins and partial videos on keepRaw=false failure exits", async () => {
     const outputDir = await mkdtemp(join(tmpdir(), "hoolypane-prune-"));
-    directories.push(outputDir);
+    trackScratchDirectory(outputDir);
     const target = new FakeTarget();
     const session = new RecordingSession(options(outputDir));
     await session.start([target]);
@@ -151,7 +151,7 @@ describe("recording session", () => {
 describe("recording session guards", () => {
   it("rejects a duplicate start", async () => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-session-start-"));
-    directories.push(directory);
+    trackScratchDirectory(directory);
     const target = new FakeTarget();
     const session = new RecordingSession(options(directory));
     await session.start([target]);

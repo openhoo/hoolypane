@@ -110,6 +110,50 @@ function rowTiles(panes: readonly TileInput[], innerWidth: number, innerHeight: 
   return tiles;
 }
 
+function widthZoom(pane: TileInput, cellWidth: number): number {
+  return Math.min(1, cellWidth / pane.viewportWidth);
+}
+
+/** Packs one column-count arrangement: each card goes to the currently shortest column at the shared column width. */
+function packColumns(panes: readonly TileInput[], columns: number, cellWidth: number): { placement: PaneTile[]; totalHeight: number } {
+  const columnHeights: number[] = Array.from({ length: columns }, () => LAYOUT_PADDING);
+  const placement: PaneTile[] = [];
+  for (const pane of panes) {
+    const zoom = widthZoom(pane, cellWidth);
+    const width = Math.round(pane.viewportWidth * zoom);
+    const height = Math.round(PANE_HEADER_HEIGHT + pane.viewportHeight * zoom);
+    const shortest = columnHeights.indexOf(Math.min(...columnHeights));
+    const shortestHeight = columnHeights[shortest]!;
+    const columnX = LAYOUT_PADDING + shortest * (cellWidth + LAYOUT_GAP);
+    placement.push({ id: pane.id, x: Math.round(columnX + (cellWidth - width) / 2), y: Math.round(shortestHeight), width, height, zoom });
+    columnHeights[shortest] = shortestHeight + height + LAYOUT_GAP;
+  }
+  const totalHeight = columnHeights.reduce((tallest, current) => Math.max(tallest, current), 0) - LAYOUT_GAP;
+  return { placement, totalHeight };
+}
+
+/** Coverage score: sums covered viewport area at the arrangement zoom under the overshoot fit. */
+function coveredArea(panes: readonly TileInput[], cellWidth: number, fit: number): number {
+  return panes.reduce((sum, pane) => {
+    const zoom = widthZoom(pane, cellWidth) * fit;
+    return sum + pane.viewportWidth * zoom * pane.viewportHeight * zoom;
+  }, 0);
+}
+
+/** Winner rescale: scales toward the padding origin when the arrangement overshoots the workspace height. */
+function scaleTowardPaddingOrigin(placement: readonly PaneTile[], fit: number): PaneTile[] {
+  // The fixed header band is kept unscaled while the content share shrinks, so rendered headers
+  // never clip.
+  return placement.map((tile) => ({
+    ...tile,
+    x: Math.round(LAYOUT_PADDING + (tile.x - LAYOUT_PADDING) * fit),
+    y: Math.round(LAYOUT_PADDING + (tile.y - LAYOUT_PADDING) * fit),
+    width: Math.round(tile.width * fit),
+    height: Math.round(PANE_HEADER_HEIGHT + (tile.height - PANE_HEADER_HEIGHT) * fit),
+    zoom: tile.zoom * fit,
+  }));
+}
+
 /**
  * Column masonry search: tries every column count, keeps the arrangement with the best covered
  * area, and scales toward the padding origin when it overshoots the workspace height (the fixed
@@ -125,37 +169,12 @@ function masonryTiles(panes: readonly TileInput[], innerWidth: number, innerHeig
   for (let columns = 1; columns <= panes.length; columns += 1) {
     const cellWidth = (innerWidth - LAYOUT_GAP * (columns - 1)) / columns;
     if (cellWidth <= 0) continue;
-    const widthZoom = (pane: TileInput): number => Math.min(1, cellWidth / pane.viewportWidth);
-    const columnHeights: number[] = Array.from({ length: columns }, () => LAYOUT_PADDING);
-    const placement: PaneTile[] = [];
-    for (const pane of panes) {
-      const zoom = widthZoom(pane);
-      const width = Math.round(pane.viewportWidth * zoom);
-      const height = Math.round(PANE_HEADER_HEIGHT + pane.viewportHeight * zoom);
-      const shortest = columnHeights.indexOf(Math.min(...columnHeights));
-      const shortestHeight = columnHeights[shortest]!;
-      const columnX = LAYOUT_PADDING + shortest * (cellWidth + LAYOUT_GAP);
-      placement.push({ id: pane.id, x: Math.round(columnX + (cellWidth - width) / 2), y: Math.round(shortestHeight), width, height, zoom });
-      columnHeights[shortest] = shortestHeight + height + LAYOUT_GAP;
-    }
-    const totalHeight = columnHeights.reduce((tallest, current) => Math.max(tallest, current), 0) - LAYOUT_GAP;
+    const { placement, totalHeight } = packColumns(panes, columns, cellWidth);
     const fit = Math.min(1, innerHeight / totalHeight);
-    const coverage = panes.reduce((sum, pane) => {
-      const zoom = widthZoom(pane) * fit;
-      return sum + pane.viewportWidth * zoom * pane.viewportHeight * zoom;
-    }, 0) / (innerWidth * innerHeight);
+    const coverage = coveredArea(panes, cellWidth, fit) / (innerWidth * innerHeight);
     if (coverage <= bestCoverage) continue;
     bestCoverage = coverage;
-    // Overshoot: scale the arrangement toward the padding origin; the fixed header band is kept
-    // unscaled while the content share shrinks, so rendered headers never clip.
-    bestPlacement = placement.map((tile) => ({
-      ...tile,
-      x: Math.round(LAYOUT_PADDING + (tile.x - LAYOUT_PADDING) * fit),
-      y: Math.round(LAYOUT_PADDING + (tile.y - LAYOUT_PADDING) * fit),
-      width: Math.round(tile.width * fit),
-      height: Math.round(PANE_HEADER_HEIGHT + (tile.height - PANE_HEADER_HEIGHT) * fit),
-      zoom: tile.zoom * fit,
-    }));
+    bestPlacement = scaleTowardPaddingOrigin(placement, fit);
   }
   return bestPlacement;
 }

@@ -1,3 +1,4 @@
+import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { ARTIFACT_DIRECTORIES, alignFrames, type SlotMapping, type TrackGeometry } from "./capture-contract.js";
 import { FrameSpool } from "./spool.js";
@@ -53,4 +54,16 @@ export async function buildAlignedTracks(
     const alignment = alignFrames(spool.index.frames, t0Us, durationFrames, fps);
     return { id: spec.id, spool, mappings: alignment.mappings, geometry: { id: spec.id, encodedWidth: spec.width, encodedHeight: spec.height } };
   }));
+}
+
+// Shared scratch-directory registry for the recorder unit suites: each test registers its mkdtemp
+// directory and vitest's shared afterEach removes whatever is registered when the test ends.
+const scratchDirectories: string[] = [];
+
+export function trackScratchDirectory(directory: string): void {
+  scratchDirectories.push(directory);
+}
+
+export async function removeScratchDirectories(): Promise<void> {
+  await Promise.all(scratchDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 }

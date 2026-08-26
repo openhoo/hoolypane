@@ -7,9 +7,14 @@ import type { PaneRegistry } from "../panes/pane-registry.js";
 import { unknownPaneMessage } from "../panes/workspace.js";
 import type { OverviewInput, OverviewTileInput, OverviewWorkerResponse } from "./overview-protocol.js";
 
-/** Test-only file override shared by E2E hooks: HOOLYPANE_TEST_MODE gate, env read, absolute-<label>-path validation. */
+/** Single source of truth for the HOOLYPANE_TEST_MODE opt-in consumed by every test-only path. */
+export function testModeEnabled(): boolean {
+  return process.env.HOOLYPANE_TEST_MODE === "1";
+}
+
+/** Test-only file override shared by E2E hooks: test-mode gating via testModeEnabled, env read, absolute-<label>-path validation. */
 export function testEnvFilePath(variable: string, extension: string, label: string): string | undefined {
-  if (process.env.HOOLYPANE_TEST_MODE !== "1") return undefined;
+  if (!testModeEnabled()) return undefined;
   const value = process.env[variable];
   if (!value) return undefined;
   if (!isAbsolute(value) || extname(value).toLowerCase() !== extension) throw new Error(`${variable} must be an absolute ${label} path`);
@@ -73,14 +78,32 @@ export async function captureOverview(window: BrowserWindow, registry: PaneRegis
   await savePng(window, png, "HOOLYPANE_TEST_OVERVIEW_PNG", "Save Hoolypane overview", "hoolypane-overview.png");
 }
 
+/** Watchdog deadline for one overview composition: equal to QUIT_FLUSH_DEADLINE_MS (main/index.ts)
+ *  and CHILD_GRACE_MS (@hoolypane/contracts recorder capture-contract); same async-boundary watchdog
+ *  class as REPLAY_RESULT_TIMEOUT_MS (5s) and the fixture-server readiness kill, at the longer 10s
+ *  tier. Generous against measured ms-scale composes while still unblocking main's serialized command
+ *  queue long before a user quits. */
+const OVERVIEW_COMPOSE_TIMEOUT_MS = 10_000;
+
+/** Compose tiles off-thread on a fresh worker per call, terminated when the promise settles. The
+ *  watchdog bounds a wedged sharp/libvips render: expiry terminates this worker instance and rejects,
+ *  so queued chrome commands proceed; the next compose respawns under the unchanged per-call lifecycle.
+ *  Late message/exit events after expiry are silent no-op double-settles on the resolvers. */
 function composeOverview(tiles: readonly OverviewTileInput[], background: string): Promise<Uint8Array> {
   const worker = new Worker(new URL("./overview-worker.js", import.meta.url), { workerData: { tiles, background } satisfies OverviewInput });
   const result = Promise.withResolvers<Uint8Array>();
+  const watchdog = setTimeout(() => {
+    void worker.terminate();
+    result.reject(new Error(`overview composition did not finish within ${OVERVIEW_COMPOSE_TIMEOUT_MS}ms`));
+  }, OVERVIEW_COMPOSE_TIMEOUT_MS);
   worker.once("message", (value: OverviewWorkerResponse) => {
     if (value.ok) result.resolve(value.png);
     else result.reject(new Error(value.error));
   });
   worker.once("error", result.reject);
   worker.once("exit", (code) => { if (code !== 0) result.reject(new Error(`overview worker exited ${code}`)); });
-  return result.promise.finally(() => void worker.terminate());
+  return result.promise.finally(() => {
+    clearTimeout(watchdog);
+    void worker.terminate();
+  });
 }

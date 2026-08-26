@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -6,14 +6,10 @@ import sharp from "sharp";
 import { DEFAULT_COMPOSITE_BACKGROUND } from "@hoolypane/contracts";
 import { compositeGeometry } from "./capture-contract.js";
 import { encodeAligned } from "./encoder.js";
-import { buildAlignedTracks } from "./test-support.js";
+import { buildAlignedTracks, removeScratchDirectories, trackScratchDirectory } from "./test-support.js";
 import { verifyArtifacts } from "./verifier.js";
 
-const directories: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
-});
+afterEach(removeScratchDirectories);
 
 interface RecordedTrackSpec { readonly id: string; readonly width: number; readonly height: number; readonly frames: number; readonly strideUs: number }
 
@@ -35,7 +31,7 @@ async function recordedTracks(directory: string, specs: readonly RecordedTrackSp
 describe("multi-viewport encoder", () => {
   it("produces identical complete frame timelines", async () => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-encoder-"));
-    directories.push(directory);
+    trackScratchDirectory(directory);
     const tracks = await recordedTracks(directory, [
       { id: "one", width: 320, height: 240, frames: 10, strideUs: 20_000 },
       { id: "two", width: 240, height: 320, frames: 10, strideUs: 40_000 },
@@ -61,7 +57,7 @@ describe("multi-viewport encoder", () => {
 
   it("rejects artifacts that disagree with the declared timeline or geometry", async () => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-verifier-reject-"));
-    directories.push(directory);
+    trackScratchDirectory(directory);
     const tracks = await recordedTracks(directory, [{ id: "solo", width: 64, height: 64, frames: 22, strideUs: 33_333 }], 0, 22, 30);
     await encodeAligned(directory, tracks, 30, 22, { compositeMaxSize: { width: 128, height: 128 }, compositeBackground: DEFAULT_COMPOSITE_BACKGROUND });
     const expected = {

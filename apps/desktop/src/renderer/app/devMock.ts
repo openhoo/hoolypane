@@ -4,9 +4,9 @@
  * Synthesizes the `window.hoolypaneChrome` preload API so the renderer can run
  * in a plain browser (vite dev server) without Electron. It is only installed
  * when the real preload bridge is absent AND import.meta.env.DEV is true, so
- * production builds never ship or activate it. State transitions are validated
- * against ChromeStateSchema / BoundsSnapshotSchema just like the real main
- * process, keeping the IPC contract honest during UI development.
+ * production builds never ship or activate it. Command and bounds payloads are validated against
+ * the same schemas main applies at its IPC boundary; additionally every mock state transition
+ * passes ChromeStateSchema.safeParse, keeping the IPC contract honest during UI development.
  */
 import { BoundsSnapshotSchema, ChromeCommandSchema, ChromeStateSchema, errorMessage } from "@hoolypane/contracts";
 import type { BoundsSnapshot, ChromeCommand, ChromeState, PaneState } from "@hoolypane/contracts";

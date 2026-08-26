@@ -39,7 +39,7 @@ async function waitForDesktop() {
   while (Date.now() < deadline) {
     if (appExit) throw new Error(`packaged desktop exited before readiness (${appExit.code ?? appExit.signal}): ${logs}`);
     try {
-      const targets = await fetch(`http://127.0.0.1:${debuggingPort}/json/list`).then((response) => response.json());
+      const targets = await fetch(`http://127.0.0.1:${debuggingPort}/json/list`, { signal: AbortSignal.timeout(2_000) }).then((response) => response.json());
       const fixtureTargets = targets.filter((target) => target.url === `${fixtureOrigin(fixturePort)}/`);
       if (targets.some((target) => target.url?.startsWith("file:") && target.title === "Hoolypane") && fixtureTargets.length >= 5) return;
     } catch { /* debugger not ready */ }

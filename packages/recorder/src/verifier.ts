@@ -57,21 +57,24 @@ function timeBaseTicks(timeBase: string): { numerator: bigint; denominator: bigi
 
 function exactPtsVector(stream: ProbeStream, packets: readonly ProbePacket[], fps: 30 | 60): bigint[] {
   timeBaseTicks(stream.time_base!);
+  // Slot-duration fallback for a lone packet with no neighbor gap to infer from; safe to compute
+  // up front because timeBaseTicks above already validated the same time base this re-parses.
+  const [firstTick, secondTick] = idealPtsTicks(stream.time_base!, fps, 2);
+  const lonePacketDuration = secondTick! - firstTick!;
   const ticks: bigint[] = [];
   packets.forEach((packet, index) => {
     if (packet.pts === undefined) throw new Error(`packet ${index} lacks integer PTS`);
-    const next = packets[index + 1]?.pts;
-    const previous = packets[index - 1]?.pts;
-    const inferred = next === undefined ? previous === undefined ? undefined : BigInt(packet.pts) - BigInt(previous) : BigInt(next) - BigInt(packet.pts);
-    let duration = packet.duration === undefined ? inferred : BigInt(packet.duration);
-    if (duration === undefined) {
-      // Only a lone packet can lack both neighbors to infer from when the pinned container stores no durations;
-      // accept it at the ideal constant-frame-rate slot duration instead of rejecting a valid artifact.
-      const [firstTick, secondTick] = idealPtsTicks(stream.time_base!, fps, 2);
-      duration = secondTick! - firstTick!;
-    }
+    const ownTicks = BigInt(packet.pts);
+    const nextPts = packets[index + 1]?.pts;
+    const previousPts = packets[index - 1]?.pts;
+    // Reported duration wins over inference, which pays its neighbor BigInt parses only when the
+    // container stores no durations; a lone packet with neither neighbor takes the ideal
+    // constant-frame-rate slot duration instead of rejecting a valid artifact.
+    const duration = packet.duration === undefined
+      ? (nextPts !== undefined ? BigInt(nextPts) - ownTicks : previousPts !== undefined ? ownTicks - BigInt(previousPts) : lonePacketDuration)
+      : BigInt(packet.duration);
     if (duration <= 0n) throw new Error(`packet ${index} lacks positive duration`);
-    ticks.push(BigInt(packet.pts));
+    ticks.push(ownTicks);
   });
   return ticks;
 }

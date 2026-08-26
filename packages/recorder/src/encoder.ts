@@ -40,18 +40,22 @@ export async function resolveEncoders(): Promise<EncoderPaths> {
 
 export function filterGraph(tracks: readonly AlignedTrack[], grid: CompositeGeometry, fps: 30 | 60, background: string): string {
   const color = background.replace(/^#/, "0x");
+
+  // Shared letterbox template for every resample stage: per-track videos and the grid tiles must
+  // letterbox identically, so the scale+pad math lives here exactly once.
+  const fit = (width: number, height: number): string => `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=${color}`;
   const filters: string[] = [];
   for (const [index, track] of tracks.entries()) {
     if (tracks.length === 1) {
       // Solo input: compositeGeometry's max-of-one makes tile dims equal encoded dims, so the old
       // tile stage resampled an already-matching frame. One resample feeds both the [track0] map
       // (a label can be consumed once) and the composite scale through a zero-cost split.
-      filters.push(`[${index}:v]settb=AVTB,setpts=N/(${fps}*TB),scale=${track.geometry.encodedWidth}:${track.geometry.encodedHeight}:force_original_aspect_ratio=decrease,pad=${track.geometry.encodedWidth}:${track.geometry.encodedHeight}:(ow-iw)/2:(oh-ih)/2:color=${color},split=2[track${index}][compositesrc${index}]`);
+      filters.push(`[${index}:v]settb=AVTB,setpts=N/(${fps}*TB),${fit(track.geometry.encodedWidth, track.geometry.encodedHeight)},split=2[track${index}][compositesrc${index}]`);
       continue;
     }
     filters.push(`[${index}:v]settb=AVTB,setpts=N/(${fps}*TB),split=2[raw${index}][gridraw${index}]`);
-    filters.push(`[raw${index}]scale=${track.geometry.encodedWidth}:${track.geometry.encodedHeight}:force_original_aspect_ratio=decrease,pad=${track.geometry.encodedWidth}:${track.geometry.encodedHeight}:(ow-iw)/2:(oh-ih)/2:color=${color}[track${index}]`);
-    filters.push(`[gridraw${index}]scale=${grid.tileWidth}:${grid.tileHeight}:force_original_aspect_ratio=decrease,pad=${grid.tileWidth}:${grid.tileHeight}:(ow-iw)/2:(oh-ih)/2:color=${color}[tile${index}]`);
+    filters.push(`[raw${index}]${fit(track.geometry.encodedWidth, track.geometry.encodedHeight)}[track${index}]`);
+    filters.push(`[gridraw${index}]${fit(grid.tileWidth, grid.tileHeight)}[tile${index}]`);
   }
   if (tracks.length === 1) {
     filters.push(`[compositesrc0]scale=${grid.outputWidth}:${grid.outputHeight}[composite]`);
@@ -151,7 +155,7 @@ export async function encodeAligned(
   const geometry = compositeGeometry(tracks.map((track) => track.geometry), recording.compositeMaxSize);
   const args = ffmpegArguments(outputDir, tracks, geometry, fps, durationFrames, recording.compositeBackground);
 
-  // stdio[0..1] ignore stdout/stderr sinks, [2] stderr pipe; input pipe i lives at stdio[i + INPUT_PIPE_STDIO_BASE].
+  // stdio[0..1] ignore stdin/stdout, [2] is the stderr pipe; input pipe i lives at stdio[i + INPUT_PIPE_STDIO_BASE].
   const child = spawn(paths.ffmpeg, args, { stdio: ["ignore", "ignore", "pipe", ...tracks.map(() => "pipe" as const)] });
   const stderrStream = child.stderr;
   if (!stderrStream) throw new Error("ffmpeg stderr pipe unavailable");

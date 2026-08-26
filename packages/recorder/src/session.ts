@@ -136,12 +136,13 @@ export class RecordingSession {
       ...Object.values(ARTIFACT_DIRECTORIES).map((entry) => fs.rm(join(this.options.outputDir, entry), { recursive: true, force: true })),
       ...[MANIFEST_FILE, DIAGNOSTICS_FILE, RUN_STATE_FILE].map((file) => fs.rm(join(this.options.outputDir, file), { force: true })),
     ]);
-    await this.spools.create(targets, join(this.options.outputDir, ARTIFACT_DIRECTORIES.raw));
+    const spools = await this.spools.create(targets, join(this.options.outputDir, ARTIFACT_DIRECTORIES.raw));
     try {
       // Inside the guard: a failing initial state write must dispose the opened spools.
       await this.writeRunState();
-      for (const target of targets) {
-        const spool = this.spools.spools.get(target.id)!;
+      for (const [index, target] of targets.entries()) {
+        // create() hands back one opened spool per target, positionally aligned with `targets`.
+        const spool = spools[index]!;
         let context: Context;
         const listener = (event: unknown) => { void this.receive(context, event as ScreencastFrame); };
         context = { target, spool, listener, fallbackSequence: 0 };

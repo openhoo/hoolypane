@@ -7,9 +7,10 @@ const inputs = (specs: readonly { id: string; width: number; height: number }[])
 const ALL_INPUTS = inputs(VIEWPORT_PRESETS);
 
 // Grid/free/focus pack inside the padding origin and extent except under severe compression:
-// horizontal rows may pass the right padding (unscaled gaps, exact envelope (n - 1) *
-// LAYOUT_GAP), and masonry packs may pass the bottom padding (unscaled 28px header band) within
-// the provable universal envelope y + height <= areaHeight - LAYOUT_PADDING + PANE_HEADER_HEIGHT.
+// horizontal rows may pass the right padding ((n - 1) * LAYOUT_GAP of unscaled gaps plus up to
+// half-a-pixel-per-pane of Math.round surplus), and masonry packs may pass the bottom padding
+// (unscaled 28px header band) within the provable universal envelope y + height <= areaHeight -
+// LAYOUT_PADDING + PANE_HEADER_HEIGHT.
 function expectPaddedDomain(tiles: Map<string, PaneTile>, areaWidth: number, areaHeight: number): void {
   for (const tile of tiles.values()) {
     if (tile.hidden) continue;
@@ -86,10 +87,14 @@ describe("renderer layout engine", () => {
       expect(tile.y + tile.height, `${tile.id} bottom`).toBeLessThanOrEqual(areaHeight - LAYOUT_PADDING);
       rightmost = Math.max(rightmost, tile.x + tile.width);
     }
-    // Row widths shrink by the uniform fit but the fixed 8px gaps between cards do not, so the
-    // compressed row may exceed the right padding by at most (n - 1) * LAYOUT_GAP. This pins the
-    // known drift instead of hiding it behind a looser bound.
-    expect(rightmost).toBeLessThanOrEqual(areaWidth - LAYOUT_PADDING + (ALL_INPUTS.length - 1) * LAYOUT_GAP);
+    // Row widths shrink by the uniform fit but the fixed 8px gaps between cards do not, and each
+    // Math.round adds up to half a pixel of surplus, so the compressed row may exceed the right
+    // padding by (n - 1) * LAYOUT_GAP of unscaled gaps plus up to half-a-pixel-per-pane of
+    // Math.round surplus (three 1358px panes at width 141 land one pixel past the gap-only
+    // envelope). This pins the known drift instead of hiding it behind a looser bound.
+    expect(rightmost).toBeLessThanOrEqual(
+      areaWidth - LAYOUT_PADDING + (ALL_INPUTS.length - 1) * LAYOUT_GAP + Math.ceil(ALL_INPUTS.length / 2),
+    );
   });
 
   it("keeps focus layout to one visible card plus zero-size hidden siblings, falling back past stale ids", () => {

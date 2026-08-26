@@ -219,7 +219,7 @@ export class FrameSpool {
 export class CaptureSpool {
   readonly spools = new Map<string, FrameSpool>();
 
-  async create(targets: readonly CaptureTarget[], directory: string): Promise<void> {
+  async create(targets: readonly CaptureTarget[], directory: string): Promise<readonly FrameSpool[]> {
     const opened: FrameSpool[] = [];
     try {
       for (const target of targets) {
@@ -234,6 +234,7 @@ export class CaptureSpool {
       for (const spool of opened) this.spools.delete(spool.viewportId);
       throw error;
     }
+    return opened;
   }
 
   async close(onFailure?: (viewportId: string, error: Error) => void): Promise<void> {

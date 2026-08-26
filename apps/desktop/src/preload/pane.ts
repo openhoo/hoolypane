@@ -100,6 +100,28 @@ function elementsFor(locator: LocatorSpec, labelElements?: readonly Element[]): 
   }
 }
 
+// Implicit ARIA roles this recorder derives from element semantics below. Every name here MUST
+// also appear in packages/flow/src/codegen.ts GET_BY_ROLE_ROLES: that sibling table decides
+// whether an exported role locator serializes as page.getByRole(...) or as the [role="..."]
+// attribute fallback — which only matches explicit role attributes, so an implicit role missing
+// there records getByRole steps that replay zero matches and deadlock the flow until its deadline
+// (recording text-like inputs as textbox once deadlocked exported flows exactly like that).
+const IMPLICIT_ROLES = ["button", "link", "combobox", "textbox", "checkbox", "radio", "searchbox", "spinbutton", "slider"] as const;
+type ImplicitRole = (typeof IMPLICIT_ROLES)[number];
+// Native <input> types whose implicit ARIA role differs from the textbox default; Playwright
+// resolves these under their real implicit roles, so they must be recorded as such.
+const IMPLICIT_INPUT_TYPE_ROLES: Readonly<Record<string, ImplicitRole>> = {
+  checkbox: "checkbox",
+  radio: "radio",
+  button: "button",
+  submit: "button",
+  reset: "button",
+  file: "button",
+  search: "searchbox",
+  number: "spinbutton",
+  range: "slider",
+};
+
 function roleFor(element: Element): string {
   const explicit = element.getAttribute("role");
   if (explicit) return explicit;
@@ -107,18 +129,7 @@ function roleFor(element: Element): string {
   if (element instanceof HTMLAnchorElement && element.href) return "link";
   if (element instanceof HTMLSelectElement) return "combobox";
   if (element instanceof HTMLTextAreaElement) return "textbox";
-  if (element instanceof HTMLInputElement) {
-    if (element.type === "checkbox") return "checkbox";
-    if (element.type === "radio") return "radio";
-    if (["button", "submit", "reset"].includes(element.type)) return "button";
-    // Playwright resolves these native types under their real implicit ARIA roles; recording them
-    // as textbox produced getByRole steps that can never match, deadlocking exported flows.
-    if (element.type === "search") return "searchbox";
-    if (element.type === "number") return "spinbutton";
-    if (element.type === "range") return "slider";
-    if (element.type === "file") return "button";
-    return "textbox";
-  }
+  if (element instanceof HTMLInputElement) return IMPLICIT_INPUT_TYPE_ROLES[element.type] ?? "textbox";
   return "";
 }
 
@@ -279,8 +290,9 @@ document.addEventListener("change", (event) => {
 }, true);
 /**
  * Names the echo-suppression invariant: a trusted click may only acknowledge the replay whose
- * resolved box contains the click coordinates — undefined unless exactly one pending click/check
- * qualifies. Settled check entries may not acknowledge while their trailing echo drains.
+ * resolved box contains the click coordinates within a 2px tolerance per edge — undefined unless
+ * exactly one pending click/check qualifies. Settled check entries may not acknowledge while their
+ * trailing echo drains.
  */
 function matchSuppressedClick(event: MouseEvent): { actionId: number; entry: SuppressionEntry } | undefined {
   let matchedActionId: number | undefined;
@@ -305,9 +317,9 @@ function matchSuppressedClick(event: MouseEvent): { actionId: number; entry: Sup
 document.addEventListener("click", (event) => {
   if (!event.isTrusted) return;
   // A trusted click inside the confirm window may only acknowledge the replay whose resolved
-  // box contains the click coordinates; anything else is a human click. On a miss every entry
-  // is kept and no confirm is sent, so a stray click can never ack the wrong actionId while the
-  // real CDP click would fall through unconfirmed as a phantom.
+  // box contains the click coordinates within a 2px tolerance per edge; anything else is a human
+  // click. On a miss every entry is kept and no confirm is sent, so a stray click can never ack
+  // the wrong actionId while the real CDP click would fall through unconfirmed as a phantom.
   if (suppressed.size > 0) {
     const matched = matchSuppressedClick(event);
     if (!matched) return; // human click during the confirm window: keep entries, send no confirm
