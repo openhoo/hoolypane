@@ -46,6 +46,17 @@ async function waitForNoOutOfSync(): Promise<void> {
   }, 10_000);
 }
 
+async function waitForStablePageCount(pageCount: number, timeoutMs = 2_000): Promise<void> {
+  let stableSince = 0;
+  await pollUntil(async () => {
+    if (application.context().pages().length === pageCount) {
+      if (stableSince === 0) stableSince = Date.now();
+      else if (Date.now() - stableSince >= 300) return true;
+    } else stableSince = 0;
+    return null;
+  }, timeoutMs);
+}
+
 beforeAll(async () => {
   fixture = await startFixtureServer(FIXTURE_PORT);
   const launch = await launchDesktopApp({
@@ -98,14 +109,7 @@ describe("desktop replay and security resilience", () => {
     expect(await page.evaluate(() => navigator.permissions.query({ name: "geolocation" }).then((permission) => permission.state))).toBe("denied");
     const pageCount = application.context().pages().length;
     await page.evaluate(() => window.open("mailto:security@example.test"));
-    let stableSince = 0;
-    await pollUntil(async () => {
-      if (application.context().pages().length === pageCount) {
-        if (stableSince === 0) stableSince = Date.now();
-        else if (Date.now() - stableSince >= 300) return true;
-      } else stableSince = 0;
-      return null;
-    }, 2_000);
+    await waitForStablePageCount(pageCount);
 
     const downloadState = await application.evaluate(async ({ webContents }, port) => {
       const pane = webContents.getAllWebContents().find((contents) => contents.getURL() === `http://127.0.0.1:${port}/next`);
@@ -125,14 +129,7 @@ describe("desktop replay and security resilience", () => {
     expect(downloadState).toBe("cancelled");
 
     await page.evaluate((url) => window.open(url), `http://127.0.0.1:${FIXTURE_PORT}/popup`);
-    let popupStableSince = 0;
-    await pollUntil(async () => {
-      if (application.context().pages().length === pageCount) {
-        if (popupStableSince === 0) popupStableSince = Date.now();
-        else if (Date.now() - popupStableSince >= 300) return true;
-      } else popupStableSince = 0;
-      return null;
-    }, 2_000);
+    await waitForStablePageCount(pageCount);
     await waitForRemotePages("/popup", 1);
   }, 20_000);
 

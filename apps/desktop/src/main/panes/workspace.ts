@@ -10,6 +10,10 @@ export function uniquePaneId(used: ReadonlySet<string>, seed: string): string {
   while (used.has(`${seed}-${suffix}`)) suffix += 1;
   return `${seed}-${suffix}`;
 }
+/** Single sources for the user-visible refusal messages main throws and the renderer dev-mock mirrors; shared constants keep the wording from drifting. */
+export const EMPTY_PANE_NAME_MESSAGE = "pane name must not be empty";
+export const FLOW_RECORDING_ACTIVE_MESSAGE = "a flow recording is already active";
+export const unknownPaneMessage = (paneId: string): string => `unknown pane: ${paneId}`;
 
 export function hasPane(workspace: WorkspaceState, paneId: string): boolean {
   return workspace.order.includes(paneId);

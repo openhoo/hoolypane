@@ -2,7 +2,7 @@ import { ipcRenderer } from "electron";
 import { FILL_DEBOUNCE_MS, IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, RECORDABLE_PRESS_KEYS, RecordFailureSchema, ReplayRequestSchema, REPLAY_RESULT_PHASES, failureReason, staleGenerationMessage, type Action, type LocatorSpec, type ReplayRequest, type ReplayResult } from "@hoolypane/contracts";
 
 let documentGeneration = 0;
-type SuppressionEntry = { generation: number; kind: Action["kind"]; box?: { x: number; y: number; width: number; height: number }; confirmed?: boolean };
+type SuppressionEntry = { generation: number; kind: Action["kind"]; box?: ReplayResult["box"]; confirmed?: boolean };
 const suppressed = new Map<number, SuppressionEntry>(); // actionId → replay context awaiting its trusted-input echo
 // Scroll positions written by replay-driven scrolling (apply-dom scrollTo and scrollIntoView). A
 // trusted scroll event landing exactly on such a position is our own echo, never user intent, and
@@ -116,12 +116,16 @@ function roleFor(element: Element): string {
 function accessibleName(element: Element): string {
   const aria = element.getAttribute("aria-label");
   if (aria) return normalizedText(aria);
-  if (element instanceof HTMLInputElement && element.labels?.length) return normalizedText([...element.labels].map((label) => label.textContent).join(" "));
-  if (element instanceof HTMLInputElement && element.type === "password") return "";
-  // No .value fallback: a live value is not part of standard accName computation for text fields,
-  // and a value-keyed role locator can never resolve in a sibling whose input still shows its old
-  // value — recording would flag every mirror outOfSync although placeholder/label/css would resolve.
-  return normalizedText(element.textContent || element.getAttribute("title"));
+  const labelable = element instanceof HTMLInputElement || element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement;
+  if (!labelable) return normalizedText(element.textContent || element.getAttribute("title"));
+  // Select/textarea contents are option texts or an initial value, never their accessible name;
+  // like inputs they are named only by aria-label or an associated label. Keying the role locator
+  // on content would export a getByRole name Playwright's accName never produces, so flows replay
+  // zero matches in sibling panes; unlabeled controls yield "" and fall through to the
+  // label/placeholder/css strategies in locatorFor. No .value fallback: a live value is not part
+  // of standard accName for form fields and a value-keyed role locator could never resolve.
+  if (element.labels?.length) return normalizedText([...element.labels].map((label) => label.textContent).join(" "));
+  return "";
 }
 
 function unique(locator: LocatorSpec, labelElements?: readonly Element[]): boolean {
@@ -366,6 +370,41 @@ function applyDomWrite(request: ReplayRequest, element: Element): void {
   }
 }
 
+/** Resolves the replay target, applies DOM writes, arms suppression, and measures the target box. */
+function resolveOrApplyDom(request: ReplayRequest): { box: ReplayResult["box"]; checked?: boolean } {
+  if (request.action.kind === "navigate") throw new Error("navigate has no element target");
+  const matches = elementsFor(request.action.locator);
+  if (matches.length !== 1) throw new Error(`locator resolved ${matches.length} elements`);
+  const element = matches[0]!;
+  // A drifted locator resolving to exactly one element of the wrong kind must fail loudly:
+  // falling through reported ok:true while applying nothing, so main counted a diverging pane
+  // as in-sync and never flagged outOfSync. Validated before the suppression entry is armed,
+  // mirroring the other hard failures in this handler.
+  if (request.phase === "apply-dom") assertApplyDomTarget(request, element);
+  // focus() is a documented no-op on unfocusable elements: without this check a drifted
+  // locator arms suppression and reports ok:true while the native keystroke/insertText lands
+  // on whatever held focus before. Validated before the suppression entry is armed, mirroring
+  // the other hard failures in this handler.
+  if (request.phase === "resolve" && (request.action.kind === "fill" || request.action.kind === "press") && element instanceof HTMLElement) {
+    element.focus({ preventScroll: true });
+    if (document.activeElement !== element) throw new Error("resolved target did not take focus");
+  }
+  const entry: SuppressionEntry = { generation: request.documentGeneration, kind: request.action.kind };
+  suppressed.set(request.actionId, entry);
+  if (request.phase === "apply-dom") applyDomWrite(request, element);
+  // Mirrored native input is routed at viewport coordinates: bring the target into view first,
+  // exactly like a real user (or Playwright's auto-scroll) would, before measuring its box.
+  // Only click/check/fill/press qualify: select/scroll apply via DOM writes alone, and
+  // centering them would mutate ancestor scroll positions the recording never captured.
+  if (request.action.kind === "click" || request.action.kind === "check" || request.action.kind === "fill" || request.action.kind === "press") {
+    autoScrollCenter(element);
+  }
+  const box = element.getBoundingClientRect();
+  const rect = { x: box.x, y: box.y, width: box.width, height: box.height };
+  entry.box = rect;
+  return { box: rect, ...(element instanceof HTMLInputElement ? { checked: element.checked } : {}) };
+}
+
 ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
   let request: ReplayRequest;
   try {
@@ -385,37 +424,7 @@ ipcRenderer.on(IPC_CHANNELS.replay, (_event, value: unknown) => {
   try {
     if (request.documentGeneration !== documentGeneration) throw new Error(staleGenerationMessage(request.documentGeneration, documentGeneration));
     if (request.phase === "resolve" || request.phase === "apply-dom") {
-      if (request.action.kind === "navigate") throw new Error("navigate has no element target");
-      const matches = elementsFor(request.action.locator);
-      if (matches.length !== 1) throw new Error(`locator resolved ${matches.length} elements`);
-      const element = matches[0]!;
-      // A drifted locator resolving to exactly one element of the wrong kind must fail loudly:
-      // falling through reported ok:true while applying nothing, so main counted a diverging pane
-      // as in-sync and never flagged outOfSync. Validated before the suppression entry is armed,
-      // mirroring the other hard failures in this handler.
-      if (request.phase === "apply-dom") assertApplyDomTarget(request, element);
-      // focus() is a documented no-op on unfocusable elements: without this check a drifted
-      // locator arms suppression and reports ok:true while the native keystroke/insertText lands
-      // on whatever held focus before. Validated before the suppression entry is armed, mirroring
-      // the other hard failures in this handler.
-      if (request.phase === "resolve" && (request.action.kind === "fill" || request.action.kind === "press") && element instanceof HTMLElement) {
-        element.focus({ preventScroll: true });
-        if (document.activeElement !== element) throw new Error("resolved target did not take focus");
-      }
-      const entry: SuppressionEntry = { generation: request.documentGeneration, kind: request.action.kind };
-      suppressed.set(request.actionId, entry);
-      if (request.phase === "apply-dom") applyDomWrite(request, element);
-      // Mirrored native input is routed at viewport coordinates: bring the target into view first,
-      // exactly like a real user (or Playwright's auto-scroll) would, before measuring its box.
-      // Only click/check/fill/press qualify: select/scroll apply via DOM writes alone, and
-      // centering them would mutate ancestor scroll positions the recording never captured.
-      if (request.action.kind === "click" || request.action.kind === "check" || request.action.kind === "fill" || request.action.kind === "press") {
-        autoScrollCenter(element);
-      }
-      const box = element.getBoundingClientRect();
-      const rect = { x: box.x, y: box.y, width: box.width, height: box.height };
-      entry.box = rect;
-      result = { ...result, box: rect, ...(element instanceof HTMLInputElement ? { checked: element.checked } : {}) };
+      result = { ...result, ...resolveOrApplyDom(request) };
     }
   } catch (error) {
     result = { ...result, ok: false, reason: failureReason(error) };

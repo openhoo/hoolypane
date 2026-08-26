@@ -28,7 +28,7 @@ import { verifyArtifacts } from "./verifier.js";
 
 export type { RecorderFailure };
 export type RecordingTarget = CaptureTarget;
-type RecordingFinalizeResult = { readonly kind: "manifest"; readonly manifestPath: string; readonly manifest: RecordingManifest } | { readonly kind: "diagnostics"; readonly diagnosticsPath: string };
+type RecordingFinalizeResult = { readonly kind: "manifest"; readonly manifest: RecordingManifest } | { readonly kind: "diagnostics"; readonly diagnosticsPath: string };
 
 interface RecordingManifest {
   readonly contract: typeof CAPTURE_CONTRACT;
@@ -260,7 +260,7 @@ export class RecordingSession {
         manifestOnDisk = true;
         await this.transition("complete");
         manifestWritten = true;
-        return { kind: "manifest", manifestPath, manifest: finalManifest };
+        return { kind: "manifest", manifest: finalManifest };
       } catch (error) {
         try {
           if (this.state !== "complete" && this.state !== "failed") await this.transition("failed");
@@ -410,15 +410,14 @@ export class RecordingSession {
   }
 
   private async writeFinalManifest(manifestPath: string, manifest: RecordingManifest): Promise<RecordingManifest> {
-    const stateKey = RUN_STATE_FILE;
     // The terminal run-state write follows the manifest write: if the manifest fails to land,
     // the catch guard must still be able to mark the run failed instead of leaving a permanent
     // false "complete" record behind (see pruneFailedArtifacts contract). The manifest certifies
     // run-state.json, so hash the exact bytes transition("complete") persists below.
     const finalManifest: RecordingManifest = {
       ...manifest,
-      artifacts: { ...manifest.artifacts, [RUN_STATE_FILE]: stateKey },
-      sha256: { ...manifest.sha256, [stateKey]: createHash("sha256").update(serializeRunState(this.runId, "complete", CAPTURE_CONTRACT)).digest("hex") },
+      artifacts: { ...manifest.artifacts, [RUN_STATE_FILE]: RUN_STATE_FILE },
+      sha256: { ...manifest.sha256, [RUN_STATE_FILE]: createHash("sha256").update(serializeRunState(this.runId, "complete", CAPTURE_CONTRACT)).digest("hex") },
     };
     await this.pruneRawBins();
     await atomicJson(manifestPath, finalManifest);

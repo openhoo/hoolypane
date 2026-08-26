@@ -2,9 +2,9 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
-import { alignFrames, CAPTURE_CONTRACT, VALIDATOR_VERSION } from "../../packages/recorder/src/capture-contract.js";
+import { buildAlignedTracks } from "../../packages/recorder/src/test-support.js";
+import { CAPTURE_CONTRACT, VALIDATOR_VERSION } from "../../packages/recorder/src/capture-contract.js";
 import { encodeAligned } from "../../packages/recorder/src/encoder.js";
-import { FrameSpool } from "../../packages/recorder/src/spool.js";
 import { verifyArtifacts } from "../../packages/recorder/src/verifier.js";
 
 const OUTPUT = resolve(process.env.HOOLYPANE_BENCHMARK_OUTPUT ?? ".tmp/recording-proof");
@@ -22,24 +22,17 @@ describe("ten-second recording contract", () => {
       { id: "phone", width: 96, height: 160, sourceFps: 20, color: "#42a35a" },
       { id: "compact", width: 72, height: 128, sourceFps: 12, color: "#9a4ec2" },
     ] as const;
-    const tracks = await Promise.all(specifications.map(async (specification) => {
-      const spool = new FrameSpool(specification.id, resolve(OUTPUT, "raw"));
-      await spool.open();
-      const frames = Math.round(DURATION_FRAMES / FPS * specification.sourceFps);
-      try {
-        for (let sequence = 0; sequence < frames; sequence += 1) {
-          const jpeg = await sharp({ create: { width: specification.width, height: specification.height, channels: 3, background: specification.color } })
-            .composite([{ input: Buffer.from(`<svg width="${specification.width}" height="${specification.height}"><text x="4" y="18" fill="white" font-size="14">${sequence}</text></svg>`) }])
-            .jpeg({ quality: 70 })
-            .toBuffer();
-          await spool.append(jpeg, { sequence, width: specification.width, height: specification.height, timestampUs: Math.floor(sequence * 1_000_000 / specification.sourceFps) });
-        }
-      } finally {
-        await spool.close();
-      }
-      const alignment = alignFrames(spool.index.frames, 0, DURATION_FRAMES, FPS);
-      return { id: specification.id, spool, mappings: alignment.mappings, geometry: { id: specification.id, encodedWidth: specification.width, encodedHeight: specification.height } };
-    }));
+    const tracks = await buildAlignedTracks(OUTPUT, specifications.map((specification) => ({
+      id: specification.id,
+      width: specification.width,
+      height: specification.height,
+      frames: Math.round(DURATION_FRAMES / FPS * specification.sourceFps),
+      jpeg: (sequence: number) => sharp({ create: { width: specification.width, height: specification.height, channels: 3, background: specification.color } })
+        .composite([{ input: Buffer.from(`<svg width="${specification.width}" height="${specification.height}"><text x="4" y="18" fill="white" font-size="14">${sequence}</text></svg>`) }])
+        .jpeg({ quality: 70 })
+        .toBuffer(),
+      timestampUs: (sequence: number) => Math.floor(sequence * 1_000_000 / specification.sourceFps),
+    })), 0, DURATION_FRAMES, FPS);
     const encodeStartedAtMs = performance.now();
     await encodeAligned(OUTPUT, tracks, FPS, DURATION_FRAMES, { compositeMaxSize: { width: 320, height: 320 }, compositeBackground: "#111318" });
     const encodeSeconds = Math.round((performance.now() - encodeStartedAtMs)) / 1000;

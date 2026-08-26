@@ -11,7 +11,7 @@ import { compileModule } from "./module-loader.js";
 import { verifyDirectory } from "./verify.js";
 import ffmpegPath from "ffmpeg-static";
 import { HoolypaneConfigSchema, VIEWPORT_PRESETS } from "@hoolypane/contracts";
-import { ffmpegArguments, filterGraph } from "@hoolypane/recorder";
+import { awaitChildExit, ffmpegArguments, filterGraph } from "@hoolypane/recorder";
 
 describe("runner CLI", () => {
   it("parses flow, config, output, and headed options", () => {
@@ -113,16 +113,11 @@ afterEach(async () => {
 });
 
 function runFfmpeg(args: readonly string[]): Promise<void> {
-  const completion = Promise.withResolvers<void>();
   // ffmpeg-static's bundled typings do not promise a string; mirror the recorder's defensive resolution.
   const binary: unknown = ffmpegPath;
   if (typeof binary !== "string") throw new Error("ffmpeg-static path unavailable");
   const child = spawn(binary, args);
-  let stderr = "";
-  child.stderr?.on("data", (data: Buffer) => { stderr += data.toString(); });
-  child.once("error", completion.reject);
-  child.once("close", (code) => code === 0 ? completion.resolve() : completion.reject(new Error(`ffmpeg exited ${code}: ${stderr}`)));
-  return completion.promise;
+  return awaitChildExit(child, child.stderr!, `ffmpeg ${binary}`).completion.promise;
 }
 const FIXTURE_TRACK_SIZE = 64;
 const FIXTURE_BACKGROUND = "#111318";

@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import sharp from "sharp";
-import { alignFrames, compositeGeometry } from "./capture-contract.js";
+import { compositeGeometry } from "./capture-contract.js";
 import { encodeAligned } from "./encoder.js";
-import { FrameSpool } from "./spool.js";
+import { buildAlignedTracks } from "./test-support.js";
 import { verifyArtifacts } from "./verifier.js";
 
 const directories: string[] = [];
@@ -17,20 +17,18 @@ afterEach(async () => {
 interface RecordedTrackSpec { readonly id: string; readonly width: number; readonly height: number; readonly frames: number; readonly strideUs: number }
 
 async function recordedTracks(directory: string, specs: readonly RecordedTrackSpec[], t0Us: number, durationFrames: number, fps: 30 | 60) {
-  return Promise.all(specs.map(async (spec) => {
-    const jpeg = await sharp({ create: { width: spec.width, height: spec.height, channels: 3, background: "#ff0000" } }).jpeg().toBuffer();
-    const spool = new FrameSpool(spec.id, join(directory, "raw"));
-    await spool.open();
-    try {
-      for (let sequence = 0; sequence < spec.frames; sequence += 1) {
-        await spool.append(jpeg, { sequence, width: spec.width, height: spec.height, timestampUs: sequence * spec.strideUs });
-      }
-    } finally {
-      await spool.close().catch(() => undefined);
-    }
-    const alignment = alignFrames(spool.index.frames, t0Us, durationFrames, fps);
-    return { id: spec.id, spool, mappings: alignment.mappings, geometry: { id: spec.id, encodedWidth: spec.width, encodedHeight: spec.height } };
-  }));
+  return buildAlignedTracks(directory, specs.map((spec) => {
+    let reusedJpeg: Promise<Buffer> | undefined;
+    return {
+      id: spec.id,
+      width: spec.width,
+      height: spec.height,
+      frames: spec.frames,
+      // One red JPEG buffer per spec, appended for every sequence (previous inline-builder behavior).
+      jpeg: () => (reusedJpeg ??= sharp({ create: { width: spec.width, height: spec.height, channels: 3, background: "#ff0000" } }).jpeg().toBuffer()),
+      timestampUs: (sequence: number) => sequence * spec.strideUs,
+    };
+  }), t0Us, durationFrames, fps, { swallowCloseErrors: true });
 }
 
 describe("multi-viewport encoder", () => {

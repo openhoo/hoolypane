@@ -14,7 +14,7 @@ import { initialChromeState } from "./state.js";
 // Imported verbatim from the main process so the mock can never drift from the real
 // navigation-normalization pipeline (slashless special schemes, userinfo stripping).
 import { normalizeUrl } from "../../main/panes/url.js";
-import { addPane, closePane, rotatePane } from "../../main/panes/workspace.js";
+import { addPane, closePane, EMPTY_PANE_NAME_MESSAGE, FLOW_RECORDING_ACTIVE_MESSAGE, rotatePane, unknownPaneMessage } from "../../main/panes/workspace.js";
 
 let mockState: ChromeState = initialChromeState();
 const listeners = new Set<(value: unknown) => void>();
@@ -98,7 +98,7 @@ function apply(command: ChromeCommand): void {
       // Mirror main's PaneRegistry.rename: whitespace-only names are rejected via lastError.
       const name = command.name.trim();
       if (!name) {
-        patch({ lastError: "pane name must not be empty" });
+        patch({ lastError: EMPTY_PANE_NAME_MESSAGE });
         refused = true;
         break;
       }
@@ -109,7 +109,7 @@ function apply(command: ChromeCommand): void {
       // Mirror main's PaneRegistry.setPanePosition: unknown ids are refused via lastError
       // instead of accumulating orphaned position entries production state can never contain.
       if (!mockState.order.includes(command.paneId)) {
-        patch({ lastError: `unknown pane: ${command.paneId}` });
+        patch({ lastError: unknownPaneMessage(command.paneId) });
         refused = true;
         break;
       }
@@ -124,7 +124,7 @@ function apply(command: ChromeCommand): void {
       // Mirror main's PaneRegistry.focus guard so unknown ids surface as a refusal here
       // instead of dying later inside ChromeStateSchema.safeParse.
       if (command.paneId !== null && !mockState.order.includes(command.paneId)) {
-        patch({ lastError: `unknown pane: ${command.paneId}` });
+        patch({ lastError: unknownPaneMessage(command.paneId) });
         refused = true;
         break;
       }
@@ -155,7 +155,7 @@ function apply(command: ChromeCommand): void {
     case "record-start":
       // Mirror main's handleCommand refusal: a running recording must not silently restart.
       if (mockState.recording) {
-        patch({ lastError: "a flow recording is already active" });
+        patch({ lastError: FLOW_RECORDING_ACTIVE_MESSAGE });
         refused = true;
         break;
       }

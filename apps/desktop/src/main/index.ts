@@ -25,6 +25,7 @@ import { FlowDraft } from "./interactions/flow-draft.js";
 import { InteractionCoordinator } from "./interactions/interaction-coordinator.js";
 import { PaneRegistry } from "./panes/pane-registry.js";
 import { normalizeUrl } from "./panes/url.js";
+import { FLOW_RECORDING_ACTIVE_MESSAGE } from "./panes/workspace.js";
 import { flushWorkspaceSaves, loadWorkspace, saveWorkspace, sweepStaleTemporaries } from "./persistence/workspace-store.js";
 import { report } from "./report.js";
 import { captureOverview, capturePane, saveViaDialog, testEnvFilePath } from "./screenshots/screenshot-service.js";
@@ -178,7 +179,7 @@ async function handleCommand(command: ChromeCommand): Promise<void> {
     case "set-overlay": paneRegistry.setOverlay(command.key, command.enabled); break;
     case "record-start": {
       // A recording is already running: surface the refusal instead of silently restarting.
-      if (flowDraft.isActive) throw new Error("a flow recording is already active");
+      if (flowDraft.isActive) throw new Error(FLOW_RECORDING_ACTIVE_MESSAGE);
       // Drop stale buffered actions so a previous session's leftovers never seed the new recording.
       deferredActions.length = 0;
       const state = paneRegistry.getState();
@@ -200,6 +201,12 @@ async function handleCommand(command: ChromeCommand): Promise<void> {
     }
     case "capture-pane": if (chromeWindow) await capturePane(chromeWindow, paneRegistry, command.paneId); break;
     case "capture-overview": if (chromeWindow) await captureOverview(chromeWindow, paneRegistry); break;
+    default: {
+      // Compile-time drift guard: an unmatched command kind must fail typecheck,
+      // not silently no-op through the success tail.
+      const exhaustive: never = command;
+      return exhaustive;
+    }
   }
   // Re-read singletons after the awaited body: the window may have closed mid-command.
   if (!chromeWindow || registry !== paneRegistry) return;
@@ -634,11 +641,11 @@ ipcMain.on(IPC_CHANNELS.replayResult, (event, value: unknown) => {
     const key = replayKey(paneId, parsed.actionId, parsed.phase);
     const pending = pendingReplay.get(key);
     if (!pending) return;
-    clearTimeout(pending.timer);
-    pendingReplay.delete(key);
     // A result authored by a superseded surface (pane closed and recreated with the same id)
     // belongs to no live waiter: drop it and let the requester's timeout clean up.
     if (registry?.getPane(paneId)?.creationEpoch !== pending.epoch) return;
+    clearTimeout(pending.timer);
+    pendingReplay.delete(key);
     pending.resolve(parsed);
   } catch (error) { report(paneId, errorMessage(error)); }
 });

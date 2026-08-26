@@ -78,7 +78,8 @@ function exactPtsVector(stream: ProbeStream, packets: readonly ProbePacket[], fp
 
 // Constant-frame-rate expectation: slot k sits at k·(1e6/fps) µs, expressed in the stream time base with
 // nearest-tick rounding (matches the libwebm rescale of setpts=N/(fps*TB)). verifyArtifacts checks each
-// probed packet PTS against this slot vector; exactPtsVector only guards per-packet duration positivity.
+// probed packet PTS against this slot vector; exactPtsVector produces those compared ticks and additionally
+// enforces per-packet duration positivity.
 function idealPtsTicks(timeBase: string, fps: 30 | 60, durationFrames: number): bigint[] {
   const { numerator, denominator } = timeBaseTicks(timeBase);
   const divisor = BigInt(fps) * denominator;

@@ -1,4 +1,4 @@
-import { encodedDimension, MAX_ENCODED_DIMENSION, type ViewportSpec } from "@hoolypane/contracts";
+import { encodedDimension, gridDimensions, MAX_ENCODED_DIMENSION, type ViewportSpec } from "@hoolypane/contracts";
 
 export const CAPTURE_CONTRACT = "multi-viewport-cfr-v1" as const;
 export const VALIDATOR_VERSION = 1;
@@ -64,8 +64,7 @@ function evenFloor(value: number): number {
 export function compositeGeometry(tracks: readonly TrackGeometry[], maximum: { readonly width: number; readonly height: number }): CompositeGeometry {
   if (tracks.length === 0) throw new Error("at least one viewport is required");
   if (maximum.width < 2 || maximum.height < 2) throw new Error("composite maximum dimensions must be at least 2");
-  const columns = Math.ceil(Math.sqrt(tracks.length));
-  const rows = Math.ceil(tracks.length / columns);
+  const { columns, rows } = gridDimensions(tracks.length);
   const tileWidth = Math.max(...tracks.map((track) => track.encodedWidth));
   const tileHeight = Math.max(...tracks.map((track) => track.encodedHeight));
   const unscaledWidth = tileWidth * columns;

@@ -101,6 +101,50 @@ function IconButton({
   );
 }
 
+// Shared markup for the toolbar's three option selects: wrapper label, optional leading
+// indicator slot, the find-guarded change mapping, and the shared selectClass surface.
+function ToolbarSelect<K extends string>({
+  options,
+  value,
+  active,
+  labelClass,
+  selectId,
+  ariaLabel,
+  padding,
+  leading,
+  onSelect,
+}: {
+  options: readonly { value: K; label: string }[];
+  value: K;
+  active: boolean;
+  labelClass: string;
+  selectId?: string;
+  ariaLabel?: string;
+  padding?: string;
+  leading?: ComponentChildren;
+  onSelect(value: K): void;
+}) {
+  return (
+    <label class={labelClass}>
+      {leading}
+      <select
+        id={selectId}
+        aria-label={ariaLabel}
+        value={value}
+        onChange={(event) => {
+          const selected = options.find((option) => option.value === event.currentTarget.value);
+          if (selected) onSelect(selected.value);
+        }}
+        class={selectClass(active, padding)}
+      >
+        {options.map(({ value: optionValue, label }) => (
+          <option key={optionValue} value={optionValue}>{label}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 export function Toolbar({
   state,
   address,
@@ -125,24 +169,18 @@ export function Toolbar({
         <span aria-hidden="true" class="size-4 rounded-[6px] bg-gradient-to-br from-accent to-cyan-400" />
         <span class="whitespace-nowrap text-[13px] font-semibold tracking-tight">Hoolypane</span>
       </div>
-      <label class="flex shrink-0 items-center gap-1 text-xs text-mute">
-        <span class="sr-only">Layout</span>
-        {/* Native select (combobox role): keeps "Focus"/"Horizontal"/"Grid" out of the button
-            role namespace so pinned per-pane button lookups stay unambiguous. */}
-        <select
-          id="layout"
-          value={state.layout}
-          onChange={(event) => {
-            const selected = LAYOUT_OPTIONS.find((option) => option.value === event.currentTarget.value);
-            if (selected) send({ kind: "set-layout", layout: selected.value });
-          }}
-          class={selectClass(false, "px-1.5")}
-        >
-          {LAYOUT_OPTIONS.map(({ value, label }) => (
-            <option key={value} value={value}>{label}</option>
-          ))}
-        </select>
-      </label>
+      {/* Native select (combobox role): keeps "Focus"/"Horizontal"/"Grid" out of the button
+          role namespace so pinned per-pane button lookups stay unambiguous. */}
+      <ToolbarSelect
+        options={LAYOUT_OPTIONS}
+        value={state.layout}
+        active={false}
+        labelClass="flex shrink-0 items-center gap-1 text-xs text-mute"
+        selectId="layout"
+        padding="px-1.5"
+        leading={<span class="sr-only">Layout</span>}
+        onSelect={(layout) => send({ kind: "set-layout", layout })}
+      />
       <form class="mx-1 flex min-w-32 flex-1" onSubmit={onSubmitUrl}>
         <label for="address" class="sr-only">Address</label>
         <input
@@ -185,22 +223,15 @@ export function Toolbar({
         Sync
       </button>
       <div role="group" aria-label="Emulation" class="flex h-8 shrink-0 items-center gap-1 border-l border-edge pl-2">
-        <label class="flex items-center gap-1">
-          <span aria-hidden="true" class={dotTone(state.emulation.colorScheme !== "auto")} />
-          <select
-            aria-label="Color scheme"
-            value={state.emulation.colorScheme}
-            onChange={(event) => {
-              const selected = COLOR_SCHEME_OPTIONS.find((option) => option.value === event.currentTarget.value);
-              if (selected) send({ kind: "set-color-scheme", value: selected.value });
-            }}
-            class={selectClass(state.emulation.colorScheme !== "auto")}
-          >
-            {COLOR_SCHEME_OPTIONS.map(({ value, label }) => (
-              <option key={value} value={value}>{label}</option>
-            ))}
-          </select>
-        </label>
+        <ToolbarSelect
+          options={COLOR_SCHEME_OPTIONS}
+          value={state.emulation.colorScheme}
+          active={state.emulation.colorScheme !== "auto"}
+          labelClass="flex items-center gap-1"
+          ariaLabel="Color scheme"
+          leading={<span aria-hidden="true" class={dotTone(state.emulation.colorScheme !== "auto")} />}
+          onSelect={(value) => send({ kind: "set-color-scheme", value })}
+        />
         <button
           type="button"
           aria-pressed={state.emulation.reducedMotion}
@@ -211,22 +242,15 @@ export function Toolbar({
         >
           Motion
         </button>
-        <label class="flex items-center gap-1">
-          <span aria-hidden="true" class={dotTone(state.emulation.throttling !== "none")} />
-          <select
-            aria-label="Throttling"
-            value={state.emulation.throttling}
-            onChange={(event) => {
-              const selected = THROTTLING_OPTIONS.find((option) => option.value === event.currentTarget.value);
-              if (selected) send({ kind: "set-throttling", mode: selected.value });
-            }}
-            class={selectClass(state.emulation.throttling !== "none")}
-          >
-            {THROTTLING_OPTIONS.map(({ value, label }) => (
-              <option key={value} value={value}>{label}</option>
-            ))}
-          </select>
-        </label>
+        <ToolbarSelect
+          options={THROTTLING_OPTIONS}
+          value={state.emulation.throttling}
+          active={state.emulation.throttling !== "none"}
+          labelClass="flex items-center gap-1"
+          ariaLabel="Throttling"
+          leading={<span aria-hidden="true" class={dotTone(state.emulation.throttling !== "none")} />}
+          onSelect={(mode) => send({ kind: "set-throttling", mode })}
+        />
         <details class="relative">
           <summary
             aria-label="Overlays"

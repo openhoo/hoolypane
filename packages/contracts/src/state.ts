@@ -26,7 +26,6 @@ const EmulationSettingsSchema = z.strictObject({
   throttling: ThrottlingModeSchema.default("none"),
   overlays: EmulationOverlaysSchema.prefault({} as Record<OverlayKey, boolean | undefined>),
 });
-export type EmulationSettings = z.infer<typeof EmulationSettingsSchema>;
 
 const ActionKinds = ActionSchema.options.map((option) => option.shape.kind.value) as [Action["kind"], ...Action["kind"][]];
 const ActionKindSchema = z.enum(ActionKinds);

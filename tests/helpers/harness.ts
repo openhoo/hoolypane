@@ -123,5 +123,5 @@ export async function teardownDesktopSuite(
 ): Promise<void> {
   await application?.close().catch(() => undefined);
   await fixture?.close();
-  if (userDataDir) await rm(userDataDir, { recursive: true, force: true });
+  if (userDataDir) await rm(userDataDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }).catch(() => undefined);
 }

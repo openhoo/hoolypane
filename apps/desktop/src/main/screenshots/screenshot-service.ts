@@ -4,6 +4,7 @@ import { extname, isAbsolute } from "node:path";
 import { DEFAULT_COMPOSITE_BACKGROUND, errorMessage, formatViewportDimensions } from "@hoolypane/contracts";
 import { writeFileAtomic } from "@hoolypane/contracts/fsync";
 import type { PaneRegistry } from "../panes/pane-registry.js";
+import { unknownPaneMessage } from "../panes/workspace.js";
 import type { OverviewInput, OverviewTileInput, OverviewWorkerResponse } from "./overview-protocol.js";
 
 /** Test-only file override shared by E2E hooks: HOOLYPANE_TEST_MODE gate, env read, absolute-<label>-path validation. */
@@ -48,7 +49,7 @@ async function savePng(
 export async function capturePane(window: BrowserWindow, registry: PaneRegistry, paneId: string): Promise<void> {
   const pane = registry.getPane(paneId);
   const state = registry.getPaneState(paneId);
-  if (!pane || !state) throw new Error(`unknown pane: ${paneId}`);
+  if (!pane || !state) throw new Error(unknownPaneMessage(paneId));
   const png = (await pane.view.webContents.capturePage()).toPNG();
   await savePng(window, png, "HOOLYPANE_TEST_PANE_PNG", `Save ${state.name} screenshot`, `${state.id}.png`);
 }

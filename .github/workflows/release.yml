@@ -98,7 +98,11 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: desktop-${{ matrix.os }}
-          path: dist/desktop/*
+          path: |
+            dist/desktop/*.AppImage
+            dist/desktop/*.deb
+            dist/desktop/*.exe
+            dist/desktop/*.dmg
 
   publish:
     needs: [qualify, desktop]

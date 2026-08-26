@@ -4,7 +4,7 @@ import { access, constants, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import ffmpegStaticPath from "ffmpeg-static";
 import ffprobeStatic from "ffprobe-static";
-import { errorMessage } from "@hoolypane/contracts";
+import { errorMessage, gridCellPosition } from "@hoolypane/contracts";
 import { asError, CHILD_GRACE_MS, COMPOSITE_VIDEO_NAME, compositeGeometry, trackVideoName, type CompositeGeometry, type SlotMapping, type TrackGeometry } from "./capture-contract.js";
 import type { FrameSpool } from "./spool.js";
 
@@ -56,7 +56,10 @@ export function filterGraph(tracks: readonly AlignedTrack[], grid: CompositeGeom
   if (tracks.length === 1) {
     filters.push(`[compositesrc0]scale=${grid.outputWidth}:${grid.outputHeight}[composite]`);
   } else {
-    const layout = tracks.map((_track, index) => `${index % grid.columns * grid.tileWidth}_${Math.floor(index / grid.columns) * grid.tileHeight}`).join("|");
+    const layout = tracks.map((_track, index) => {
+      const { left, top } = gridCellPosition(index, grid.columns, grid.tileWidth, grid.tileHeight);
+      return `${left}_${top}`;
+    }).join("|");
     const inputs = tracks.map((_track, index) => `[tile${index}]`).join("");
     filters.push(`${inputs}xstack=inputs=${tracks.length}:layout=${layout}:fill=${color},scale=${grid.outputWidth}:${grid.outputHeight}[composite]`);
   }

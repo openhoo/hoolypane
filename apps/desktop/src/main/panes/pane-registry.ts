@@ -4,7 +4,7 @@ import { DEFAULT_SHARED_URL, IPC_CHANNELS, PaneGenerationSchema, ViewportSpecSch
 import { report } from "../report.js";
 import { displayScale, validateBoundsSnapshot, type Bounds } from "./layout.js";
 import { isAllowedProtocol, normalizeUrl, stripUrlCredentials } from "./url.js";
-import { addPane, closePane, defaultWorkspace, hasPane, removePane, rotatePane, uniquePaneId, updatePane, type PaneState, type WorkspaceState } from "./workspace.js";
+import { EMPTY_PANE_NAME_MESSAGE, addPane, closePane, defaultWorkspace, hasPane, removePane, rotatePane, uniquePaneId, unknownPaneMessage, updatePane, type PaneState, type WorkspaceState } from "./workspace.js";
 
 // One persisted session backs every pane view; a single constant keeps installSessionSecurity and
 // view creation on the same partition string.
@@ -151,16 +151,16 @@ export class PaneRegistry {
   }
 
   rename(paneId: string, name: string): void {
-    if (!name.trim()) throw new Error("pane name must not be empty");
+    if (!name.trim()) throw new Error(EMPTY_PANE_NAME_MESSAGE);
     this.workspace = updatePane(this.workspace, paneId, (pane) => ({ ...pane, name: name.trim() }));
     this.emitChange();
   }
   rotate(paneId: string): void { this.workspace = rotatePane(this.workspace, paneId); const record = this.panes.get(paneId); if (record) void this.configureViewport(record); this.emitChange(); }
-  focus(paneId: string | null): void { if (paneId !== null && !hasPane(this.workspace, paneId)) throw new Error(`unknown pane: ${paneId}`); this.workspace = { ...this.workspace, focusedPaneId: paneId }; this.emitChange(); }
+  focus(paneId: string | null): void { if (paneId !== null && !hasPane(this.workspace, paneId)) throw new Error(unknownPaneMessage(paneId)); this.workspace = { ...this.workspace, focusedPaneId: paneId }; this.emitChange(); }
   setLayout(layout: WorkspaceState["layout"]): void { this.workspace = { ...this.workspace, layout }; this.emitChange(); }
 
   setPanePosition(paneId: string, x: number, y: number): void {
-    if (!hasPane(this.workspace, paneId)) throw new Error(`unknown pane: ${paneId}`);
+    if (!hasPane(this.workspace, paneId)) throw new Error(unknownPaneMessage(paneId));
     this.workspace = { ...this.workspace, positions: { ...this.workspace.positions, [paneId]: { x, y } } };
     this.emitChange();
   }
@@ -193,7 +193,7 @@ export class PaneRegistry {
   }
 
   private async writeEmulationSettings(record: PaneRecord): Promise<void> {
-    if (!this.isLive(record)) return;
+    if (!this.isLive(record) || !record.initialized) return;
     const contents = record.view.webContents;
     const emulation = this.workspace.emulation;
     try {
@@ -311,7 +311,8 @@ export class PaneRegistry {
     contents.on("will-navigate", (event, url) => { if (!isAllowedProtocol(url)) event.preventDefault(); });
     contents.on("will-redirect", (event, url) => { if (!isAllowedProtocol(url)) event.preventDefault(); });
     contents.setWindowOpenHandler(({ url }) => {
-      if (isAllowedProtocol(url)) void contents.loadURL(url).catch(() => {});
+      if (!isAllowedProtocol(url)) return { action: "deny" };
+      void contents.loadURL(normalizeUrl(url)).catch(() => {});
       return { action: "deny" };
     });
   }
@@ -359,6 +360,8 @@ export class PaneRegistry {
 
   private async rollbackCreate(record: PaneRecord, addedWorkspaceEntry: boolean): Promise<void> {
     this.panes.delete(record.id);
+    // Same cache hygiene as close(): a reused id must not resurrect stale geometry.
+    this.pruneCachedBounds(record.id);
     // Symmetric rollback: only remove the workspace entry when this create introduced it.
     if (addedWorkspaceEntry) this.workspace = removePane(this.workspace, record.id);
     await this.destroyRecord(record).catch(() => undefined);

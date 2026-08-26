@@ -8,6 +8,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { runFlow } from "../../packages/runner/src/run-flow.js";
 import { OVERVIEW_ERROR_TILE_COLOR } from "../../apps/desktop/src/main/screenshots/overview-shared.js";
 import { launchDesktopApp, pollUntil, startFixtureServer, teardownDesktopSuite, waitForFixturePanes, type FixtureServer } from "../helpers/harness.js";
+import { inlineConfigSource } from "../helpers/inline-config.js";
 import { clickPaneSurface } from "./cdp-input.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
 
@@ -130,7 +131,7 @@ describe("desktop screenshots and recorded flows", () => {
 
     await fetch(`http://127.0.0.1:${FIXTURE_PORT}/reset`);
     const configPath = join(directory, "hoolypane.config.ts");
-    await writeFile(configPath, `import { defineConfig } from "@hoolypane/runner"; export default defineConfig({ baseURL: "http://127.0.0.1:${FIXTURE_PORT}", viewports: [{ id: "one", name: "One", width: 320, height: 240, deviceScaleFactor: 1, isMobile: false, hasTouch: false }, { id: "two", name: "Two", width: 180, height: 320, deviceScaleFactor: 1, isMobile: true, hasTouch: true }], recording: { fps: 30, compositeMaxSize: { width: 640, height: 480 } } });`);
+    await writeFile(configPath, inlineConfigSource(`http://127.0.0.1:${FIXTURE_PORT}`, [{ id: "one", name: "One", width: 320, height: 240, deviceScaleFactor: 1, isMobile: false, hasTouch: false }, { id: "two", name: "Two", width: 180, height: 320, deviceScaleFactor: 1, isMobile: true, hasTouch: true }]));
     const runOutput = join(directory, "runner-output");
     const run = await runFlow({ flowFile: flowPath, configFile: configPath, outputDir: runOutput, headed: false });
     expect(run.status).toBe("success");

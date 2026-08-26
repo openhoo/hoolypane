@@ -312,7 +312,6 @@ export async function runFlow(args: RunArguments): Promise<RunResult> {
       // Interrupted during setup: no recording started and the previous output directory
       // contents must stay intact, so discard the partial traces instead of writing them
       // over the preserved directory. context.close() below drops the unfinished buffers.
-      state.tracesStopped = true;
       return { status: "interrupted" };
     }
     await finalizeRecording(state.recorder, config, outputDir, state);

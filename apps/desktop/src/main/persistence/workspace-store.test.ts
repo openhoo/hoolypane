@@ -81,6 +81,21 @@ describe("loadWorkspace", () => {
       await chmod(dirname(file), 0o700); // let afterEach remove the temporary directory
     }
   });
+  it("treats an unreadable file as unpersistable without quarantining it", async () => {
+    const file = await workspaceFile();
+    const content = JSON.stringify((await loadWorkspace(file)).state);
+    await writeFile(file, content, "utf8");
+    await chmod(file, 0o000); // readFile rejects with EACCES for non-root
+    try {
+      const loaded = await loadWorkspace(file);
+      expect(loaded.persistable).toBe(false);
+      const siblings = await readdir(join(file, ".."));
+      expect(siblings.some((entry) => entry.startsWith("workspace.json.corrupt-"))).toBe(false);
+    } finally {
+      await chmod(file, 0o644); // let afterEach remove the temporary directory
+    }
+    expect(await readFile(file, "utf8")).toBe(content); // original bytes survive unread
+  });
   it("drops position entries for panes that no longer exist", async () => {
     const file = await workspaceFile();
     const loaded = await loadWorkspace(file);

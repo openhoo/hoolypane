@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runFlow } from "../../packages/runner/src/run-flow.js";
 import { pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
+import { inlineConfigSource } from "../helpers/inline-config.js";
 import { FIXTURE_PORTS } from "../fixtures/ports.js";
 
 const FIXTURE_PORT = FIXTURE_PORTS.runner;
@@ -111,11 +112,10 @@ describe("real runner", () => {
     const output = await outputDirectory("timeout");
     const scratch = await outputDirectory("timeout-config");
     const timeoutMs = 5_000;
-    // Inline config written beside (never inside) the wiped output directory, mirroring the
-    // inline-config pattern in desktop-artifacts.test.ts; slow.flow waits 30s, so a 5s deadline
-    // trips the timeout branch deterministically (the timer starts only after initial frames).
+    // Inline config written beside (never inside) the wiped output directory; slow.flow waits 30s, so a
+    // 5s deadline trips the timeout branch deterministically (the timer starts only after initial frames).
     const configPath = join(scratch, "hoolypane.config.ts");
-    await writeFile(configPath, `import { defineConfig } from "@hoolypane/runner"; export default defineConfig({ baseURL: "http://127.0.0.1:${FIXTURE_PORT}", timeoutMs: ${timeoutMs}, viewports: [{ id: "desktop", name: "Desktop", width: 320, height: 240, deviceScaleFactor: 1, isMobile: false, hasTouch: false }], recording: { fps: 30, compositeMaxSize: { width: 640, height: 480 } } });`);
+    await writeFile(configPath, inlineConfigSource(`http://127.0.0.1:${FIXTURE_PORT}`, [{ id: "desktop", name: "Desktop", width: 320, height: 240, deviceScaleFactor: 1, isMobile: false, hasTouch: false }], timeoutMs));
     const result = await runFlow({ flowFile: resolve("tests/fixtures/slow.flow.ts"), configFile: configPath, outputDir: output, headed: false });
     expect(result.status).toBe("failed");
     const manifest = JSON.parse(await readFile(join(output, "manifest.json"), "utf8")) as { status: string; failures: Array<{ message: string }> };

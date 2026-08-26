@@ -3,10 +3,11 @@ export type { Action, ActionEnvelope, FlowEvent, LocatorSpec } from "./action.js
 export { DEFAULT_COMPOSITE_BACKGROUND, HoolypaneConfigSchema, RECORDING_FPS_VALUES } from "./config.js";
 export type { HoolypaneConfig, ResolvedHoolypaneConfig, ResolvedRecordingConfig } from "./config.js";
 export { errorMessage, failureReason, isErrnoException } from "./errors.js";
+export { gridCellPosition, gridDimensions } from "./grid.js";
 export { BoundsSnapshotSchema, ChromeCommandSchema, FILL_DEBOUNCE_MS, IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, RECORDABLE_PRESS_KEYS, RecordFailureSchema, ReplayRequestSchema, REPLAY_RESULT_PHASES, ReplayResultSchema, REPLAY_RESULT_TIMEOUT_MS, staleGenerationMessage } from "./ipc.js";
 export type { BoundsSnapshot, ChromeCommand, ReplayRequest, ReplayResult } from "./ipc.js";
 export { VIEWPORT_PRESETS } from "./presets.js";
 export { ChromeStateSchema, DEFAULT_SHARED_URL, RUNTIME_PANE_DEFAULTS, WORKSPACE_VERSION, WorkspaceStateSchema, defaultWorkspace, paneFromViewport } from "./state.js";
-export type { ChromeState, ColorSchemeMode, EmulationSettings, LayoutMode, OverlayKey, PanePosition, PaneState, ThrottlingMode, WorkspaceState } from "./state.js";
+export type { ChromeState, ColorSchemeMode, LayoutMode, OverlayKey, PanePosition, PaneState, ThrottlingMode, WorkspaceState } from "./state.js";
 export { encodedDimension, formatViewportDimensions, MAX_ENCODED_DIMENSION, ViewportSpecSchema } from "./viewport.js";
 export type { ViewportSpec } from "./viewport.js";
