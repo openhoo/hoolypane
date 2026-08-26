@@ -1,7 +1,7 @@
 import { memo } from "preact/compat";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
-import type { ChromeCommand, ChromeState, EmulationSettings as EmulationState, LayoutMode, PaneState } from "@hoolypane/contracts";
+import type { ChromeCommand, ChromeState, ColorSchemeMode, LayoutMode, OverlayKey, PaneState, ThrottlingMode } from "@hoolypane/contracts";
 import { formatViewportDimensions } from "@hoolypane/contracts";
 import { customViewport } from "./state.js";
 import { PANE_HEADER_HEIGHT } from "./layout.js";
@@ -25,7 +25,32 @@ const OVERLAY_ITEMS = [
   { key: "outlines", label: "Outlines" },
   { key: "disableImages", label: "Disable images" },
   { key: "showRoles", label: "Show roles" },
-] as const;
+] as const satisfies readonly { key: OverlayKey; label: string }[];
+
+// Option tables derive from the contract unions: adding or renaming a mode fails compilation
+// here instead of drifting into hand-synced literals rejected only at runtime by main's zod.
+const toolbarOptions = <K extends string>(labels: Record<K, string>): readonly { value: K; label: string }[] =>
+  // Sole string-to-union boundary, fed exclusively by exhaustive contract-keyed tables.
+  Object.keys(labels).map((key): { value: K; label: string } => ({ value: key as K, label: labels[key as K] }));
+
+const LAYOUT_OPTIONS = toolbarOptions({
+  free: "Free",
+  grid: "Grid",
+  horizontal: "Horizontal",
+  focus: "Focus",
+} satisfies Record<LayoutMode, string>);
+
+const COLOR_SCHEME_OPTIONS = toolbarOptions({
+  auto: "Auto",
+  light: "Light",
+  dark: "Dark",
+} satisfies Record<ColorSchemeMode, string>);
+
+const THROTTLING_OPTIONS = toolbarOptions({
+  none: "No throttling",
+  slow3g: "Slow 3G",
+  offline: "Offline",
+} satisfies Record<ThrottlingMode, string>);
 
 const selectClass = (active: boolean, padding = "px-1"): string =>
   `h-8 rounded-lg border bg-field ${padding} text-xs text-ink outline-none transition-colors focus:border-accent/70 ${active ? "border-accent/70" : "border-edge"}`;
@@ -105,13 +130,15 @@ export function Toolbar({
         <select
           id="layout"
           value={state.layout}
-          onChange={(event) => send({ kind: "set-layout", layout: event.currentTarget.value as LayoutMode })}
+          onChange={(event) => {
+            const selected = LAYOUT_OPTIONS.find((option) => option.value === event.currentTarget.value);
+            if (selected) send({ kind: "set-layout", layout: selected.value });
+          }}
           class={selectClass(false, "px-1.5")}
         >
-          <option value="free">Free</option>
-          <option value="grid">Grid</option>
-          <option value="horizontal">Horizontal</option>
-          <option value="focus">Focus</option>
+          {LAYOUT_OPTIONS.map(({ value, label }) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
         </select>
       </label>
       <form class="mx-1 flex min-w-32 flex-1" onSubmit={onSubmitUrl}>
@@ -161,12 +188,15 @@ export function Toolbar({
           <select
             aria-label="Color scheme"
             value={state.emulation.colorScheme}
-            onChange={(event) => send({ kind: "set-color-scheme", value: event.currentTarget.value as EmulationState["colorScheme"] })}
+            onChange={(event) => {
+              const selected = COLOR_SCHEME_OPTIONS.find((option) => option.value === event.currentTarget.value);
+              if (selected) send({ kind: "set-color-scheme", value: selected.value });
+            }}
             class={selectClass(state.emulation.colorScheme !== "auto")}
           >
-            <option value="auto">Auto</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
+            {COLOR_SCHEME_OPTIONS.map(({ value, label }) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
           </select>
         </label>
         <button
@@ -184,12 +214,15 @@ export function Toolbar({
           <select
             aria-label="Throttling"
             value={state.emulation.throttling}
-            onChange={(event) => send({ kind: "set-throttling", mode: event.currentTarget.value as EmulationState["throttling"] })}
+            onChange={(event) => {
+              const selected = THROTTLING_OPTIONS.find((option) => option.value === event.currentTarget.value);
+              if (selected) send({ kind: "set-throttling", mode: selected.value });
+            }}
             class={selectClass(state.emulation.throttling !== "none")}
           >
-            <option value="none">No throttling</option>
-            <option value="slow3g">Slow 3G</option>
-            <option value="offline">Offline</option>
+            {THROTTLING_OPTIONS.map(({ value, label }) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
           </select>
         </label>
         <details class="relative">
@@ -240,7 +273,7 @@ export function Toolbar({
   );
 }
 
-/** Plain-text pane name; double-click or Enter/F2 switches to an inline rename input. */
+/** Plain-text pane name; double-click or press Enter/F2/Space to switch to an inline rename input. */
 function PaneName({ pane, onRename }: { pane: PaneState; onRename(name: string): void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(pane.name);
@@ -265,7 +298,7 @@ function PaneName({ pane, onRename }: { pane: PaneState; onRename(name: string):
     return (
       <span
         ref={nameRef}
-        title="Double-click or press Enter to rename"
+        title="Double-click or press Enter/Space to rename"
         role="button"
         tabIndex={0}
         aria-label={`Rename ${pane.name}`}

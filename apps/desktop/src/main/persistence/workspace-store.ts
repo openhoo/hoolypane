@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { errorMessage, WORKSPACE_VERSION } from "@hoolypane/contracts";
+import { errorMessage, isErrnoException, WORKSPACE_VERSION } from "@hoolypane/contracts";
 import { writeFileAtomic } from "@hoolypane/contracts/fsync";
 import { WorkspaceStateSchema, defaultWorkspace, type WorkspaceState } from "../panes/workspace.js";
 import { report } from "../report.js";
@@ -33,7 +33,7 @@ export async function loadWorkspace(file: string): Promise<LoadedWorkspace> {
   try {
     raw = await fs.readFile(file, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return defaults(true);
+    if (isErrnoException(error, "ENOENT")) return defaults(true);
     report("", `workspace ${file} is unreadable, continuing with defaults: ${errorMessage(error)}`);
     return defaults(false);
   }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ActionSchema } from "./action.js";
-import { ActionEnvelopeSchema, ChromeCommandSchema, ChromeStateSchema, HoolypaneConfigSchema, VIEWPORT_PRESETS, WorkspaceStateSchema, defaultWorkspace } from "./index.js";
+import { FAILURE_REASON_MAX_LENGTH } from "./errors.js";
+import { ActionEnvelopeSchema, BoundsSnapshotSchema, ChromeCommandSchema, ChromeStateSchema, HoolypaneConfigSchema, PaneGenerationSchema, REPLAY_RESULT_PHASES, RecordFailureSchema, ReplayRequestSchema, ReplayResultSchema, VIEWPORT_PRESETS, WorkspaceStateSchema, defaultWorkspace, staleGenerationMessage } from "./index.js";
 
 describe("configuration", () => {
   it("applies all recording defaults", () => {
@@ -130,5 +131,52 @@ describe("emulation commands", () => {
     expect(ChromeCommandSchema.safeParse({ kind: "set-overlay", key: "grids", enabled: true }).success).toBe(false);
     expect(ChromeCommandSchema.safeParse({ kind: "set-overlay", key: "outlines" }).success).toBe(false);
     expect(ChromeCommandSchema.safeParse({ kind: "set-reduced-motion", enabled: true, extra: true }).success).toBe(false);
+  });
+});
+
+describe("ipc wire schemas", () => {
+  const click = { kind: "click", locator: { kind: "testId", value: "subject" } } as const;
+
+  it("round-trips every replay request phase and reserves confirm for results", () => {
+    for (const phase of ["resolve", "apply-dom", "end"] as const) {
+      const request = { actionId: 1, documentGeneration: 0, action: click, phase };
+      expect(ReplayRequestSchema.parse(request)).toEqual(request);
+    }
+    expect(ReplayRequestSchema.safeParse({ actionId: 1, documentGeneration: 0, action: click, phase: "confirm" }).success).toBe(false);
+  });
+
+  it("round-trips every replay result phase including the confirmation echo", () => {
+    for (const phase of REPLAY_RESULT_PHASES) {
+      const result = { actionId: 2, phase, ok: true };
+      expect(ReplayResultSchema.parse(result)).toEqual(result);
+    }
+    expect(ReplayResultSchema.safeParse({ actionId: 2, phase: "teardown", ok: true }).success).toBe(false);
+    expect(ReplayResultSchema.safeParse({ actionId: 2, phase: "confirm", ok: true, extra: true }).success).toBe(false);
+  });
+
+  it("caps failure reasons at FAILURE_REASON_MAX_LENGTH", () => {
+    const reason = "x".repeat(FAILURE_REASON_MAX_LENGTH);
+    expect(RecordFailureSchema.parse({ reason })).toEqual({ reason });
+    expect(RecordFailureSchema.safeParse({ reason: `${reason}!` }).success).toBe(false);
+    expect(RecordFailureSchema.safeParse({}).success).toBe(false);
+  });
+
+  it("keeps bounds snapshots integral and nonnegative", () => {
+    const snapshot = { windowWidth: 1600, windowHeight: 1000, panes: [{ paneId: "pane-1", bounds: { x: 0, y: 8, width: 360, height: 640 } }] };
+    expect(BoundsSnapshotSchema.parse(snapshot)).toEqual(snapshot);
+    const floatPane = { paneId: "pane-1", bounds: { x: 0, y: 8.5, width: 360, height: 640 } };
+    const negativePane = { paneId: "pane-1", bounds: { x: 0, y: 8, width: -360, height: 640 } };
+    expect(BoundsSnapshotSchema.safeParse({ ...snapshot, windowWidth: 1600.5 }).success).toBe(false);
+    expect(BoundsSnapshotSchema.safeParse({ ...snapshot, windowHeight: -1 }).success).toBe(false);
+    expect(BoundsSnapshotSchema.safeParse({ ...snapshot, panes: [floatPane] }).success).toBe(false);
+    expect(BoundsSnapshotSchema.safeParse({ ...snapshot, panes: [negativePane] }).success).toBe(false);
+    expect(BoundsSnapshotSchema.safeParse({ ...snapshot, extra: true }).success).toBe(false);
+  });
+
+  it("requires nonnegative integer document generations and derives stale messages", () => {
+    expect(PaneGenerationSchema.parse({ documentGeneration: 0 })).toEqual({ documentGeneration: 0 });
+    expect(PaneGenerationSchema.safeParse({ documentGeneration: -1 }).success).toBe(false);
+    expect(PaneGenerationSchema.safeParse({ documentGeneration: 1.5 }).success).toBe(false);
+    expect(staleGenerationMessage(3, 7)).toBe("stale document generation 3, current 7");
   });
 });

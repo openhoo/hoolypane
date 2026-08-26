@@ -77,7 +77,7 @@ describe("runner preflight", () => {
     const viewport = VIEWPORT_PRESETS.find((item) => item.id === "phone-390")!;
     const config = HoolypaneConfigSchema.parse({ viewports: [viewport] });
     const options = buildContextOptions(config, config.viewports[0]!);
-    expect(options).toMatchObject({
+    expect(options).toEqual({
       viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true,
     });
   });

@@ -2,13 +2,13 @@ import { chromium } from "playwright";
 import type { Browser, BrowserContext, CDPSession } from "playwright";
 import { access } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
-import { HoolypaneConfigSchema, errorMessage } from "@hoolypane/contracts";
+import { HoolypaneConfigSchema, errorMessage, isErrnoException } from "@hoolypane/contracts";
 import { resolve, dirname, join } from "node:path";
 import type { FlowEvent, ResolvedHoolypaneConfig, ViewportSpec } from "@hoolypane/contracts";
 import { createFlowContext } from "@hoolypane/flow";
 import type { FlowDefinition, Screen } from "@hoolypane/flow";
 import { RecordingSession } from "@hoolypane/recorder";
-import type { RecordingTarget, RecorderFailure } from "@hoolypane/recorder";
+import type { RecordingTarget, RecorderFailure, RunStatus } from "@hoolypane/recorder";
 import { compileModule, validateConfigExport, validateFlowExport } from "./module-loader.js";
 import type { CompiledModule } from "./module-loader.js";
 import { EXIT_INTERRUPTED } from "./cli-arguments.js";
@@ -16,7 +16,7 @@ import type { RunArguments } from "./cli-arguments.js";
 
 interface RunResult {
   readonly outputDir: string;
-  readonly status: "success" | "failed" | "interrupted";
+  readonly status: RunStatus;
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -24,7 +24,7 @@ async function exists(path: string): Promise<boolean> {
     await access(path);
     return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return false;
+    if (isErrnoException(error, "ENOENT")) return false;
     throw error;
   }
 }
@@ -193,7 +193,7 @@ async function stopTraces(outputDir: string, state: FlowRunState): Promise<reado
   if (state.tracesStopped) return [];
   state.tracesStopped = true;
   const results = await Promise.allSettled(state.contexts.map(({ context, viewportId }) => context.tracing.stop({ path: join(outputDir, "traces", `${viewportId}.zip`) })));
-  return results.flatMap((result) => (result.status === "rejected" ? [failureFrom(result.reason)] : []));
+  return results.flatMap((result, index) => (result.status === "rejected" ? [{ ...failureFrom(result.reason), viewportId: state.contexts[index]!.viewportId }] : []));
 }
 
 // Single source of truth for run-status precedence: capture/trace failures beat interruption,

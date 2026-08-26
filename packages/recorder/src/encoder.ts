@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import type { Writable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 import { access, constants, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import ffmpegStaticPath from "ffmpeg-static";
@@ -116,6 +116,16 @@ async function terminateFailedEncoder(child: ChildProcess, pipes: readonly Writa
   throw new Error(`ffmpeg ${paths.ffmpeg} failed: ${spawnError?.message ?? errorMessage(error)}${spawnError ? "" : stderr ? `\n${stderr}` : ""}`);
 }
 
+/** Shared child-completion wiring: accumulates stderr and settles on spawn error or exit status; a nonzero exit rejects with `${label} exited ${code}: ${stderr}`. */
+export function awaitChildExit(child: ChildProcess, stderrStream: Readable, label: string): { readonly completion: PromiseWithResolvers<void>; readonly stderrText: () => string } {
+  let stderr = "";
+  stderrStream.on("data", (data: Buffer) => { stderr += data.toString(); });
+  const completion = Promise.withResolvers<void>();
+  child.once("error", completion.reject);
+  child.once("close", (code: number | null) => code === 0 ? completion.resolve() : completion.reject(new Error(`${label} exited ${code}: ${stderr}`)));
+  return { completion, stderrText: () => stderr };
+}
+
 export async function encodeAligned(
   outputDir: string,
   tracks: readonly AlignedTrack[],
@@ -130,13 +140,9 @@ export async function encodeAligned(
   const args = ffmpegArguments(outputDir, tracks, geometry, fps, durationFrames, recording.compositeBackground);
 
   const child = spawn(paths.ffmpeg, args, { stdio: ["ignore", "ignore", "pipe", ...tracks.map(() => "pipe" as const)] });
-  let stderr = "";
   const stderrStream = child.stderr;
   if (!stderrStream) throw new Error("ffmpeg stderr pipe unavailable");
-  stderrStream.on("data", (data: Buffer) => { stderr += data.toString(); });
-  const completion = Promise.withResolvers<void>();
-  child.once("error", completion.reject);
-  child.once("close", (code: number | null) => code === 0 ? completion.resolve() : completion.reject(new Error(`ffmpeg ${paths.ffmpeg} exited ${code}: ${stderr}`)));
+  const { completion, stderrText } = awaitChildExit(child, stderrStream, `ffmpeg ${paths.ffmpeg}`);
   let spawnError: Error | undefined;
   child.once("error", (error: Error) => {
     spawnError ??= asError(error);
@@ -157,6 +163,6 @@ export async function encodeAligned(
     await completion.promise;
     return { geometry };
   } catch (error) {
-    return terminateFailedEncoder(child, pipes, completion, spawnError, stderr, paths, error);
+    return terminateFailedEncoder(child, pipes, completion, spawnError, stderrText(), paths, error);
   }
 }

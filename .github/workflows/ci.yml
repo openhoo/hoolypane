@@ -58,7 +58,6 @@ jobs:
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm prepare:electron
-      - run: pnpm exec playwright install chromium
       - name: Build native desktop
         run: pnpm build
       - name: Run native desktop E2E

@@ -3,7 +3,7 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { errorMessage } from "@hoolypane/contracts";
 import { CHILD_GRACE_MS, COMPOSITE_VIDEO_NAME, trackVideoName, type TrackGeometry } from "./capture-contract.js";
-import { resolveEncoders } from "./encoder.js";
+import { awaitChildExit, resolveEncoders } from "./encoder.js";
 import { certifyArtifact } from "./spool.js";
 
 interface VerificationResult {
@@ -26,12 +26,8 @@ interface PacketOutput { readonly streams?: readonly ProbeStream[]; readonly pac
 async function ffprobeJson(executable: string, args: readonly string[]): Promise<unknown> {
   const child = spawn(executable, args, { stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
-  let stderr = "";
   child.stdout.on("data", (data: Buffer) => { stdout += data.toString(); });
-  child.stderr.on("data", (data: Buffer) => { stderr += data.toString(); });
-  const completion = Promise.withResolvers<void>();
-  child.once("error", completion.reject);
-  child.once("close", (code: number | null) => code === 0 ? completion.resolve() : completion.reject(new Error(`${executable} exited ${code}: ${stderr}`)));
+  const { completion } = awaitChildExit(child, child.stderr!, executable);
   const watchdog = setTimeout(() => {
     completion.reject(new Error(`${executable} did not exit within ${CHILD_GRACE_MS}ms; sending SIGKILL`));
     child.kill("SIGKILL");

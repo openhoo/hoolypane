@@ -10,9 +10,6 @@ export const MAX_QUEUED_BYTES = 32 * 1024 * 1024;
 // watchdog and the verifier probe watchdog must stay tuned together.
 export const CHILD_GRACE_MS = 10_000;
 
-// Folding the shared codec limit (MAX_ENCODED_DIMENSION from @hoolypane/contracts) into the composite
-// fit scale keeps grid outputs encodable while preserving aspect ratio.
-
 export type RecordingState = "awaiting-initial-frames" | "recording" | "post-roll" | "stopping" | "aligning" | "encoding" | "validating" | "complete" | "failed";
 const NEXT_STATES: Readonly<Record<RecordingState, readonly RecordingState[]>> = {
   "awaiting-initial-frames": ["recording", "failed"],
@@ -38,6 +35,7 @@ export const COMPOSITE_VIDEO_NAME = "composite.webm";
 
 export interface CompositeGeometry { readonly columns: number; readonly rows: number; readonly tileWidth: number; readonly tileHeight: number; readonly unscaledWidth: number; readonly unscaledHeight: number; readonly outputWidth: number; readonly outputHeight: number }
 export interface RecorderFailure { readonly message: string; readonly viewportId?: string; readonly stack?: string }
+export type RunStatus = "success" | "failed" | "interrupted";
 
 /** Single normalization point for unknown catch values; mirrors the errorMessage() convention from @hoolypane/contracts. */
 export function asError(error: unknown): Error {
@@ -72,6 +70,8 @@ export function compositeGeometry(tracks: readonly TrackGeometry[], maximum: { r
   const tileHeight = Math.max(...tracks.map((track) => track.encodedHeight));
   const unscaledWidth = tileWidth * columns;
   const unscaledHeight = tileHeight * rows;
+  // Folding the shared codec limit (MAX_ENCODED_DIMENSION from @hoolypane/contracts) into the composite
+  // fit scale keeps grid outputs encodable while preserving aspect ratio.
   const scale = Math.min(1, maximum.width / unscaledWidth, maximum.height / unscaledHeight, MAX_ENCODED_DIMENSION / unscaledWidth, MAX_ENCODED_DIMENSION / unscaledHeight);
   return {
     columns,

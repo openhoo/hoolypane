@@ -77,6 +77,15 @@ function parseJsonObject(text: string): ParsedManifest {
   return { ok: true, value: value as Record<string, unknown> }; // JSON boundary; null/array/non-object rejected above.
 }
 
+// The exports table is the other half of that same boundary: accept any plain object keyed by
+// arbitrary specifiers and let each resolver keep its own fallback idiom for everything else.
+function exportsTable(manifest: Record<string, unknown>): Record<string, unknown> | undefined {
+  const value: unknown = manifest.exports;
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>) // keys are arbitrary specifiers by contract.
+    : undefined;
+}
+
 // Resolves a bare or deep "@hoolypane/*" specifier by walking up from the runner installation,
 // probing node_modules for the PACKAGE directory only. Root imports keep the src/index.ts dev
 // shortcut; subpath imports must be mapped by the package's exports field — pattern keys ("./x/*")
@@ -97,10 +106,7 @@ function hoolypaneEntry(specifier: string): string {
         ? new Error(`Cannot resolve ${specifier}: ${manifestPath} is not valid JSON (${errorMessage(parsed.cause)})`)
         : new Error(`Cannot resolve ${specifier}: ${manifestPath} is not a valid package manifest`);
       const manifestRecord = parsed.value;
-      const exportsField: unknown = manifestRecord.exports;
-      const exportTable: Record<string, unknown> | undefined = exportsField && typeof exportsField === "object" && !Array.isArray(exportsField)
-        ? exportsField as Record<string, unknown> // keys are arbitrary specifiers by contract.
-        : undefined;
+      const exportTable = exportsTable(manifestRecord);
       const target = exportTarget(exportTable?.[packageSubpath])
         ?? (packageSubpath === "." && typeof manifestRecord.main === "string" ? manifestRecord.main : undefined);
       if (target !== undefined) return join(packageDir, target);
@@ -165,11 +171,10 @@ function playwrightEntry(specifier: string): string {
   // JSON boundary: member reads below are guarded by in-checks on this record.
   const manifestRecord = parsed.value;
   if (!("name" in manifestRecord) || manifestRecord.name !== "playwright") return degrade();
-  if (!("exports" in manifestRecord)) return degrade();
-  const exportTable: unknown = manifestRecord.exports;
-  if (typeof exportTable !== "object" || exportTable === null || Array.isArray(exportTable)) return degrade();
-  // Same JSON boundary as above for the exports table.
-  const exportRecord = exportTable as Record<string, unknown>;
+  // Same JSON boundary as above for the exports table: a missing or malformed field degrades
+  // exactly like an unusable entry below.
+  const exportRecord = exportsTable(manifestRecord);
+  if (exportRecord === undefined) return degrade();
   if (!(subpath in exportRecord)) return degrade();
   const exportValue: unknown = exportRecord[subpath];
   if (exportValue === null || typeof exportValue !== "object" || Array.isArray(exportValue)) return located;

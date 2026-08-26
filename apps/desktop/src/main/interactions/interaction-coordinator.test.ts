@@ -71,6 +71,53 @@ describe("interaction coordinator", () => {
     expect(ran).toBe(true);
   });
 
+  it("serializes a dispatch issued after cancelPane behind the still-settling predecessor", async () => {
+    const coordinator = new InteractionCoordinator();
+    const events: string[] = [];
+    const gate = Promise.withResolvers<void>();
+    const first = coordinator.dispatch(["one"], async () => {
+      events.push("first-start");
+      await gate.promise;
+      events.push("first-end");
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(events).toEqual(["first-start"]);
+    coordinator.cancelPane("one");
+    const second = coordinator.dispatch(["one"], async () => { events.push("second"); });
+    // Drain every pending microtask: if the post-cancel dispatch raced the settling
+    // predecessor instead of chaining behind it, "second" would appear within these ticks.
+    for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    expect(events).toEqual(["first-start"]);
+    gate.resolve();
+    expect(await first).toEqual([{ paneId: "one", ok: true }]);
+    expect(await second).toEqual([{ paneId: "one", ok: true }]);
+    expect(events).toEqual(["first-start", "first-end", "second"]);
+  });
+
+  it("keeps post-cancelAll dispatches serialized behind their settling predecessors", async () => {
+    const coordinator = new InteractionCoordinator();
+    const events: string[] = [];
+    const gate = Promise.withResolvers<void>();
+    const first = coordinator.dispatch(["one", "two"], async (paneId) => {
+      events.push(`first-${paneId}`);
+      await gate.promise;
+      events.push(`first-${paneId}-end`);
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect([...events].sort()).toEqual(["first-one", "first-two"]);
+    coordinator.cancelAll();
+    const second = coordinator.dispatch(["one", "two"], async (paneId) => { events.push(`second-${paneId}`); });
+    // Same microtask drain as above proves neither pane's post-cancel successor starts early.
+    for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    expect(events.some((event) => event.startsWith("second"))).toBe(false);
+    gate.resolve();
+    expect(await first).toEqual([{ paneId: "one", ok: true }, { paneId: "two", ok: true }]);
+    expect(await second).toEqual([{ paneId: "one", ok: true }, { paneId: "two", ok: true }]);
+    expect(events.filter((event) => event.startsWith("second")).sort()).toEqual(["second-one", "second-two"]);
+  });
+
   it("cancels queued work on every pane via cancelAll while in-flight work settles", async () => {
     const coordinator = new InteractionCoordinator();
     const gate = Promise.withResolvers<void>();
@@ -139,6 +186,20 @@ describe("flow draft", () => {
     draft.start("https://example.test", "source", 1);
     expect(draft.stop()).toEqual({ kind: "empty" });
     expect(draft.isActive).toBe(true); // empty stop leaves the recording armed until commit
+  });
+
+  it("drops appends captured under an older session generation", () => {
+    const draft = new FlowDraft();
+    draft.start("https://example.test", "source", 1);
+    const staleGeneration = draft.sessionGeneration;
+    draft.start("https://example.test", "source", 5);
+    draft.append({ ...envelope, actionId: 9 }, staleGeneration);
+    // The stale envelope must be fenced off: the restart kept only its own navigate.
+    expect(draft.stop()).toEqual({ kind: "empty" });
+    // Positive control: the same append with the live generation exports, so this test
+    // pins the generation fence and not an unrelated drop of every append.
+    draft.append({ ...envelope, actionId: 10 }, draft.sessionGeneration);
+    expect(draft.stop()).toEqual({ kind: "saved", source: expect.any(String) });
   });
 
   it("stays active on a blocked stop so recovery can clear it", () => {

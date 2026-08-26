@@ -1,13 +1,11 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
 import { electronExecutablePath } from "../electron-executable.js";
-import { LINUX_SOFTWARE_RENDERING_ARGS, type FixtureServer } from "./desktop-runtime.js";
+import { LINUX_SOFTWARE_RENDERING_ARGS, REPO_ROOT, type FixtureServer } from "./desktop-runtime.js";
 export { startFixtureServer, type FixtureServer } from "./desktop-runtime.js";
 
-const REPO_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
 /** Polls fn until it returns a value other than null, undefined, or false, or the timeout elapses. */
 export async function pollUntil<T>(

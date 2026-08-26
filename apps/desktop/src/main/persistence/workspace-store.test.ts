@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WorkspaceStateSchema } from "../panes/workspace.js";
 import { flushWorkspaceSaves, loadWorkspace, saveWorkspace, sweepStaleTemporaries } from "./workspace-store.js";
@@ -65,6 +65,22 @@ describe("loadWorkspace", () => {
     const siblings = await readdir(join(file, ".."));
     expect(siblings.some((entry) => entry.startsWith("workspace.json.corrupt-"))).toBe(false);
   });
+
+  it("treats a quarantine failure as unpersistable and leaves the file untouched", async () => {
+    const file = await workspaceFile();
+    const corrupt = "{ not json at all";
+    await writeFile(file, corrupt, "utf8");
+    await chmod(dirname(file), 0o555); // rename out of the directory fails with EACCES for non-root
+    try {
+      const loaded = await loadWorkspace(file);
+      expect(loaded.persistable).toBe(false); // could not move aside: never clobber the original
+      expect(await readFile(file, "utf8")).toBe(corrupt);
+      const siblings = await readdir(join(file, ".."));
+      expect(siblings.some((entry) => entry.startsWith("workspace.json.corrupt-"))).toBe(false);
+    } finally {
+      await chmod(dirname(file), 0o700); // let afterEach remove the temporary directory
+    }
+  });
   it("drops position entries for panes that no longer exist", async () => {
     const file = await workspaceFile();
     const loaded = await loadWorkspace(file);
@@ -98,15 +114,16 @@ describe("sweepStaleTemporaries", () => {
 });
 
 describe("flushWorkspaceSaves", () => {
-  it("drains chained saves so the last enqueued state lands on disk", async () => {
+  it("evaluates a provider save when the tail executes, capturing post-enqueue mutations", async () => {
     const file = await workspaceFile();
     const base = (await loadWorkspace(file)).state;
-    const mutated = { ...base, sharedUrl: "https://example.com/flushed" };
-    await saveWorkspace(file, base);
-    const second = saveWorkspace(file, () => mutated); // provider evaluated when the tail executes
+    let sharedUrl = base.sharedUrl;
+    await saveWorkspace(file, base); // chained ahead of the provider save
+    const second = saveWorkspace(file, () => ({ ...base, sharedUrl })); // provider evaluated when the tail executes
+    sharedUrl = "https://example.com/flushed"; // mutated after enqueue, before the tail write runs
     await flushWorkspaceSaves();
     await second;
-    expect(JSON.parse(await readFile(file, "utf8"))).toEqual(mutated);
+    expect(JSON.parse(await readFile(file, "utf8")).sharedUrl).toBe("https://example.com/flushed");
     const siblings = await readdir(join(file, ".."));
     expect(siblings.filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
   });

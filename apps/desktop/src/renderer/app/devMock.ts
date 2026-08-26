@@ -53,7 +53,7 @@ function settleLoading(paneIds: readonly string[]): void {
   }, 600);
 }
 
-function apply(command: ChromeCommand): boolean {
+function apply(command: ChromeCommand): void {
   let refused = false;
   switch (command.kind) {
     case "navigate": {
@@ -168,7 +168,6 @@ function apply(command: ChromeCommand): boolean {
   // Mirror main's success tail (handleCommand): every completed command resets lastError
   // before republishing, so one rejected command cannot pin the error toast until reload.
   if (!refused) patch({ lastError: null });
-  return refused;
 }
 
 export function installDevMock(): void {

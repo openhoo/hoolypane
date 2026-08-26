@@ -346,10 +346,12 @@ async function acceptSourceAction(sourcePaneId: string, observed: unknown): Prom
   const sourceRecord = paneRegistry.getPane(sourcePaneId);
   // A reloaded/re-attached preload restarts at generation 0 and only learns the current epoch
   // at did-finish-load; an observation stamped with anything but the source record's live
-  // generation comes from that gap (or an already-navigated document). Drop it before envelope
-  // construction: strict equality downstream would fail it on every target, mass-flagging panes
-  // out of sync and recording an envelope no pane can ever replay.
-  if (sourceRecord && sourceRecord.documentGeneration !== source.documentGeneration) return;
+  // generation comes from that gap (or an already-navigated document) — or its source pane
+  // was closed while the observation sat buffered behind a flush barrier, leaving no record
+  // at all. Drop it before envelope construction: strict equality downstream would fail it
+  // on every target, mass-flagging panes out of sync and recording an envelope no pane can
+  // ever replay.
+  if (!sourceRecord || sourceRecord.documentGeneration !== source.documentGeneration) return;
   // Fields are already-valid by construction (source.action passed PaneObservedActionSchema.parse);
   // FlowDraft.append's internal parse stays the single validation point.
   const envelope: ActionEnvelope = {

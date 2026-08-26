@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { VIEWPORT_PRESETS } from "@hoolypane/contracts";
-import { clampPanePosition, computePaneTiles, LAYOUT_PADDING, PANE_HEADER_HEIGHT, type PaneTile } from "./layout.js";
+import { clampPanePosition, computePaneTiles, LAYOUT_GAP, LAYOUT_PADDING, PANE_HEADER_HEIGHT, type PaneTile } from "./layout.js";
 
 const inputs = (specs: readonly { id: string; width: number; height: number }[]) =>
   specs.map((spec) => ({ id: spec.id, viewportWidth: spec.width, viewportHeight: spec.height }));
 const ALL_INPUTS = inputs(VIEWPORT_PRESETS);
 
-// Grid/free/focus pack strictly inside the padding origin and extent. Only horizontal rows
-// under fit-compression may pass the right padding, because their inter-card gaps stay
-// unscaled while widths shrink; that drift is asserted explicitly with its exact envelope.
+// Grid/free/focus pack inside the padding origin and extent except under severe compression:
+// horizontal rows may pass the right padding (unscaled gaps), and masonry packs may pass the
+// bottom padding (unscaled 28px header band); both drifts are asserted explicitly with their
+// exact envelopes.
 function expectPaddedDomain(tiles: Map<string, PaneTile>, areaWidth: number, areaHeight: number): void {
   for (const tile of tiles.values()) {
     if (tile.hidden) continue;
@@ -83,7 +84,7 @@ describe("renderer layout engine", () => {
     // Row widths shrink by the uniform fit but the fixed 8px gaps between cards do not, so the
     // compressed row may exceed the right padding by at most (n - 1) * LAYOUT_GAP. This pins the
     // known drift instead of hiding it behind a looser bound.
-    expect(rightmost).toBeLessThanOrEqual(areaWidth - LAYOUT_PADDING + (ALL_INPUTS.length - 1) * 8);
+    expect(rightmost).toBeLessThanOrEqual(areaWidth - LAYOUT_PADDING + (ALL_INPUTS.length - 1) * LAYOUT_GAP);
   });
 
   it("keeps focus layout to one visible card plus zero-size hidden siblings, falling back past stale ids", () => {

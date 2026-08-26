@@ -2,7 +2,7 @@ export { ActionEnvelopeSchema, SCROLL_RATIO_MAX, SCROLL_RATIO_MIN } from "./acti
 export type { Action, ActionEnvelope, FlowEvent, LocatorSpec } from "./action.js";
 export { DEFAULT_COMPOSITE_BACKGROUND, HoolypaneConfigSchema, RECORDING_FPS_VALUES } from "./config.js";
 export type { HoolypaneConfig, ResolvedHoolypaneConfig, ResolvedRecordingConfig } from "./config.js";
-export { errorMessage, failureReason } from "./errors.js";
+export { errorMessage, failureReason, isErrnoException } from "./errors.js";
 export { BoundsSnapshotSchema, ChromeCommandSchema, FILL_DEBOUNCE_MS, IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, RECORDABLE_PRESS_KEYS, RecordFailureSchema, ReplayRequestSchema, REPLAY_RESULT_PHASES, ReplayResultSchema, REPLAY_RESULT_TIMEOUT_MS, staleGenerationMessage } from "./ipc.js";
 export type { BoundsSnapshot, ChromeCommand, ReplayRequest, ReplayResult } from "./ipc.js";
 export { VIEWPORT_PRESETS } from "./presets.js";

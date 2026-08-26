@@ -18,6 +18,7 @@ import {
   type CompositeGeometry,
   type RecordingState,
   type RecorderFailure,
+  type RunStatus,
   type SlotMapping,
   type TrackGeometry,
 } from "./capture-contract.js";
@@ -33,7 +34,7 @@ interface RecordingManifest {
   readonly contract: typeof CAPTURE_CONTRACT;
   readonly validatorVersion: number;
   readonly validationSuccess: true;
-  readonly status: "success" | "failed" | "interrupted";
+  readonly status: RunStatus;
   readonly runId: string;
   readonly t0UnixUs: number;
   readonly t1UnixUs: number;
@@ -68,14 +69,13 @@ interface Context {
   fallbackSequence: number;
 }
 
-type FinalizeInput = { readonly status: "success" | "failed" | "interrupted"; readonly failures: readonly RecorderFailure[]; readonly events?: readonly FlowEvent[]; readonly signal?: AbortSignal };
+type FinalizeInput = { readonly status: RunStatus; readonly failures: readonly RecorderFailure[]; readonly events?: readonly FlowEvent[] };
 type AlignedCapture = { readonly context: Context; readonly result: AlignmentResult; readonly geometry: TrackGeometry };
 
 interface CapturePipelineResult {
   readonly t1Us: number;
   readonly durationFrames: number;
   readonly captureFailures: readonly RecorderFailure[];
-  readonly spoolFailureNotes: readonly RecorderFailure[];
   readonly aligned: readonly AlignedCapture[];
   readonly encoding: EncodingResult;
   readonly verifiedArtifacts: Readonly<Record<string, string>>;
@@ -258,7 +258,7 @@ export class RecordingSession {
       let manifestOnDisk = false;
       let manifestWritten = false;
       try {
-        const pipeline = await this.runCapturePipeline(input);
+        const pipeline = await this.runCapturePipeline();
         const manifest = await this.buildManifest(input, pipeline);
         const finalManifest = await this.writeFinalManifest(manifestPath, manifest);
         manifestOnDisk = true;
@@ -288,14 +288,11 @@ export class RecordingSession {
           await atomicJson(join(this.options.outputDir, "diagnostics.json"), {
             contract: failureDiagnostics.contract,
             status: failureDiagnostics.status,
-            failures: [
-              ...input.failures,
-              ...this.spoolFailureNotes,
-              ...this.contexts.flatMap((context) => [...context.spool.drainFailureNotes()]),
-              ...this.captureEndedEarlyFailures(),
-              ...this.captureCloseFailures,
-              { message: failureDiagnostics.pipelineErrorMessage },
-            ],
+            failures: this.baseFailures(
+              input.failures,
+              [...this.spoolFailureNotes, ...this.contexts.flatMap((context) => [...context.spool.drainFailureNotes()])],
+              [{ message: failureDiagnostics.pipelineErrorMessage }],
+            ),
           });
         } catch { /* cleanup errors must not mask the original failure */ }
       }
@@ -322,12 +319,7 @@ export class RecordingSession {
     await atomicJson(diagnosticsPath, {
       contract: null,
       status: input.status,
-      failures: [
-        ...input.failures,
-        ...spoolNotes,
-        ...this.captureEndedEarlyFailures(),
-        ...this.captureCloseFailures,
-      ],
+      failures: this.baseFailures(input.failures, spoolNotes),
     });
     await this.pruneFailedArtifacts();
     return { kind: "diagnostics", diagnosticsPath };
@@ -340,15 +332,19 @@ export class RecordingSession {
       .map((context) => ({ message: `capture ended early: ${context.captureError!.message}`, viewportId: context.target.id }));
   }
 
+  /** Single spine for every failure list: input failures → spool notes → capture-ended-early → close failures → extras. */
+  private baseFailures(inputFailures: readonly RecorderFailure[], spoolNotes: readonly RecorderFailure[], extra: readonly RecorderFailure[] = []): readonly RecorderFailure[] {
+    return [...inputFailures, ...spoolNotes, ...this.captureEndedEarlyFailures(), ...this.captureCloseFailures, ...extra];
+  }
+
   /** post-roll → stopping → aligning → encoding → validating; aborts and validation failures throw into finalize's catch. */
-  private async runCapturePipeline(input: FinalizeInput): Promise<CapturePipelineResult> {
+  private async runCapturePipeline(): Promise<CapturePipelineResult> {
     const elapsedUs = Math.max(0, monotonicUs() - (this.flowStartUs ?? monotonicUs()));
     await this.transition("post-roll");
-    await this.cancellableDelay(POST_ROLL_US / 1000, input.signal);
+    await this.cancellableDelay(POST_ROLL_US / 1000);
     const t1Us = this.t0Us! + elapsedUs + POST_ROLL_US;
     await this.transition("stopping");
     await this.stopCapture();
-    input.signal?.throwIfAborted();
     await this.transition("aligning");
     const durationFrames = durationFrameCount(this.t0Us!, t1Us, this.options.recording.fps);
     const captureFailures = [...this.captureEndedEarlyFailures(), ...this.captureCloseFailures];
@@ -366,15 +362,16 @@ export class RecordingSession {
       this.options.recording,
     );
     await this.transition("validating");
+    const expectedComposite = compositeGeometry(aligned.map(({ geometry }) => geometry), this.options.recording.compositeMaxSize);
     const verification = await verifyArtifacts(this.options.outputDir, this.options.recording.fps, durationFrames, {
       tracks: aligned.map(({ context, geometry }) => ({ id: context.target.id, encodedWidth: geometry.encodedWidth, encodedHeight: geometry.encodedHeight })),
-      composite: (({ outputWidth, outputHeight }) => ({ width: outputWidth, height: outputHeight }))(compositeGeometry(aligned.map(({ geometry }) => geometry), this.options.recording.compositeMaxSize)),
+      composite: { width: expectedComposite.outputWidth, height: expectedComposite.outputHeight },
     });
     if (!verification.success) {
       await this.transition("failed");
       throw new Error(`artifact validation failed: ${verification.error ?? "unknown error"}`);
     }
-    return { t1Us, durationFrames, captureFailures, spoolFailureNotes: this.spoolFailureNotes, aligned, encoding, verifiedArtifacts: verification.artifacts, verifiedHashes: verification.sha256 };
+    return { t1Us, durationFrames, captureFailures, aligned, encoding, verifiedArtifacts: verification.artifacts, verifiedHashes: verification.sha256 };
   }
 
   private async buildManifest(input: FinalizeInput, pipeline: CapturePipelineResult): Promise<RecordingManifest> {
@@ -409,7 +406,7 @@ export class RecordingSession {
         };
       }),
       mappings: Object.fromEntries(pipeline.aligned.map(({ context, result }) => [context.target.id, result.mappings])),
-      failures: [...input.failures, ...pipeline.spoolFailureNotes, ...pipeline.captureFailures],
+      failures: this.baseFailures(input.failures, this.spoolFailureNotes),
       flowEvents: input.events ?? [],
       artifacts,
       sha256: hashes,

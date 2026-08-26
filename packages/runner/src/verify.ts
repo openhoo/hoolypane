@@ -63,9 +63,14 @@ function parseCompositeGeometry(record: Record<string, unknown>, tracks: TrackGe
 // contract lack the optional map and skip certification.
 async function certifyManifestHashes(outputDir: string, manifestPath: string, record: Record<string, unknown>, verifiedHashes: Readonly<Record<string, string>>): Promise<void> {
   const map: unknown = record.sha256;
-  if (typeof map !== "object" || map === null) return;
+  // An absent map legitimately skips certification for recordings made before the hash contract;
+  // anything present-but-malformed must fail loudly like every sibling degraded-field check above.
+  if (map === undefined) return;
+  if (typeof map !== "object" || map === null || Array.isArray(map)) throw new Error(`${manifestPath} has a malformed sha256 field: expected an object mapping artifact paths to digests`);
   for (const [key, expected] of Object.entries(map)) {
-    if (typeof expected !== "string") continue;
+    // finalize writes hex-string digests exclusively, so a non-string entry can only be corruption
+    // or tampering — exactly the threat this certification exists to catch.
+    if (typeof expected !== "string") throw new Error(`${manifestPath} artifact ${key} lacks a string sha256 digest`);
     let actual: string;
     try {
       actual = verifiedHashes[key] ?? createHash("sha256").update(await readFile(resolve(outputDir, key))).digest("hex");

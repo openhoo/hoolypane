@@ -103,6 +103,8 @@ describe("recording session", () => {
     await session.start([new FakeTarget()]);
     expect(existsSync(join(outputDir, "videos", "stale.webm"))).toBe(false);
     expect(existsSync(join(outputDir, "traces", "stale.trace"))).toBe(false);
+    expect(existsSync(join(outputDir, "manifest.json"))).toBe(false);
+    expect(existsSync(join(outputDir, "diagnostics.json"))).toBe(false);
     const state = JSON.parse(await readFile(join(outputDir, "run-state.json"), "utf8")) as { state: string };
     expect(state.state).toBe("awaiting-initial-frames");
     await session.finalize({ status: "failed", failures: [] });

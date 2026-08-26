@@ -50,6 +50,17 @@ describe("flow API", () => {
     expect(serializeFlow([envelope({ kind: "fill", locator: { kind: "label", value: "Email" }, value: "a@example.test" })])).toContain('await page.getByLabel("Email", { exact: true }).fill("a@example.test");');
   });
 
+  it("keeps known ARIA roles on the getByRole path regardless of case or padding", () => {
+    expect(locatorExpression({ kind: "role", role: " BUTTON ", name: "Save" })).toBe('page.getByRole(" BUTTON ", { name: "Save", exact: true })');
+    expect(locatorExpression({ kind: "role", role: "textbox", name: "Search" })).toBe('page.getByRole("textbox", { name: "Search", exact: true })');
+  });
+
+  it("falls back to an explicit role attribute locator for roles getByRole cannot resolve", () => {
+    expect(locatorExpression({ kind: "role", role: "my-widget", name: "hello" })).toBe('page.locator("[role=\\"my-widget\\"]")');
+    const adversarialSelector = String.raw`[role="a\"b\\c"]`;
+    expect(locatorExpression({ kind: "role", role: `a"b\\c`, name: "hello" })).toBe(`page.locator(${JSON.stringify(adversarialSelector)})`);
+  });
+
   it("emits exact matching for every name-based locator kind", () => {
     expect(locatorExpression({ kind: "text", value: "Submit order" })).toBe('page.getByText("Submit order", { exact: true })');
     expect(locatorExpression({ kind: "label", value: "Email" })).toBe('page.getByLabel("Email", { exact: true })');

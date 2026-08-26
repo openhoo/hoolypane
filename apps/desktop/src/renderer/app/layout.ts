@@ -7,7 +7,7 @@ export function clampPanePosition(value: number, areaExtent: number, size: numbe
   return Math.max(LAYOUT_PADDING, Math.min(areaExtent - LAYOUT_PADDING - size, value));
 }
 
-const LAYOUT_GAP = 8;
+export const LAYOUT_GAP = 8;
 export const PANE_HEADER_HEIGHT = 28;
 
 export interface PaneTile {

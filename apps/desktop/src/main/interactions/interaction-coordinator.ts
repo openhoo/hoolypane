@@ -24,8 +24,15 @@ export class InteractionCoordinator {
   }
 
   cancelPane(paneId: string): void {
-    this.tails.delete(paneId);
     this.epochs.set(paneId, (this.epochs.get(paneId) ?? 0) + 1);
+    const tail = this.tails.get(paneId);
+    if (!tail) return;
+    // Keep the settling predecessor chained: a dispatch issued after the cancel must still
+    // serialize behind it instead of racing its continuation. Prune once it settles so an
+    // idle pane holds no tail; the identity guard never drops a newer post-cancel entry.
+    void tail.finally(() => {
+      if (this.tails.get(paneId) === tail) this.tails.delete(paneId);
+    });
   }
 
   /** Cancels every queued replay: window teardown must fence outstanding work or a relaunch

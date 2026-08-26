@@ -7,7 +7,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const REPO_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+export const REPO_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
 /** Chromium flags forcing software rendering under Xvfb; previously hand-synced across four sites. */
 export const LINUX_SOFTWARE_RENDERING_ARGS = ["--ozone-platform=x11", "--use-gl=angle", "--use-angle=swiftshader"];
@@ -65,7 +65,9 @@ export async function runCommand(
     child.stdout?.on("data", (chunk) => { combined += chunk.toString(); });
     child.stderr?.on("data", (chunk) => { combined += chunk.toString(); });
     child.once("error", rejectRun);
-    child.once("exit", (code, signal) => {
+    child.once("close", () => {
+      const code = child.exitCode;
+      const signal = child.signalCode;
       if (code === 0 || ignoreExitCode) {
         resolveRun(combined);
       } else if (output === "inherit") {
