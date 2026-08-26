@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -11,7 +11,7 @@ import { compileModule } from "./module-loader.js";
 import { verifyDirectory } from "./verify.js";
 import ffmpegPath from "ffmpeg-static";
 import { DEFAULT_COMPOSITE_BACKGROUND, HoolypaneConfigSchema, VIEWPORT_PRESETS } from "@hoolypane/contracts";
-import { awaitChildExit, ffmpegArguments, filterGraph } from "@hoolypane/recorder";
+import { awaitChildExit, ffmpegArguments, filterGraph, removeScratchDirectories, trackScratchDirectory } from "@hoolypane/recorder";
 
 describe("runner CLI", () => {
   it("parses flow, config, output, and headed options", () => {
@@ -92,7 +92,7 @@ describe("compiled artifact loading", () => {
     // Dynamic import is the point of this test: it exercises Node's runtime loading boundary for
     // compiled artifacts exactly like runFlow does, which a static import could not observe.
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-pw-artifact-"));
-    scratchDirectories.push(directory);
+    trackScratchDirectory(directory);
     const source = join(directory, "flow.ts");
     await writeFile(source, 'import { chromium } from "playwright";\nexport const run = () => chromium.name();\n', "utf8");
     const compiled = await compileModule(source, join(directory, ".hoolypane/cache"));
@@ -107,10 +107,7 @@ describe("compiled artifact loading", () => {
 });
 
 
-const scratchDirectories: string[] = [];
-afterEach(async () => {
-  await Promise.all(scratchDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
-});
+afterEach(removeScratchDirectories);
 
 function runFfmpeg(args: readonly string[]): Promise<void> {
   // ffmpeg-static's bundled typings do not promise a string; mirror the recorder's defensive resolution.
@@ -199,7 +196,7 @@ function manifestBody(overrides: Record<string, unknown>): string {
 describe("verify command", () => {
   it("verifies a real recording directory and returns success", async ({ }) => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-verify-ok-"));
-    scratchDirectories.push(directory);
+    trackScratchDirectory(directory);
     await writeRecordingFixture(directory, 30, 22);
     await writeFile(join(directory, "manifest.json"), manifestBody({}));
     expect(await verifyDirectory(directory)).toBe(0);
@@ -207,7 +204,7 @@ describe("verify command", () => {
 
   it("verifies a valid single-frame recording (public durationFrames>=1 contract)", async ({ }) => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-verify-one-frame-"));
-    scratchDirectories.push(directory);
+    trackScratchDirectory(directory);
     await writeRecordingFixture(directory, 30, 1);
     await writeFile(join(directory, "manifest.json"), manifestBody({ durationFrames: 1 }));
     expect(await verifyDirectory(directory)).toBe(0);
@@ -215,7 +212,7 @@ describe("verify command", () => {
 
   it("wraps an unparsable or missing manifest with its path", async () => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-verify-broken-"));
-    scratchDirectories.push(directory);
+    trackScratchDirectory(directory);
     await writeFile(join(directory, "manifest.json"), "{not json");
     await expect(verifyDirectory(directory)).rejects.toThrow(/Cannot parse .*manifest\.json/);
     await expect(verifyDirectory(join(directory, "missing"))).rejects.toThrow(/missing.*manifest\.json/s);
@@ -223,7 +220,7 @@ describe("verify command", () => {
 
   it("rejects manifests lacking or holding invalid timeline keys", async () => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-verify-keys-"));
-    scratchDirectories.push(directory);
+    trackScratchDirectory(directory);
     await writeFile(join(directory, "manifest.json"), JSON.stringify({ status: "success" }));
     await expect(verifyDirectory(directory)).rejects.toThrow(/lacks fps or durationFrames/u);
     await writeFile(join(directory, "manifest.json"), manifestBody({ fps: 24 }));
@@ -234,7 +231,7 @@ describe("verify command", () => {
 
   it("fails verification when artifacts disagree with the manifest contract", async () => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-verify-mismatch-"));
-    scratchDirectories.push(directory);
+    trackScratchDirectory(directory);
     await writeRecordingFixture(directory, 30, 22);
     await writeFile(join(directory, "manifest.json"), manifestBody({ durationFrames: 21 }));
 
@@ -245,28 +242,28 @@ describe("verify command", () => {
 
   it("fails loudly on a present-but-malformed viewports field instead of degrading to timeline-only", async () => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-verify-malformed-"));
-    scratchDirectories.push(directory);
+    trackScratchDirectory(directory);
     await writeFile(join(directory, "manifest.json"), manifestBody({ viewports: "not-an-array" }));
     await expect(verifyDirectory(directory)).rejects.toThrow(/malformed viewports field/u);
   });
 
   it("fails loudly on a malformed viewports entry missing its encoded width", async () => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-verify-malformed-entry-"));
-    scratchDirectories.push(directory);
+    trackScratchDirectory(directory);
     await writeFile(join(directory, "manifest.json"), manifestBody({ viewports: [{ id: "one", encodedWidth: 64 }] }));
     await expect(verifyDirectory(directory)).rejects.toThrow(/malformed viewports\[0\] entry/u);
   });
 
   it("fails loudly on a malformed geometry field", async () => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-verify-malformed-geometry-"));
-    scratchDirectories.push(directory);
+    trackScratchDirectory(directory);
     await writeFile(join(directory, "manifest.json"), manifestBody({ geometry: { outputWidth: 64 } }));
     await expect(verifyDirectory(directory)).rejects.toThrow(/malformed geometry field/u);
   });
 
   it("certifies the manifest sha256 map: mismatched or missing artifacts fail loudly", async () => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-verify-sha256-"));
-    scratchDirectories.push(directory);
+    trackScratchDirectory(directory);
     await writeRecordingFixture(directory, 30, 22);
     const digestOf = async (key: string): Promise<readonly [string, string]> => [
       key,
@@ -283,4 +280,13 @@ describe("verify command", () => {
     await writeFile(join(directory, "manifest.json"), manifestBody({ viewports: undefined, geometry: undefined, sha256: { "run-state.json": "0".repeat(64) } }));
     await expect(verifyDirectory(directory)).rejects.toThrow(/run-state\.json fails sha256 certification/u);
   }, 30_000);
+
+  it("rejects manifests whose own status records a non-success run", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "hoolypane-verify-status-"));
+    trackScratchDirectory(directory);
+    // The status gate runs before artifact verification, so an empty scratch directory suffices;
+    // the two failure entries exercise both reasons renderings (string message vs JSON fallback).
+    await writeFile(join(directory, "manifest.json"), manifestBody({ status: "failed", failures: [{ message: "capture ended early" }, { code: 7 }] }));
+    await expect(verifyDirectory(directory)).rejects.toThrow(/records status "failed": capture ended early; \{"code":7\}/u);
+  });
 });

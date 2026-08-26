@@ -56,6 +56,15 @@ describe("flow API", () => {
     expect(locatorExpression({ kind: "role", role: "textbox", name: "Search" })).toBe('page.getByRole("textbox", { name: "Search", exact: true })');
   });
 
+  it("serializes corrected recorder derivations through getByRole instead of the attribute fallback", () => {
+    // apps/desktop/src/preload/pane.ts roleFor derives listbox for multi-select selects and
+    // combobox for datalist-bound text-like inputs (input[type=image] records as the already
+    // covered button role); each must replay via getByRole — the [role=...] fallback only matches
+    // explicit role attributes and would deadlock replay.
+    expect(locatorExpression({ kind: "role", role: "listbox", name: "Tags" })).toBe('page.getByRole("listbox", { name: "Tags", exact: true })');
+    expect(locatorExpression({ kind: "role", role: "combobox", name: "Browser" })).toBe('page.getByRole("combobox", { name: "Browser", exact: true })');
+  });
+
   it("falls back to an explicit role attribute locator for roles getByRole cannot resolve", () => {
     expect(locatorExpression({ kind: "role", role: "my-widget", name: "hello" })).toBe('page.locator("[role=\\"my-widget\\"]")');
     const adversarialSelector = String.raw`[role="a\"b\\c"]`;

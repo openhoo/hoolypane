@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { ActionSchema } from "./action.js";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { FAILURE_REASON_MAX_LENGTH, errorMessage, failureReason, isErrnoException } from "./errors.js";
-import { ActionEnvelopeSchema, BoundsSnapshotSchema, ChromeCommandSchema, ChromeStateSchema, HoolypaneConfigSchema, PaneGenerationSchema, REPLAY_RESULT_PHASES, RecordFailureSchema, ReplayRequestSchema, ReplayResultSchema, VIEWPORT_PRESETS, WorkspaceStateSchema, defaultWorkspace, staleGenerationMessage } from "./index.js";
+import { ActionEnvelopeSchema, BoundsSnapshotSchema, ChromeCommandSchema, ChromeStateSchema, GET_BY_ROLE_ROLES, HoolypaneConfigSchema, PaneGenerationSchema, REPLAY_RESULT_PHASES, RecordFailureSchema, ReplayRequestSchema, ReplayResultSchema, VIEWPORT_PRESETS, WorkspaceStateSchema, defaultWorkspace, staleGenerationMessage } from "./index.js";
 
 describe("configuration", () => {
   it("applies all recording defaults", () => {
@@ -214,5 +217,51 @@ describe("error normalization", () => {
     expect(isErrnoException(42, "ENOENT")).toBe(false);
     expect(isErrnoException({ code: "EACCES" }, "ENOENT")).toBe(false);
     expect(isErrnoException({ code: null }, "ENOENT")).toBe(false);
+  });
+});
+
+function playwrightCoreBundlePath(): string {
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  while (true) {
+    const store = path.join(dir, "node_modules", ".pnpm");
+    if (existsSync(store)) {
+      const versions = readdirSync(store).filter((entry) => entry.startsWith("playwright-core@")).sort();
+      const [version] = versions;
+      if (version === undefined || versions.length !== 1) throw new Error(`Expected exactly one installed playwright-core version, found [${versions.join(", ")}]`);
+      return path.join(store, version, "node_modules", "playwright-core", "lib", "coreBundle.js");
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) throw new Error("pnpm store not found above packages/contracts");
+    dir = parent;
+  }
+}
+
+/** Reads the injected-script validRoles array out of the installed playwright-core bundle so drift against a Playwright upgrade fails here instead of deadlocking recorded flows. */
+function playwrightCoreValidRoles(): readonly string[] {
+  const bundle = readFileSync(playwrightCoreBundlePath(), "utf8");
+  const declaration = bundle.match(/var validRoles\s*=\s*\[/);
+  if (!declaration || declaration.index === undefined) throw new Error("validRoles declaration not found in coreBundle.js");
+  const end = bundle.indexOf("]", declaration.index + declaration[0].length);
+  return [...bundle.slice(declaration.index + declaration[0].length, end).matchAll(/"([A-Za-z]+)"/g)].flatMap((match) => (match[1] ? [match[1]] : []));
+}
+
+describe("getByRole role table", () => {
+  // The recorder-derived subset that apps/desktop/src/preload/pane.ts pins via `satisfies` to this
+  // table (IMPLICIT_ROLES) — a name missing from the table makes flow codegen export the
+  // [role="..."] attribute fallback, which only matches explicit role attributes and therefore
+  // replays zero matches until the flow deadline.
+  const recorderImplicitRoles = ["button", "link", "combobox", "textbox", "checkbox", "radio", "searchbox", "spinbutton", "slider"] as const;
+
+  it("covers every implicit role the recorder derives", () => {
+    for (const role of recorderImplicitRoles) expect(Object.hasOwn(GET_BY_ROLE_ROLES, role)).toBe(true);
+  });
+
+  it("stays identical to the installed playwright-core validRoles set", () => {
+    const validRoles = playwrightCoreValidRoles();
+    expect(validRoles.length).toBeGreaterThan(50);
+    const missingFromTable = validRoles.filter((role) => !Object.hasOwn(GET_BY_ROLE_ROLES, role));
+    const unknownToPlaywright = Object.keys(GET_BY_ROLE_ROLES).filter((role) => !validRoles.includes(role));
+    expect(missingFromTable).toEqual([]);
+    expect(unknownToPlaywright).toEqual([]);
   });
 });

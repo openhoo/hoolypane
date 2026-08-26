@@ -8,3 +8,4 @@ export { MANIFEST_FILE } from "./capture-contract.js";
 export { ffmpegArguments, filterGraph } from "./encoder.js";
 export { sha256File } from "./spool.js";
 export { awaitChildExit } from "./encoder.js";
+export { removeScratchDirectories, trackScratchDirectory } from "./test-support.js";

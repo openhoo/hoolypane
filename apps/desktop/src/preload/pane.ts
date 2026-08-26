@@ -1,5 +1,5 @@
 import { ipcRenderer } from "electron";
-import { FILL_DEBOUNCE_MS, IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, RECORDABLE_PRESS_KEYS, RecordFailureSchema, ReplayRequestSchema, REPLAY_RESULT_PHASES, failureReason, staleGenerationMessage, type Action, type LocatorSpec, type ReplayRequest, type ReplayResult } from "@hoolypane/contracts";
+import { FILL_DEBOUNCE_MS, GET_BY_ROLE_ROLES, IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, RECORDABLE_PRESS_KEYS, RecordFailureSchema, ReplayRequestSchema, REPLAY_RESULT_PHASES, failureReason, staleGenerationMessage, type Action, type LocatorSpec, type ReplayRequest, type ReplayResult } from "@hoolypane/contracts";
 
 let documentGeneration = 0;
 type SuppressionEntry = { generation: number; kind: Action["kind"]; box?: ReplayResult["box"]; confirmed?: boolean };
@@ -100,13 +100,15 @@ function elementsFor(locator: LocatorSpec, labelElements?: readonly Element[]): 
   }
 }
 
-// Implicit ARIA roles this recorder derives from element semantics below. Every name here MUST
-// also appear in packages/flow/src/codegen.ts GET_BY_ROLE_ROLES: that sibling table decides
+// Implicit ARIA roles this recorder derives from element semantics below. The `satisfies` pin
+// makes every name here a key of @hoolypane/contracts GET_BY_ROLE_ROLES: that shared table decides
 // whether an exported role locator serializes as page.getByRole(...) or as the [role="..."]
 // attribute fallback — which only matches explicit role attributes, so an implicit role missing
 // there records getByRole steps that replay zero matches and deadlock the flow until its deadline
 // (recording text-like inputs as textbox once deadlocked exported flows exactly like that).
-const IMPLICIT_ROLES = ["button", "link", "combobox", "textbox", "checkbox", "radio", "searchbox", "spinbutton", "slider"] as const;
+// Adding an implicit role without a contracts-table entry therefore fails typecheck instead of
+// drifting past a prose comment.
+const IMPLICIT_ROLES = ["button", "link", "combobox", "textbox", "checkbox", "radio", "searchbox", "spinbutton", "slider"] as const satisfies readonly (keyof typeof GET_BY_ROLE_ROLES)[];
 type ImplicitRole = (typeof IMPLICIT_ROLES)[number];
 // Native <input> types whose implicit ARIA role differs from the textbox default; Playwright
 // resolves these under their real implicit roles, so they must be recorded as such.
@@ -120,6 +122,7 @@ const IMPLICIT_INPUT_TYPE_ROLES: Readonly<Record<string, ImplicitRole>> = {
   search: "searchbox",
   number: "spinbutton",
   range: "slider",
+  image: "button",
 };
 
 function roleFor(element: Element): string {
@@ -127,9 +130,15 @@ function roleFor(element: Element): string {
   if (explicit) return explicit;
   if (element instanceof HTMLButtonElement) return "button";
   if (element instanceof HTMLAnchorElement && element.href) return "link";
-  if (element instanceof HTMLSelectElement) return "combobox";
+  if (element instanceof HTMLSelectElement) return element.multiple || element.size > 1 ? "listbox" : "combobox";
   if (element instanceof HTMLTextAreaElement) return "textbox";
-  if (element instanceof HTMLInputElement) return IMPLICIT_INPUT_TYPE_ROLES[element.type] ?? "textbox";
+  if (element instanceof HTMLInputElement) {
+    // Text-likes bound to a datalist resolve as combobox in Playwright's INPUT branch, so record
+    // them identically: element.list is null unless the list attribute resolves to a DATALIST and
+    // the type supports one. Any divergence records getByRole steps that replay zero matches.
+    if ((element.type === "email" || element.type === "search" || element.type === "tel" || element.type === "text" || element.type === "url") && element.list) return "combobox";
+    return IMPLICIT_INPUT_TYPE_ROLES[element.type] ?? "textbox";
+  }
   return "";
 }
 
@@ -155,6 +164,11 @@ function accessibleName(element: Element): string {
   // its standard accname (HTML-AAM): Chromium resolves getByRole("button", { name }) from it.
   if (element instanceof HTMLInputElement && ["button", "submit", "reset"].includes(element.type)) {
     return normalizedText(element.getAttribute("value") ?? "");
+  }
+  // input[type=image] takes its accName from the alt attribute per HTML-AAM (Chromium resolves
+  // getByRole("button", { name }) from it); title is the standard final fallback.
+  if (element instanceof HTMLInputElement && element.type === "image") {
+    return normalizedText(element.getAttribute("alt")) || normalizedText(element.getAttribute("title"));
   }
   return "";
 }

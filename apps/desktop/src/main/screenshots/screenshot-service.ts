@@ -81,8 +81,8 @@ export async function captureOverview(window: BrowserWindow, registry: PaneRegis
 /** Watchdog deadline for one overview composition: equal to QUIT_FLUSH_DEADLINE_MS (main/index.ts)
  *  and CHILD_GRACE_MS (@hoolypane/contracts recorder capture-contract); same async-boundary watchdog
  *  class as REPLAY_RESULT_TIMEOUT_MS (5s) and the fixture-server readiness kill, at the longer 10s
- *  tier. Generous against measured ms-scale composes while still unblocking main's serialized command
- *  queue long before a user quits. */
+ *  tier. Generous against measured ms-scale composes, and capped at the quit-drain deadline it
+ *  must never outlast. */
 const OVERVIEW_COMPOSE_TIMEOUT_MS = 10_000;
 
 /** Compose tiles off-thread on a fresh worker per call, terminated when the promise settles. The

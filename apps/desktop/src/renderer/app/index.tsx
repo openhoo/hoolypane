@@ -259,6 +259,8 @@ function useChromeIngest(
         return;
       }
       failures = 0;
+      window.clearTimeout(retryTimer);
+      retryTimer = undefined;
       const next = parsed.data;
       const firstSnapshot = !stateReceived.current;
       stateReceived.current = true;
@@ -276,9 +278,10 @@ function useChromeIngest(
   }, []);
 }
 
-// Keyboard-move mode owns its gesture state wholesale: arrows nudge stored free positions,
-// Enter commits, Escape restores. Split out of the pointer-drag hook below; the only coupling
-// is endDragRef (a live pointer drag blocks arming) plus the shared refs and layout prop.
+// Keyboard-move mode owns its gesture state wholesale: arrows nudge stored free positions
+// (persisted per step via move-pane), Enter ends the session, Escape restores. Split out of
+// the pointer-drag hook below; the only coupling is endDragRef (a live pointer drag blocks
+// arming) plus the shared refs and layout prop.
 function useKeyboardMoveMode({
   tilesRef,
   layoutRef,
@@ -310,8 +313,8 @@ function useKeyboardMoveMode({
   }, []);
   const cancelKeyboardMove = useCallback((): void => setKeyboardMove(null), []);
 
-  // Keyboard-move mode: arrows nudge the card by snap increments (each step sends move-pane),
-  // Enter commits, Escape restores the origin. Pointer drag behavior is untouched.
+  // Keyboard-move mode: arrows nudge by snap increments and persist each step immediately;
+  // Enter ends the session, Escape restores the origin. Pointer drag behavior is untouched.
   const kbActive = keyboardMove !== null;
   useEffect(() => {
     if (!kbActive) return;

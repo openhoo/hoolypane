@@ -56,8 +56,10 @@ export async function buildAlignedTracks(
   }));
 }
 
-// Shared scratch-directory registry for the recorder unit suites: each test registers its mkdtemp
-// directory and vitest's shared afterEach removes whatever is registered when the test ends.
+// Shared scratch-directory registry for unit suites: each test registers its mkdtemp directory
+// and vitest's shared afterEach removes whatever is registered when the test ends. Unlike
+// buildAlignedTracks above, these two helpers are re-exported from the package barrel so
+// cross-package suites (the runner's verify suite) register through the same registry.
 const scratchDirectories: string[] = [];
 
 export function trackScratchDirectory(directory: string): void {

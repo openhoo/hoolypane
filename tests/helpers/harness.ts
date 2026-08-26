@@ -4,10 +4,15 @@ import { join, resolve } from "node:path";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
 import { electronExecutablePath } from "../electron-executable.js";
 import { LINUX_SOFTWARE_RENDERING_ARGS, REPO_ROOT, type FixtureServer } from "./desktop-runtime.js";
-import { errorMessage } from "@hoolypane/contracts";
+import { errorMessage, VIEWPORT_PRESETS } from "@hoolypane/contracts";
 import { fixtureOrigin } from "../fixtures/ports.js";
 export { startFixtureServer, type FixtureServer } from "./desktop-runtime.js";
 
+
+const desktopPreset = VIEWPORT_PRESETS.find((preset) => preset.id === "desktop-1440");
+if (!desktopPreset) throw new Error("desktop-1440 preset missing");
+/** Desktop pane width, kept in lockstep with integration/cdp-input.ts's clickPaneSurface scale math. */
+const DESKTOP_PANE_WIDTH = desktopPreset.width;
 
 /** Polls fn until it returns a value other than null, undefined, or false, or the timeout elapses. */
 export async function pollUntil<T>(
@@ -66,7 +71,7 @@ export function fixturePages(application: ElectronApplication, port: number, pat
 }
 
 /** Picks the pane whose viewport width equals `width` (the desktop-1440 source pane), falling back to the first page. */
-export function locateSourcePane(pages: readonly Page[], width = 1440): Page | undefined {
+export function locateSourcePane(pages: readonly Page[], width = DESKTOP_PANE_WIDTH): Page | undefined {
   return pages.find((page) => page.viewportSize()?.width === width) ?? pages[0];
 }
 
@@ -94,8 +99,12 @@ export async function launchDesktopApp(options: LaunchDesktopAppOptions): Promis
   const userDataDir = options.userDataDir ?? await mkdtemp(join(tmpdir(), "hoolypane-test-"));
   let application: ElectronApplication | undefined;
   try {
+    // Drop the app's own HOOLYPANE_* namespace from the inherited parent environment: the
+    // app's test-only knobs must come solely from options.extraEnv, so stray exports left in
+    // the invoking shell (e.g. a leftover HOOLYPANE_TEST_MODE) can never alter suites that
+    // did not opt in. Suites needing them set them explicitly via extraEnv.
     const environment = Object.fromEntries(
-      Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+      Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && !entry[0].startsWith("HOOLYPANE_")),
     );
     Object.assign(environment, options.extraEnv);
     if (process.platform === "linux") {

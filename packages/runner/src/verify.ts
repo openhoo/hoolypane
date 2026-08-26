@@ -73,8 +73,8 @@ async function certifyManifestHashes(outputDir: string, manifestPath: string, re
     let actual: string;
     try {
       actual = verifiedHashes[key] ?? (await sha256File(resolve(outputDir, key)));
-    } catch {
-      throw new Error(`${manifestPath} artifact ${key} fails sha256 certification`);
+    } catch (error) {
+      throw new Error(`${manifestPath} artifact ${key} fails sha256 certification (${errorMessage(error)})`);
     }
     if (actual !== expected) throw new Error(`${manifestPath} artifact ${key} fails sha256 certification`);
   }

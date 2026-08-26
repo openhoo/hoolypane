@@ -126,6 +126,12 @@ interface FlowRunState {
   outcomeDecided: boolean;
 }
 
+// Force-exit backstop window armed by armSignals below on the FIRST SIGINT/SIGTERM only: from
+// that point on, a wedged graceful teardown must still exit like the second-signal path instead
+// of hanging the CLI. Provenance: the second-signal/force-exit backstop convention documented
+// beside EXIT_INTERRUPTED in cli-arguments.ts.
+const SIGNAL_FORCE_EXIT_MS = 10_000;
+
 function armSignals(state: FlowRunState): () => void {
   const onSignal = (): void => {
     // A second SIGINT/SIGTERM means "stop now": bypass graceful teardown like the force timer below.
@@ -133,7 +139,7 @@ function armSignals(state: FlowRunState): () => void {
     state.interrupted = true;
     state.flowAbort.abort();
     state.signal.resolve();
-    state.signalDeadline = setTimeout(() => process.exit(EXIT_INTERRUPTED), 10_000);
+    state.signalDeadline = setTimeout(() => process.exit(EXIT_INTERRUPTED), SIGNAL_FORCE_EXIT_MS);
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
@@ -325,8 +331,8 @@ export async function runFlow(args: RunArguments): Promise<RunResult> {
       try { await state.recorder.finalize({ status: "failed", failures: [], events: [] }); } catch { /* best effort */ }
     }
     await Promise.allSettled([flowCompiled.cleanup(), configCompiled.cleanup()]);
-    // Disarm the force-exit backstop only after every teardown await has settled: a wedged
-    // close(), finalize(), or cleanup() must still be bounded by the documented 10s window.
+    // Disarm the force-exit backstop (armed by armSignals on the first SIGINT/SIGTERM) only
+    // after every teardown await has settled.
     clearTimeout(state.signalDeadline);
   }
 }
