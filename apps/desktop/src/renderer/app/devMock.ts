@@ -164,6 +164,12 @@ function apply(command: ChromeCommand): void {
     case "record-stop":
       patch({ recording: false });
       break;
+    default: {
+      // Compile-time drift guard mirroring main's handleCommand switch: an unmatched command
+      // kind must fail typecheck, not silently no-op through the success tail.
+      const exhaustive: never = command;
+      return exhaustive;
+    }
   }
   // Mirror main's success tail (handleCommand): every completed command resets lastError
   // before republishing, so one rejected command cannot pin the error toast until reload.

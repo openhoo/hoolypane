@@ -16,6 +16,7 @@ import {
   geometryForViewport,
   MANIFEST_FILE,
   POST_ROLL_US,
+  RUN_STATE_FILE,
   VALIDATOR_VERSION,
   type AlignmentResult,
   type CompositeGeometry,
@@ -98,10 +99,6 @@ async function atomicJson(path: string, value: unknown): Promise<void> {
 function serializeRunState(runId: string, state: RecordingState, contract: typeof CAPTURE_CONTRACT | null): string {
   return `${JSON.stringify({ runId, state, contract }, null, 2)}\n`;
 }
-
-// The manifest certifies this exact filename against transition()'s persisted bytes; writeRunState,
-// start()'s stale-output sweep, and writeFinalManifest must all share it.
-const RUN_STATE_FILE = "run-state.json";
 
 export class RecordingSession {
   private state: RecordingState = "awaiting-initial-frames";

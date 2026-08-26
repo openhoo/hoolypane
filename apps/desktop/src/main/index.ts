@@ -99,7 +99,7 @@ type StopFlowOutcome = { kind: "blocked"; reasons: string[] } | { kind: "handled
  * pending observations, actions observed while the barrier is up are buffered instead of applied
  * (see acceptSourceAction), and the buffer drains once the barrier lifts.
  */
-async function runWithFlushBarrier<T>(paneRegistry: PaneRegistry, settle: () => Promise<T>): Promise<T> {
+async function runWithFlushBarrier(paneRegistry: PaneRegistry, settle: () => Promise<void>): Promise<void> {
   flushBarrier = true;
   try {
     for (const record of paneRegistry.panes.values()) record.view.webContents.send(IPC_CHANNELS.flush);

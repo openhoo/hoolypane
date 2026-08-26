@@ -16,9 +16,9 @@ interface BuiltAlignedTrack { readonly id: string; readonly spool: FrameSpool; r
 
 /**
  * Shared synthetic spool-track builder for encodeAligned consumers (test-only support, deliberately
- * not re-exported from the package barrel): appends each spec's synthesized JPEGs into
- * `<directory>/raw/<id>`, aligns the recorded frames onto [t0Us, durationFrames) slots at fps, and
- * returns the exact track tuple encodeAligned expects.
+ * not re-exported from the package barrel): appends each spec's synthesized JPEGs into the id-keyed
+ * spool files `<directory>/raw/<id>.jpeg.bin` (+ `<id>.index.json`), aligns the recorded frames
+ * onto [t0Us, durationFrames) slots at fps, and returns the exact track tuple encodeAligned expects.
  */
 export async function buildAlignedTracks(
   directory: string,
@@ -28,7 +28,13 @@ export async function buildAlignedTracks(
   fps: 30 | 60,
   options: { readonly swallowCloseErrors?: boolean } = {},
 ): Promise<BuiltAlignedTrack[]> {
+  // Duplicate ids would interleave appends into one spool file while each FrameSpool allocates
+  // offsets from zero — loud failure here beats far-away corruption (mirrors CaptureSpool.create()).
+  // The check runs synchronously before any await, so it races nothing.
+  const seenIds = new Set<string>();
   return Promise.all(specs.map(async (spec): Promise<BuiltAlignedTrack> => {
+    if (seenIds.has(spec.id)) throw new Error(`duplicate aligned track id: ${spec.id}`);
+    seenIds.add(spec.id);
     const spool = new FrameSpool(spec.id, join(directory, ARTIFACT_DIRECTORIES.raw));
     await spool.open();
     let primaryError: unknown;

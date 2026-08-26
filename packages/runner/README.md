@@ -44,6 +44,14 @@ hoolypane run checkout.flow.ts [--config hoolypane.config.ts] [--output recordin
 
 `--config` defaults to `hoolypane.config.ts` next to the current working directory. The runner writes the encoded composite video, the recording `manifest.json`, and Playwright traces to the output directory.
 
+Verify a finished recording directory:
+
+```sh
+hoolypane verify recordings
+```
+
+`verify <output-dir>` verifies the manifest and encoded frames of a finished recording. It exits 0 when every check passes, and exits 1 when usage is wrong or verification fails: the manifest is missing or unparsable, its timeline or geometry disagrees with the recorded artifacts, or an artifact fails the manifest's sha256 certification.
+
 ## License
 
 AGPL-3.0-only. Bundled FFmpeg binaries are GPL-3.0-or-later; see `LICENSE-FFMPEG.txt` for source and license links.

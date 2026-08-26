@@ -3,7 +3,7 @@ import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { errorMessage, IPC_CHANNELS } from "@hoolypane/contracts";
 import { fixturePages, launchDesktopApp, pollUntil, startFixtureServer, teardownDesktopSuite, type FixtureServer } from "../helpers/harness.js";
-import { FIXTURE_PORTS } from "../fixtures/ports.js";
+import { FIXTURE_PORTS, fixtureOrigin } from "../fixtures/ports.js";
 
 const FIXTURE_PORT = FIXTURE_PORTS.resilience;
 
@@ -91,12 +91,12 @@ describe("desktop replay and security resilience", () => {
         clearTimeout(timer);
         ipcMain.removeListener(channels.replayResult, listener);
       }
-    }, { replay: IPC_CHANNELS.replay, replayResult: IPC_CHANNELS.replayResult, port: `http://127.0.0.1:${FIXTURE_PORT}` }) as { ok: boolean; reason?: string };
+    }, { replay: IPC_CHANNELS.replay, replayResult: IPC_CHANNELS.replayResult, port: fixtureOrigin(FIXTURE_PORT) }) as { ok: boolean; reason?: string };
     expect(stale.ok).toBe(false);
     expect(stale.reason).toMatch(/^stale document generation 999, current \d+$/);
 
     await (await sourcePage()).getByTestId("name").fill("stale-before-navigation");
-    await chrome.locator("#address").fill(`http://127.0.0.1:${FIXTURE_PORT}/next`);
+    await chrome.locator("#address").fill(`${fixtureOrigin(FIXTURE_PORT)}/next`);
     await chrome.locator("#address").press("Enter");
     await waitForRemotePages("/next");
     await (await sourcePage("/next")).getByTestId("name").fill("after-navigation");
@@ -111,8 +111,8 @@ describe("desktop replay and security resilience", () => {
     await page.evaluate(() => window.open("mailto:security@example.test"));
     await waitForStablePageCount(pageCount);
 
-    const downloadState = await application.evaluate(async ({ webContents }, port) => {
-      const pane = webContents.getAllWebContents().find((contents) => contents.getURL() === `http://127.0.0.1:${port}/next`);
+    const downloadState = await application.evaluate(async ({ webContents }, origin) => {
+      const pane = webContents.getAllWebContents().find((contents) => contents.getURL() === `${origin}/next`);
       if (!pane) throw new Error("pane missing for download test");
       const completion = Promise.withResolvers<string>();
       const onDownload = (_event: Electron.Event, item: Electron.DownloadItem) => setImmediate(() => completion.resolve(item.getState()));
@@ -125,20 +125,20 @@ describe("desktop replay and security resilience", () => {
         clearTimeout(timer);
         pane.session.removeListener("will-download", onDownload);
       }
-    }, FIXTURE_PORT);
+    }, fixtureOrigin(FIXTURE_PORT));
     expect(downloadState).toBe("cancelled");
 
-    await page.evaluate((url) => window.open(url), `http://127.0.0.1:${FIXTURE_PORT}/popup`);
+    await page.evaluate((url) => window.open(url), `${fixtureOrigin(FIXTURE_PORT)}/popup`);
     await waitForStablePageCount(pageCount);
     await waitForRemotePages("/popup", 1);
   }, 20_000);
 
   it("keeps siblings alive when one renderer crashes", async () => {
-    const pid = await application.evaluate(({ webContents }, port) => {
-      const pane = webContents.getAllWebContents().find((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`));
+    const pid = await application.evaluate(({ webContents }, origin) => {
+      const pane = webContents.getAllWebContents().find((contents) => contents.getURL().startsWith(origin));
       if (!pane) throw new Error("pane missing for crash test");
       return pane.getOSProcessId();
-    }, FIXTURE_PORT);
+    }, fixtureOrigin(FIXTURE_PORT));
     if (process.platform === "win32") {
       const result = spawnSync("taskkill.exe", ["/PID", String(pid), "/F", "/T"]);
       if (result.status !== 0) throw new Error(`taskkill failed: ${result.stderr.toString()}`);

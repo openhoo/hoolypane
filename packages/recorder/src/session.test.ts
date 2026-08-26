@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Writable } from "node:stream";
 import sharp from "sharp";
-import { durationFrameCount } from "./capture-contract.js";
+import { durationFrameCount, RUN_STATE_FILE } from "./capture-contract.js";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ViewportSpec } from "@hoolypane/contracts";
+import { DEFAULT_COMPOSITE_BACKGROUND, type ViewportSpec } from "@hoolypane/contracts";
 import type { FrameSpool } from "./spool.js";
 import { RecordingSession, type RecordingTarget } from "./session.js";
 
@@ -25,7 +25,7 @@ const directories: string[] = [];
 afterEach(async () => Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))));
 
 function options(outputDir: string, overrides: { readonly keepRaw?: boolean } = {}) {
-  return { recording: { fps: 30 as const, jpegQuality: 85, compositeMaxSize: { width: 128, height: 128 }, compositeBackground: "#111318", keepRaw: overrides.keepRaw ?? false }, timeoutMs: 100, outputDir };
+  return { recording: { fps: 30 as const, jpegQuality: 85, compositeMaxSize: { width: 128, height: 128 }, compositeBackground: DEFAULT_COMPOSITE_BACKGROUND, keepRaw: overrides.keepRaw ?? false }, timeoutMs: 100, outputDir };
 }
 
 describe("recording session", () => {
@@ -119,14 +119,14 @@ describe("recording session", () => {
     await writeFile(join(outputDir, "traces", "stale.trace"), "stale");
     await writeFile(join(outputDir, "manifest.json"), "{}");
     await writeFile(join(outputDir, "diagnostics.json"), "{}");
-    await writeFile(join(outputDir, "run-state.json"), "{}");
+    await writeFile(join(outputDir, RUN_STATE_FILE), "{}");
     const session = new RecordingSession(options(outputDir));
     await session.start([new FakeTarget()]);
     expect(existsSync(join(outputDir, "videos", "stale.webm"))).toBe(false);
     expect(existsSync(join(outputDir, "traces", "stale.trace"))).toBe(false);
     expect(existsSync(join(outputDir, "manifest.json"))).toBe(false);
     expect(existsSync(join(outputDir, "diagnostics.json"))).toBe(false);
-    const state = JSON.parse(await readFile(join(outputDir, "run-state.json"), "utf8")) as { state: string };
+    const state = JSON.parse(await readFile(join(outputDir, RUN_STATE_FILE), "utf8")) as { state: string };
     expect(state.state).toBe("awaiting-initial-frames");
     await session.finalize({ status: "failed", failures: [] });
   });

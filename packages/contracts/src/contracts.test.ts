@@ -44,7 +44,8 @@ describe("action language", () => {
       { kind: "scroll", locator, horizontalRatio: 0.25, verticalRatio: 0.75 },
     ];
     expect(actions.map((action) => ActionSchema.parse(action))).toEqual(actions);
-    expect(ActionEnvelopeSchema.parse({ actionId: 1, documentGeneration: 0, sourcePaneId: "pane-1", action: actions[1] }).action.kind).toBe("click");
+    const envelope = { actionId: 1, documentGeneration: 0, sourcePaneId: "pane-1", action: actions[1]! };
+    expect(ActionEnvelopeSchema.parse(envelope)).toEqual(envelope);
   });
 });
 

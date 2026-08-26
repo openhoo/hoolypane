@@ -10,7 +10,7 @@ import { buildContextOptions } from "./run-flow.js";
 import { compileModule } from "./module-loader.js";
 import { verifyDirectory } from "./verify.js";
 import ffmpegPath from "ffmpeg-static";
-import { HoolypaneConfigSchema, VIEWPORT_PRESETS } from "@hoolypane/contracts";
+import { DEFAULT_COMPOSITE_BACKGROUND, HoolypaneConfigSchema, VIEWPORT_PRESETS } from "@hoolypane/contracts";
 import { awaitChildExit, ffmpegArguments, filterGraph } from "@hoolypane/recorder";
 
 describe("runner CLI", () => {
@@ -120,22 +120,18 @@ function runFfmpeg(args: readonly string[]): Promise<void> {
   return awaitChildExit(child, child.stderr!, `ffmpeg ${binary}`).completion.promise;
 }
 const FIXTURE_TRACK_SIZE = 64;
-const FIXTURE_BACKGROUND = "#111318";
-
-// Encodes one 64x64 CFR track plus a composite using @hoolypane/recorder's exported
-// production filter_complex builder over a single-track stub, while feeding real files
-// instead of input pipes; the parity test below pins the assembled argv tail to the
-// encoder's production builders so encoder drift fails loudly here.
-function recordingEncodeArguments(directory: string, fps: 30 | 60, frames: number): readonly string[] {
-  const tracks = [
+// Both stub shapes feed pure argv builders that read only id/geometry fields; spools and
+// mappings are consumed solely by the frame pump, which never runs in these tests.
+const stubTrackGrid = () => ({
+  tracks: [
     {
       id: "one",
       spool: null,
       mappings: [],
       geometry: { id: "one", encodedWidth: FIXTURE_TRACK_SIZE, encodedHeight: FIXTURE_TRACK_SIZE },
     },
-  ] as unknown as Parameters<typeof filterGraph>[0];
-  const grid = {
+  ],
+  grid: {
     columns: 1,
     rows: 1,
     tileWidth: FIXTURE_TRACK_SIZE,
@@ -144,12 +140,22 @@ function recordingEncodeArguments(directory: string, fps: 30 | 60, frames: numbe
     unscaledHeight: FIXTURE_TRACK_SIZE,
     outputWidth: FIXTURE_TRACK_SIZE,
     outputHeight: FIXTURE_TRACK_SIZE,
-  } as unknown as Parameters<typeof filterGraph>[1];
+  },
+});
+
+// Encodes one 64x64 CFR track plus a composite using @hoolypane/recorder's exported
+// production filter_complex builder over a single-track stub, while feeding real files
+// instead of input pipes; the parity test below pins the assembled argv tail to the
+// encoder's production builders so encoder drift fails loudly here.
+function recordingEncodeArguments(directory: string, fps: 30 | 60, frames: number): readonly string[] {
+  const stubs = stubTrackGrid();
+  const tracks = stubs.tracks as unknown as Parameters<typeof filterGraph>[0];
+  const grid = stubs.grid as unknown as Parameters<typeof filterGraph>[1];
   const outputOptions = ["-an", "-frames:v", String(frames), "-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8", "-fps_mode", "passthrough"];
   return [
     "-hide_banner", "-loglevel", "error", "-y",
     "-probesize", "32", "-analyzeduration", "0", "-c:v", "mjpeg", "-f", "image2pipe", "-framerate", String(fps), "-i", join(directory, "frames.mjpeg"),
-    "-filter_complex", filterGraph(tracks, grid, fps, FIXTURE_BACKGROUND),
+    "-filter_complex", filterGraph(tracks, grid, fps, DEFAULT_COMPOSITE_BACKGROUND),
     "-map", "[track0]", ...outputOptions, join(directory, "videos", "one.webm"),
     "-map", "[composite]", ...outputOptions, join(directory, "videos", "composite.webm"),
   ];
@@ -163,35 +169,18 @@ async function writeRecordingFixture(directory: string, fps: 30 | 60, frames: nu
 
 describe("recording fixture parity", () => {
   it("pins the fixture argv to the encoder's filter graph and output options", () => {
-    // The stubs satisfy only what the pure builders read (id/geometry); spools and mappings are
-    // consumed solely by the frame pump, which never runs here.
-    const tracks = [
-      {
-        id: "one",
-        spool: null,
-        mappings: [],
-        geometry: { id: "one", encodedWidth: FIXTURE_TRACK_SIZE, encodedHeight: FIXTURE_TRACK_SIZE },
-      },
-    ] as unknown as Parameters<typeof ffmpegArguments>[1];
-    const grid = {
-      columns: 1,
-      rows: 1,
-      tileWidth: FIXTURE_TRACK_SIZE,
-      tileHeight: FIXTURE_TRACK_SIZE,
-      unscaledWidth: FIXTURE_TRACK_SIZE,
-      unscaledHeight: FIXTURE_TRACK_SIZE,
-      outputWidth: FIXTURE_TRACK_SIZE,
-      outputHeight: FIXTURE_TRACK_SIZE,
-    } as unknown as Parameters<typeof ffmpegArguments>[2];
+    const stubs = stubTrackGrid();
+    const tracks = stubs.tracks as unknown as Parameters<typeof ffmpegArguments>[1];
+    const grid = stubs.grid as unknown as Parameters<typeof ffmpegArguments>[2];
     for (const fps of [30, 60] as const) {
       const directory = "fixture-parity-unused"; // Pure argv assembly: nothing spawns or writes.
       const emitted = recordingEncodeArguments(directory, fps, 22);
-      const expected = ffmpegArguments(directory, tracks, grid, fps, 22, FIXTURE_BACKGROUND);
+      const expected = ffmpegArguments(directory, tracks, grid, fps, 22, DEFAULT_COMPOSITE_BACKGROUND);
       const anchor = expected.indexOf("-filter_complex");
       // Both layers of the real construction path are pinned: the encoder argv embeds exactly
       // the standalone filterGraph(...) chain for the same track spec, and the fixture's tail
       // equals that argv positionally from the chain onward (chain, maps, options, paths).
-      expect(expected.slice(anchor, anchor + 2)).toEqual(["-filter_complex", filterGraph(tracks, grid, fps, FIXTURE_BACKGROUND)]);
+      expect(expected.slice(anchor, anchor + 2)).toEqual(["-filter_complex", filterGraph(tracks, grid, fps, DEFAULT_COMPOSITE_BACKGROUND)]);
       expect(emitted.slice(emitted.indexOf("-filter_complex"))).toEqual(expected.slice(anchor));
     }
   });

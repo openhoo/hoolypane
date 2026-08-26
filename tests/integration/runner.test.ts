@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runFlow } from "../../packages/runner/src/run-flow.js";
 import { pollUntil, startFixtureServer, type FixtureServer } from "../helpers/harness.js";
 import { inlineConfigSource } from "../helpers/inline-config.js";
-import { FIXTURE_PORTS } from "../fixtures/ports.js";
+import { FIXTURE_PORTS, fixtureOrigin } from "../fixtures/ports.js";
 
 const FIXTURE_PORT = FIXTURE_PORTS.runner;
 
@@ -29,7 +29,7 @@ async function outputDirectory(name: string): Promise<string> {
 }
 
 async function results(): Promise<unknown[]> {
-  return fetch(`http://127.0.0.1:${FIXTURE_PORT}/results`).then((response) => response.json()) as Promise<unknown[]>;
+  return fetch(`${fixtureOrigin(FIXTURE_PORT)}/results`).then((response) => response.json()) as Promise<unknown[]>;
 }
 
 async function waitForRecorderState(output: string, expected: string): Promise<void> {
@@ -46,7 +46,7 @@ async function waitForRecorderState(output: string, expected: string): Promise<v
 
 describe("real runner", () => {
   it("executes every action in isolated responsive contexts and records aligned artifacts", async () => {
-    await fetch(`http://127.0.0.1:${FIXTURE_PORT}/reset`);
+    await fetch(`${fixtureOrigin(FIXTURE_PORT)}/reset`);
     const output = await outputDirectory("success");
     const result = await runFlow({ flowFile: resolve("tests/fixtures/responsive.flow.ts"), configFile: resolve("tests/fixtures/hoolypane.config.ts"), outputDir: output, headed: false });
     if (result.status !== "success") {
@@ -115,7 +115,7 @@ describe("real runner", () => {
     // Inline config written beside (never inside) the wiped output directory; slow.flow waits 30s, so a
     // 5s deadline trips the timeout branch deterministically (the timer starts only after initial frames).
     const configPath = join(scratch, "hoolypane.config.ts");
-    await writeFile(configPath, inlineConfigSource(`http://127.0.0.1:${FIXTURE_PORT}`, [{ id: "desktop", name: "Desktop", width: 320, height: 240, deviceScaleFactor: 1, isMobile: false, hasTouch: false }], timeoutMs));
+    await writeFile(configPath, inlineConfigSource(fixtureOrigin(FIXTURE_PORT), [{ id: "desktop", name: "Desktop", width: 320, height: 240, deviceScaleFactor: 1, isMobile: false, hasTouch: false }], timeoutMs));
     const result = await runFlow({ flowFile: resolve("tests/fixtures/slow.flow.ts"), configFile: configPath, outputDir: output, headed: false });
     expect(result.status).toBe("failed");
     const manifest = JSON.parse(await readFile(join(output, "manifest.json"), "utf8")) as { status: string; failures: Array<{ message: string }> };

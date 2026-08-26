@@ -1,9 +1,9 @@
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { fixturePages, launchDesktopApp, locateSourcePane, pollUntil, startFixtureServer, teardownDesktopSuite, waitForFixturePanes, type FixtureServer } from "../helpers/harness.js";
-import { errorMessage, IPC_CHANNELS } from "@hoolypane/contracts";
+import { fixturePages, launchDesktopApp, locateSourcePane, pollUntil, startFixtureServer, teardownDesktopSuite, waitForFixturePanes, withReloadRetry, type FixtureServer } from "../helpers/harness.js";
+import { IPC_CHANNELS } from "@hoolypane/contracts";
 import { clickPaneSurface } from "./cdp-input.js";
-import { FIXTURE_PORTS } from "../fixtures/ports.js";
+import { FIXTURE_PORTS, fixtureOrigin } from "../fixtures/ports.js";
 
 // 4175 collided with an unrelated local dev stack; port assignment lives centrally now.
 const FIXTURE_PORT = FIXTURE_PORTS.desktop;
@@ -22,11 +22,11 @@ interface PaneSnapshot {
 }
 
 async function paneSnapshots(): Promise<Array<PaneSnapshot | null>> {
-  return application.evaluate(async ({ webContents }, port) => Promise.all(
+  return application.evaluate(async ({ webContents }, origin) => Promise.all(
     webContents.getAllWebContents()
-      .filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`))
+      .filter((contents) => contents.getURL().startsWith(origin))
       .map((contents) => contents.executeJavaScript(`(() => { const name = document.querySelector('[data-testid="name"]'); const theme = document.querySelector('[data-testid="theme"]'); const subscribe = document.querySelector('[data-testid="subscribe"]'); const status = document.querySelector('[data-testid="status"]'); const scroller = document.querySelector('[data-testid="scroller"]'); if (!name || !theme || !subscribe || !status || !scroller) return null; return { name: name.value, theme: theme.value, checked: subscribe.checked, status: status.textContent, scrollRatio: scroller.scrollTop / (scroller.scrollHeight - scroller.clientHeight) }; })()`)),
-  ), FIXTURE_PORT);
+  ), fixtureOrigin(FIXTURE_PORT));
 }
 
 function sourcePage(): Page {
@@ -70,7 +70,7 @@ describe("direct Electron surfaces", () => {
     // Pane cards can only render from a received ChromeState snapshot, so their presence
     // plus a populated address input proves the renderer got published state after launch.
     await pollUntil(async () => (await chrome.locator(".pane-card").count()) === 5 || null, 15_000);
-    await pollUntil(async () => (await chrome.locator("#address").inputValue()).startsWith(`http://127.0.0.1:${FIXTURE_PORT}`) || null, 10_000);
+    await pollUntil(async () => (await chrome.locator("#address").inputValue()).startsWith(fixtureOrigin(FIXTURE_PORT)) || null, 10_000);
 
     // Regression pin for the lost-initial-push bug: subscribe() must PULL state via
     // stateRequest exactly once per subscription. A fresh chrome reload is one clean
@@ -85,7 +85,7 @@ describe("direct Electron surfaces", () => {
     }, IPC_CHANNELS.stateRequest);
     await chrome.evaluate(() => location.reload());
     await pollUntil(async () => (await chrome.locator(".pane-card").count()) === 5 || null, 15_000);
-    await pollUntil(async () => (await chrome.locator("#address").inputValue()).startsWith(`http://127.0.0.1:${FIXTURE_PORT}`) || null, 10_000);
+    await pollUntil(async () => (await chrome.locator("#address").inputValue()).startsWith(fixtureOrigin(FIXTURE_PORT)) || null, 10_000);
     const stateRequests = await application.evaluate(() => (globalThis as typeof globalThis & { __stateRequestCount?: number }).__stateRequestCount ?? -1);
     expect(stateRequests).toBe(1);
   }, 30_000);
@@ -95,10 +95,10 @@ describe("direct Electron surfaces", () => {
     await waitForFixturePanes(application, FIXTURE_PORT, 5);
     const chromeText = await chrome.locator("body").innerText();
     expect(chromeText).toContain("Desktop 1440");
-    const initial = await application.evaluate(async ({ webContents }, port) => {
-      const panes = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`));
+    const initial = await application.evaluate(async ({ webContents }, origin) => {
+      const panes = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(origin));
       return Promise.all(panes.map(async (contents) => contents.executeJavaScript(`(async () => ({ width: innerWidth, height: innerHeight, dpr: devicePixelRatio, touch: navigator.maxTouchPoints, permission: (await navigator.permissions.query({name:'geolocation'})).state }))()`)));
-    }, FIXTURE_PORT);
+    }, fixtureOrigin(FIXTURE_PORT));
     expect(initial).toHaveLength(5);
     expect(initial.map((value) => [value.width, value.height, value.dpr])).toEqual(expect.arrayContaining([[1440, 900, 1], [1280, 800, 1], [768, 1024, 2], [390, 844, 3], [360, 800, 3]]));
     expect(initial.every((value) => value.permission === "denied")).toBe(true);
@@ -121,38 +121,25 @@ describe("direct Electron surfaces", () => {
       }
     };
     // A pane renderer occasionally reloads mid-test (webContents identity change), which
-    // invalidates execution contexts or drops in-flight mirrored input; retry the whole
-    // action together with its convergence poll once before giving up.
-    const withReloadRetry = async (label: string, action: () => Promise<void>, predicate: (snapshots: readonly PaneSnapshot[]) => boolean): Promise<void> => {
-      let firstError: unknown;
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        try {
-          await action();
-          await waitForPaneState(predicate, label);
-          return;
-        } catch (error) {
-          if (attempt === 1) throw new Error(`${label} failed on retry (first attempt: ${errorMessage(firstError)})`, { cause: error });
-          firstError = error;
-        }
-      }
-    };
-    await withReloadRetry("fill", () => fillSource("Mirrored value"), (snapshots) => snapshots.every((snapshot) => snapshot.name === "Mirrored value"));
-    await withReloadRetry("check", () => clickPaneSurface(application, chrome, { port: FIXTURE_PORT, testId: "subscribe" }), (snapshots) => snapshots.every((snapshot) => snapshot.checked));
-    await withReloadRetry("select", selectSourceDark, (snapshots) => snapshots.every((snapshot) => snapshot.theme === "dark"));
-    await withReloadRetry("click", () => clickPaneSurface(application, chrome, { port: FIXTURE_PORT, testId: "apply", expectedStatus: "applied" }), (snapshots) => snapshots.every((snapshot) => snapshot.status === "applied"));
-    await withReloadRetry("press", pressSourceEnter, (snapshots) => snapshots.every((snapshot) => snapshot.status === "entered"));
-    await withReloadRetry("scroll", scrollSource, (snapshots) => snapshots.every((snapshot) => snapshot.scrollRatio > 0.95));
+    // invalidates execution contexts or drops in-flight mirrored input; the shared helper
+    // retries the whole action together with its convergence poll once before giving up.
+    await withReloadRetry("fill", async () => { await fillSource("Mirrored value"); await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.name === "Mirrored value"), "fill"); });
+    await withReloadRetry("check", async () => { await clickPaneSurface(application, chrome, { port: FIXTURE_PORT, testId: "subscribe" }); await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.checked), "check"); });
+    await withReloadRetry("select", async () => { await selectSourceDark(); await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.theme === "dark"), "select"); });
+    await withReloadRetry("click", async () => { await clickPaneSurface(application, chrome, { port: FIXTURE_PORT, testId: "apply", expectedStatus: "applied" }); await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.status === "applied"), "click"); });
+    await withReloadRetry("press", async () => { await pressSourceEnter(); await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.status === "entered"), "press"); });
+    await withReloadRetry("scroll", async () => { await scrollSource(); await waitForPaneState((snapshots) => snapshots.every((snapshot) => snapshot.scrollRatio > 0.95), "scroll"); });
 
     await chrome.getByRole("button", { name: "Add custom" }).click();
     await waitForFixturePanes(application, FIXTURE_PORT, 6);
     await chrome.getByRole("button", { name: "Rotate" }).first().click();
     // rotatePane swaps the viewport dimensions; the emulated pane must report them swapped.
-    await pollUntil(async () => await application.evaluate(async ({ webContents }, port) => {
+    await pollUntil(async () => await application.evaluate(async ({ webContents }, origin) => {
       const dimensions = await Promise.all(webContents.getAllWebContents()
-        .filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`))
+        .filter((contents) => contents.getURL().startsWith(origin))
         .map((contents) => contents.executeJavaScript("({ width: innerWidth, height: innerHeight })")));
       return dimensions.some((dimension) => dimension.width === 900 && dimension.height === 1440);
-    }, FIXTURE_PORT) || null, 10_000);
+    }, fixtureOrigin(FIXTURE_PORT)) || null, 10_000);
     await chrome.getByRole("button", { name: "Focus" }).first().click();
     await pollUntil(async () => await chrome.locator(".pane-card.focused").count() === 1 || null, 10_000);
     await chrome.getByRole("button", { name: "Unfocus" }).first().click();

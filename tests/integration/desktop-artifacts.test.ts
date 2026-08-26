@@ -10,7 +10,7 @@ import { OVERVIEW_ERROR_TILE_COLOR } from "../../apps/desktop/src/main/screensho
 import { launchDesktopApp, pollUntil, startFixtureServer, teardownDesktopSuite, waitForFixturePanes, type FixtureServer } from "../helpers/harness.js";
 import { inlineConfigSource } from "../helpers/inline-config.js";
 import { clickPaneSurface } from "./cdp-input.js";
-import { FIXTURE_PORTS } from "../fixtures/ports.js";
+import { FIXTURE_PORTS, fixtureOrigin } from "../fixtures/ports.js";
 
 const FIXTURE_PORT = FIXTURE_PORTS.artifacts;
 
@@ -35,7 +35,7 @@ async function waitForFile(path: string): Promise<void> {
 }
 
 async function appliedCount(): Promise<number> {
-  return fetch(`http://127.0.0.1:${FIXTURE_PORT}/applied-count`)
+  return fetch(`${fixtureOrigin(FIXTURE_PORT)}/applied-count`)
     .then((response) => response.json())
     .then((value: { count: number }) => value.count);
 }
@@ -129,9 +129,9 @@ describe("desktop screenshots and recorded flows", () => {
     expect(flowSource).toContain('import { defineFlow } from "@hoolypane/runner";');
     expect(flowSource).toContain('getByTestId("apply").click()');
 
-    await fetch(`http://127.0.0.1:${FIXTURE_PORT}/reset`);
+    await fetch(`${fixtureOrigin(FIXTURE_PORT)}/reset`);
     const configPath = join(directory, "hoolypane.config.ts");
-    await writeFile(configPath, inlineConfigSource(`http://127.0.0.1:${FIXTURE_PORT}`, [{ id: "one", name: "One", width: 320, height: 240, deviceScaleFactor: 1, isMobile: false, hasTouch: false }, { id: "two", name: "Two", width: 180, height: 320, deviceScaleFactor: 1, isMobile: true, hasTouch: true }]));
+    await writeFile(configPath, inlineConfigSource(fixtureOrigin(FIXTURE_PORT), [{ id: "one", name: "One", width: 320, height: 240, deviceScaleFactor: 1, isMobile: false, hasTouch: false }, { id: "two", name: "Two", width: 180, height: 320, deviceScaleFactor: 1, isMobile: true, hasTouch: true }]));
     const runOutput = join(directory, "runner-output");
     const run = await runFlow({ flowFile: flowPath, configFile: configPath, outputDir: runOutput, headed: false });
     expect(run.status).toBe("success");
@@ -172,6 +172,10 @@ describe("desktop screenshots and recorded flows", () => {
   it("marks missing panes in the overview export", async () => {
     // This test overrides export env and closes a pane, so it runs against a dedicated
     // app instance; the shared app keeps its baseline env and all five panes intact.
+    // Self-sufficiency: never depend on the earlier independent overview test having run;
+    // refresh the baseline PNG from the shared instance before comparing against it.
+    await chrome.getByRole("button", { name: "Save Overview PNG" }).click();
+    await waitForFile(overviewPng);
     const isolatedDir = await mkdtemp(join(tmpdir(), "hoolypane-artifacts-error-"));
     const launch = await launchDesktopApp({
       port: FIXTURE_PORT,
@@ -185,11 +189,11 @@ describe("desktop screenshots and recorded flows", () => {
     });
     try {
       await waitForFixturePanes(launch.application, FIXTURE_PORT, 5);
-      await launch.application.evaluate(({ webContents }, port) => {
-        const pane = webContents.getAllWebContents().find((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`));
+      await launch.application.evaluate(({ webContents }, origin) => {
+        const pane = webContents.getAllWebContents().find((contents) => contents.getURL().startsWith(origin));
         if (!pane) throw new Error("pane missing for error-overview test");
         pane.close({ waitForBeforeUnload: false });
-      }, FIXTURE_PORT);
+      }, fixtureOrigin(FIXTURE_PORT));
       await waitForFixturePanes(launch.application, FIXTURE_PORT, 4);
       await launch.chrome.getByRole("button", { name: "Save Overview PNG" }).click();
       await waitForFile(errorOverviewPng);

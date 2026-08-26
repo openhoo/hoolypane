@@ -2,6 +2,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_COMPOSITE_BACKGROUND } from "@hoolypane/contracts";
 import { buildAlignedTracks } from "../../packages/recorder/src/test-support.js";
 import { CAPTURE_CONTRACT, VALIDATOR_VERSION } from "../../packages/recorder/src/capture-contract.js";
 import { encodeAligned } from "../../packages/recorder/src/encoder.js";
@@ -34,7 +35,7 @@ describe("ten-second recording contract", () => {
       timestampUs: (sequence: number) => Math.floor(sequence * 1_000_000 / specification.sourceFps),
     })), 0, DURATION_FRAMES, FPS);
     const encodeStartedAtMs = performance.now();
-    await encodeAligned(OUTPUT, tracks, FPS, DURATION_FRAMES, { compositeMaxSize: { width: 320, height: 320 }, compositeBackground: "#111318" });
+    await encodeAligned(OUTPUT, tracks, FPS, DURATION_FRAMES, { compositeMaxSize: { width: 320, height: 320 }, compositeBackground: DEFAULT_COMPOSITE_BACKGROUND });
     const encodeSeconds = Math.round((performance.now() - encodeStartedAtMs)) / 1000;
     const verification = await verifyArtifacts(OUTPUT, FPS, DURATION_FRAMES, {
       tracks: tracks.map((track) => track.geometry),

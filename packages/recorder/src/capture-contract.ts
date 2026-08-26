@@ -37,6 +37,9 @@ export const COMPOSITE_VIDEO_NAME = "composite.webm";
 export const ARTIFACT_DIRECTORIES = { videos: "videos", traces: "traces", raw: "raw" } as const;
 export const MANIFEST_FILE = "manifest.json";
 export const DIAGNOSTICS_FILE = "diagnostics.json";
+// Run-state filename shared by writeRunState, start()'s stale-output sweep, and writeFinalManifest's
+// sha256 certification; centralized beside the sibling names so no consumer re-types the literal.
+export const RUN_STATE_FILE = "run-state.json";
 
 export interface CompositeGeometry { readonly columns: number; readonly rows: number; readonly tileWidth: number; readonly tileHeight: number; readonly unscaledWidth: number; readonly unscaledHeight: number; readonly outputWidth: number; readonly outputHeight: number }
 export interface RecorderFailure { readonly message: string; readonly viewportId?: string; readonly stack?: string }

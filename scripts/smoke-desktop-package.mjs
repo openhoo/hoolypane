@@ -4,7 +4,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 // Node 24 strips types natively; plain-node scripts need the exact .ts specifier (no .js remap).
-import { FIXTURE_PORTS } from "../tests/fixtures/ports.ts";
+import { FIXTURE_PORTS, fixtureOrigin } from "../tests/fixtures/ports.ts";
 import {
   LINUX_SOFTWARE_RENDERING_ARGS,
   applyLinuxSoftwareRenderingEnv,
@@ -40,7 +40,7 @@ async function waitForDesktop() {
     if (appExit) throw new Error(`packaged desktop exited before readiness (${appExit.code ?? appExit.signal}): ${logs}`);
     try {
       const targets = await fetch(`http://127.0.0.1:${debuggingPort}/json/list`).then((response) => response.json());
-      const fixtureTargets = targets.filter((target) => target.url === `http://127.0.0.1:${fixturePort}/`);
+      const fixtureTargets = targets.filter((target) => target.url === `${fixtureOrigin(fixturePort)}/`);
       if (targets.some((target) => target.url?.startsWith("file:") && target.title === "Hoolypane") && fixtureTargets.length >= 5) return;
     } catch { /* debugger not ready */ }
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
@@ -64,7 +64,7 @@ try {
   let executable;
   // Isolated user-data dir: without it the packaged app resolves userData from the host
   // profile, restores its saved panes, and persists fixture URLs into the real workspace.
-  let launchArgs = [`--remote-debugging-port=${debuggingPort}`, `--user-data-dir=${join(temporary, "user-data")}`, "--url", `http://127.0.0.1:${fixturePort}`];
+  let launchArgs = [`--remote-debugging-port=${debuggingPort}`, `--user-data-dir=${join(temporary, "user-data")}`, "--url", fixtureOrigin(fixturePort)];
   let environment = { ...process.env };
 
   if (process.platform === "linux") {

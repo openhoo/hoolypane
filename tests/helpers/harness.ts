@@ -4,6 +4,8 @@ import { join, resolve } from "node:path";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright";
 import { electronExecutablePath } from "../electron-executable.js";
 import { LINUX_SOFTWARE_RENDERING_ARGS, REPO_ROOT, type FixtureServer } from "./desktop-runtime.js";
+import { errorMessage } from "@hoolypane/contracts";
+import { fixtureOrigin } from "../fixtures/ports.js";
 export { startFixtureServer, type FixtureServer } from "./desktop-runtime.js";
 
 
@@ -25,9 +27,9 @@ export async function pollUntil<T>(
 
 /** Counts fixture-origin WebContents through Electron's authoritative registry. */
 export async function fixturePaneCount(application: ElectronApplication, port: number): Promise<number> {
-  return application.evaluate(({ webContents }, fixturePort) =>
-    webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${fixturePort}`)).length,
-  port);
+  return application.evaluate(({ webContents }, origin) =>
+    webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(origin)).length,
+  fixtureOrigin(port));
 }
 
 /** Polls until exactly `expected` fixture panes exist in Electron's WebContents registry. */
@@ -40,19 +42,32 @@ export async function waitForFixturePanes(
   await pollUntil(async () => await fixturePaneCount(application, port) === expected ? expected : null, timeoutMs);
 }
 
+/** Retries an action once when a transient renderer reload invalidates its execution context mid-run. */
+export async function withReloadRetry<T>(label: string, action: () => Promise<T>): Promise<T> {
+  try {
+    return await action();
+  } catch (firstError) {
+    try {
+      return await action();
+    } catch (error) {
+      throw new Error(`${label} failed on retry (first attempt: ${errorMessage(firstError)})`, { cause: error });
+    }
+  }
+}
+
 /**
  * Enumerates the fixture server's Playwright pages. Without `path`, every page whose URL
  * starts with the fixture origin matches; with `path`, only the exact `${origin}${path}`
  * URL matches, preserving each suite's fuzzy-vs-strict enumeration semantics.
  */
 export function fixturePages(application: ElectronApplication, port: number, path?: string): Page[] {
-  const origin = `http://127.0.0.1:${port}`;
+  const origin = fixtureOrigin(port);
   return application.context().pages().filter((page) => path === undefined ? page.url().startsWith(origin) : page.url() === `${origin}${path}`);
 }
 
-/** Picks the desktop-1440 source pane among fixture pages, falling back to the first page. */
-export function locateSourcePane(pages: readonly Page[], minWidth = 1440): Page | undefined {
-  return pages.find((page) => page.viewportSize()?.width === minWidth) ?? pages[0];
+/** Picks the pane whose viewport width equals `width` (the desktop-1440 source pane), falling back to the first page. */
+export function locateSourcePane(pages: readonly Page[], width = 1440): Page | undefined {
+  return pages.find((page) => page.viewportSize()?.width === width) ?? pages[0];
 }
 
 interface DesktopLaunch {
@@ -96,7 +111,7 @@ export async function launchDesktopApp(options: LaunchDesktopAppOptions): Promis
         resolve(REPO_ROOT, "apps/desktop"),
         `--user-data-dir=${join(userDataDir, "user-data")}`,
         "--url",
-        `http://127.0.0.1:${options.port}`,
+        fixtureOrigin(options.port),
       ],
       env: environment,
     });

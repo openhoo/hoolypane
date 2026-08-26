@@ -2,10 +2,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { errorMessage } from "@hoolypane/contracts";
-import { fixturePaneCount, fixturePages, launchDesktopApp, locateSourcePane, pollUntil, startFixtureServer, teardownDesktopSuite, type FixtureServer } from "../helpers/harness.js";
+import { fixturePaneCount, fixturePages, launchDesktopApp, locateSourcePane, pollUntil, startFixtureServer, teardownDesktopSuite, withReloadRetry, type FixtureServer } from "../helpers/harness.js";
 import { clickPaneSurface } from "../integration/cdp-input.js";
-import { FIXTURE_PORTS } from "../fixtures/ports.js";
+import { FIXTURE_PORTS, fixtureOrigin } from "../fixtures/ports.js";
 
 const FIXTURE_PORT = FIXTURE_PORTS.benchmark;
 const OUTPUT = resolve(process.env.HOOLYPANE_DESKTOP_BENCHMARK_OUTPUT ?? ".tmp/desktop-benchmark-proof.json");
@@ -51,18 +50,6 @@ async function waitForFinalInput(expected: string): Promise<boolean> {
   }
 }
 
-/** Retries a sampled evaluate once when a transient renderer reload invalidates its execution context mid-run. */
-async function withReloadRetry<T>(label: string, action: () => Promise<T>): Promise<T> {
-  try {
-    return await action();
-  } catch (firstError) {
-    try {
-      return await action();
-    } catch (error) {
-      throw new Error(`${label} failed on retry (first attempt: ${errorMessage(firstError)})`, { cause: error });
-    }
-  }
-}
 
 /** Point sample of the main process only; kept in the proof artifact alongside the aggregate peak. */
 function mainProcessRssBytes(): Promise<number> {
@@ -121,7 +108,9 @@ describe("six-pane direct compositor", () => {
     // Pairing assumes strict 1:1 samples; waitForMirrorCount only enforces a lower bound,
     // so an over- or under-collecting pane would silently misalign every latency pair.
     for (const [pageIndex, times] of clickTimes.entries()) {
-      if (times.length !== MIRROR_SAMPLES) throw new Error(`pane ${pages[pageIndex]!.url()} collected ${times.length} mirror timestamps, expected exactly ${MIRROR_SAMPLES}`);
+      // A transient renderer reload leaves __mirrorTimes undefined; report the designed message instead of crashing on a TypeError.
+      const collected = Array.isArray(times) ? times.length : -1;
+      if (collected !== MIRROR_SAMPLES) throw new Error(`pane ${pages[pageIndex]!.url()} collected ${collected} mirror timestamps, expected exactly ${MIRROR_SAMPLES}`);
     }
     const sourceIndex = pages.indexOf(source);
     const sourceTimes = clickTimes[sourceIndex]!;
@@ -155,8 +144,8 @@ describe("six-pane direct compositor", () => {
       return promise;
     }));
     const rafP95LimitMs = Math.max(20, displayCadenceP95Ms * 1.05);
-    const rafP95ByPane = await application.evaluate(async ({ webContents }, port) => {
-      const panes = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${port}`));
+    const rafP95ByPane = await application.evaluate(async ({ webContents }, origin) => {
+      const panes = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(origin));
       const values = await Promise.all(panes.map(async (contents) => {
         const sampleSource = "new Promise(resolve => { const values=[]; let previous=performance.now(); const frame=now=>{ values.push(now-previous); previous=now; if(values.length===1800){values.sort((a,b)=>a-b); resolve({id:innerWidth+'x'+innerHeight,p95:values[Math.floor(values.length*0.95)]});}else requestAnimationFrame(frame)}; requestAnimationFrame(frame); })";
         try {
@@ -167,7 +156,7 @@ describe("six-pane direct compositor", () => {
         }
       }));
       return Object.fromEntries(values.map((value: { id: string; p95: number }) => [value.id, value.p95]));
-    }, FIXTURE_PORT);
+    }, fixtureOrigin(FIXTURE_PORT));
     rssSamples.push(await mainProcessRssBytes());
 
     const rendererLongTasks = await Promise.all([chrome, ...pages].map((page) => page.evaluate(() => (globalThis as typeof globalThis & { __longTasks?: number[] }).__longTasks ?? [])));

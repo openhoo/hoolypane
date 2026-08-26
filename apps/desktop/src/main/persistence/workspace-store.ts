@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { errorMessage, isErrnoException, WORKSPACE_VERSION } from "@hoolypane/contracts";
 import { hasAtomicTempSuffix, writeFileAtomic } from "@hoolypane/contracts/fsync";
+import { stripUrlCredentials } from "../panes/url.js";
 import { WorkspaceStateSchema, defaultWorkspace, type WorkspaceState } from "../panes/workspace.js";
 import { report } from "../report.js";
 
@@ -56,9 +57,33 @@ export async function loadWorkspace(file: string): Promise<LoadedWorkspace> {
   }
   // Sanitize instead of rejecting: position entries for panes that no longer exist are stale
   // leftovers and must not resurrect when a preset id is reused (a hard reject would quarantine
-  // whole workspaces for cosmetic drift).
-  const state = pruneOrphanPositions(result.data);
+  // whole workspaces for cosmetic drift). Persisted URLs get the navigation path's hygiene:
+  // HttpUrlSchema admits userinfo, so credentials from an older build, a hand edit, or an
+  // external tool are stripped before they reach published renderer state or the next save.
+  const state = sanitizeLoadedUrls(pruneOrphanPositions(result.data));
   return { state, persistable: true };
+}
+
+/** Strips userinfo from persisted pane/shared URLs exactly like normalizeUrl on the navigation path; unparseable leftovers pass through untouched instead of failing the load. */
+function sanitizeLoadedUrls(state: WorkspaceState): WorkspaceState {
+  const sharedUrl = stripLoadedUrl(state.sharedUrl);
+  let changed = sharedUrl !== state.sharedUrl;
+  const panes = state.panes.map((pane) => {
+    const url = stripLoadedUrl(pane.url);
+    changed ||= url !== pane.url;
+    return url === pane.url ? pane : { ...pane, url };
+  });
+  return changed ? { ...state, panes, sharedUrl } : state;
+}
+
+function stripLoadedUrl(value: string): string {
+  try {
+    const parsed = new URL(value);
+    stripUrlCredentials(parsed);
+    return parsed.toString();
+  } catch {
+    return value; // unreachable while HttpUrlSchema guards persistence; kept so future schema loosening cannot leak through here
+  }
 }
 
 function pruneOrphanPositions(state: WorkspaceState): WorkspaceState {
@@ -75,13 +100,14 @@ export async function sweepStaleTemporaries(file: string): Promise<void> {
   let entries: string[];
   try {
     entries = await fs.readdir(directory);
-  } catch {
+  } catch (error) {
+    if (!isErrnoException(error, "ENOENT")) report("", `could not sweep stale temporaries in ${directory}: ${errorMessage(error)}`);
     return;
   }
   await Promise.all(
     entries
       .filter((entry) => entry.startsWith(prefix) && hasAtomicTempSuffix(entry))
-      .map((entry) => fs.unlink(join(directory, entry)).catch(() => undefined)),
+      .map((entry) => fs.unlink(join(directory, entry)).catch((error: unknown) => report("", `could not delete stale temporary ${join(directory, entry)}: ${errorMessage(error)}`))),
   );
 }
 

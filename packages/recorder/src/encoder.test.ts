@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import sharp from "sharp";
+import { DEFAULT_COMPOSITE_BACKGROUND } from "@hoolypane/contracts";
 import { compositeGeometry } from "./capture-contract.js";
 import { encodeAligned } from "./encoder.js";
 import { buildAlignedTracks } from "./test-support.js";
@@ -40,7 +41,7 @@ describe("multi-viewport encoder", () => {
       { id: "two", width: 240, height: 320, frames: 10, strideUs: 40_000 },
       { id: "three", width: 180, height: 320, frames: 10, strideUs: 60_000 },
     ], 0, 22, 30);
-    await encodeAligned(directory, tracks, 30, 22, { compositeMaxSize: { width: 640, height: 480 }, compositeBackground: "#111318" });
+    await encodeAligned(directory, tracks, 30, 22, { compositeMaxSize: { width: 640, height: 480 }, compositeBackground: DEFAULT_COMPOSITE_BACKGROUND });
     const expectedComposite = compositeGeometry(tracks.map(({ geometry }) => geometry), { width: 640, height: 480 });
     const verification = await verifyArtifacts(directory, 30, 22, {
       tracks: tracks.map(({ geometry }) => geometry),
@@ -62,7 +63,7 @@ describe("multi-viewport encoder", () => {
     const directory = await mkdtemp(join(tmpdir(), "hoolypane-verifier-reject-"));
     directories.push(directory);
     const tracks = await recordedTracks(directory, [{ id: "solo", width: 64, height: 64, frames: 22, strideUs: 33_333 }], 0, 22, 30);
-    await encodeAligned(directory, tracks, 30, 22, { compositeMaxSize: { width: 128, height: 128 }, compositeBackground: "#111318" });
+    await encodeAligned(directory, tracks, 30, 22, { compositeMaxSize: { width: 128, height: 128 }, compositeBackground: DEFAULT_COMPOSITE_BACKGROUND });
     const expected = {
       tracks: [{ id: "solo", encodedWidth: 64, encodedHeight: 64 }],
       composite: { width: 64, height: 64 },

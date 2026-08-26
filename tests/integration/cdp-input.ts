@@ -1,5 +1,6 @@
 import type { ElectronApplication, Page } from "playwright";
 import { VIEWPORT_PRESETS } from "@hoolypane/contracts";
+import { fixtureOrigin } from "../fixtures/ports.js";
 
 const desktopPreset = VIEWPORT_PRESETS.find((preset) => preset.id === "desktop-1440");
 if (!desktopPreset) throw new Error("desktop-1440 preset missing");
@@ -26,7 +27,7 @@ export async function clickPaneSurface(
   const visibleHeight = Math.max(0, Math.min(viewport.height, surface.y + surface.height) - Math.max(0, surface.y));
   const scale = Math.min(1, visibleWidth / desktopPaneWidth, visibleHeight / desktopPaneHeight);
   const result = await application.evaluate(async ({ webContents }, input) => {
-    const candidates = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(`http://127.0.0.1:${input.port}`));
+    const candidates = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(input.origin));
     let source: (typeof candidates)[number] | undefined;
     for (const candidate of candidates) {
       if (await candidate.executeJavaScript("innerWidth") === input.width) { source = candidate; break; }
@@ -61,7 +62,7 @@ export async function clickPaneSurface(
       await settleDelay;
     }
     return { status, attempts, lastAttempt: attempts, lastError };
-  }, { port: options.port, testId: options.testId, scale, expectedStatus: options.expectedStatus, width: desktopPaneWidth });
+  }, { origin: fixtureOrigin(options.port), testId: options.testId, scale, expectedStatus: options.expectedStatus, width: desktopPaneWidth });
   if (options.expectedStatus !== undefined && result.status !== options.expectedStatus) {
     throw new Error(`source ${options.testId} click did not activate: ${JSON.stringify({ surface, scale, result })}`);
   }

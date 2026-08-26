@@ -26,5 +26,8 @@ export const FIXTURE_PORTS = {
   packageSmoke: 4188,
 } as const;
 
+/** Canonical origin string for any fixture port; the single construction point for test addressing. */
+export const fixtureOrigin = (port: number): string => `http://127.0.0.1:${port}`;
+
 /** Fixture base URL for the runner flow config; coupled to FIXTURE_PORTS.runner. */
-export const FIXTURE_BASE_URL = `http://127.0.0.1:${FIXTURE_PORTS.runner}`;
+export const FIXTURE_BASE_URL = fixtureOrigin(FIXTURE_PORTS.runner);

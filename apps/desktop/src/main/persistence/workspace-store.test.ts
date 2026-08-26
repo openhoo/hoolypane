@@ -109,6 +109,22 @@ describe("loadWorkspace", () => {
     expect(reread.persistable).toBe(true);
     expect(reread.state.positions).toEqual({ [known]: { x: 1, y: 2 } });
   });
+
+  it("strips userinfo from persisted pane and shared urls", async () => {
+    const file = await workspaceFile();
+    const loaded = await loadWorkspace(file);
+    // HttpUrlSchema admits userinfo, so a hand-edited file or an older build can carry
+    // credentials into workspace.json; only the load path repairs them.
+    await saveWorkspace(file, {
+      ...loaded.state,
+      sharedUrl: "https://user:token@example.com/",
+      panes: loaded.state.panes.map((pane) => ({ ...pane, url: "https://user:token@example.com/secret" })),
+    });
+    const reread = await loadWorkspace(file);
+    expect(reread.persistable).toBe(true);
+    expect(reread.state.sharedUrl).toBe("https://example.com/");
+    expect(reread.state.panes.map((pane) => pane.url)).toEqual(loaded.state.panes.map(() => "https://example.com/secret"));
+  });
 });
 
 async function freshStateJson(): Promise<string> {

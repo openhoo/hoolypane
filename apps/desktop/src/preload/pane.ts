@@ -15,10 +15,19 @@ function recordProgrammaticScroll(container: Element): void {
   programmaticScrolls.set(container, { top: container.scrollTop, left: container.scrollLeft });
 }
 function autoScrollCenter(element: Element): void {
+  // Snapshot scrollable ancestors BEFORE scrolling: only containers whose offset actually
+  // changes get a marker below. A marker on an unmoved container strands a stale entry whose
+  // ±1px echo window later swallows a genuine user scroll landing back on that offset
+  // (most commonly a user scroll returning to a recorded scrollTop 0).
+  const scrollable: { node: Element; top: number; left: number }[] = [];
+  for (let node: Element | null = element; node; node = node.parentElement) {
+    if (node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth)
+      scrollable.push({ node, top: node.scrollTop, left: node.scrollLeft });
+  }
   element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" }); // instant beats CSS scroll-behavior:smooth — an animated scroll registers its pre-animation position below, and trusted animation events then diverge from it
   // scrollIntoView may move the element itself or any scrollable ancestor; remember each final position.
-  for (let node: Element | null = element; node; node = node.parentElement) {
-    if (node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth) recordProgrammaticScroll(node);
+  for (const { node, top, left } of scrollable) {
+    if (node.scrollTop !== top || node.scrollLeft !== left) recordProgrammaticScroll(node);
   }
 }
 let pendingFill: { element: HTMLInputElement | HTMLTextAreaElement; timer: number } | undefined;
@@ -117,7 +126,13 @@ function accessibleName(element: Element): string {
   const aria = element.getAttribute("aria-label");
   if (aria) return normalizedText(aria);
   const labelable = element instanceof HTMLInputElement || element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement;
-  if (!labelable) return normalizedText(element.textContent || element.getAttribute("title"));
+  if (!labelable) {
+    // Normalize subtree text BEFORE truthiness: whitespace-only content must fall through to
+    // the title attribute like standard accName computation, not short-circuit the fallback.
+    const text = normalizedText(element.textContent);
+    if (text) return text;
+    return normalizedText(element.getAttribute("title"));
+  }
   // Select/textarea contents are option texts or an initial value, never their accessible name;
   // like inputs they are named only by aria-label or an associated label. Keying the role locator
   // on content would export a getByRole name Playwright's accName never produces, so flows replay
