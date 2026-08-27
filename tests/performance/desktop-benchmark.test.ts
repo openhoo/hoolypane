@@ -116,10 +116,12 @@ describe("six-pane direct compositor", () => {
     const rssSamples: number[] = [await mainProcessRssBytes()];
 
     await Promise.all([chrome, ...pages].map((page) => page.evaluate(() => {
-      const state = globalThis as typeof globalThis & { __longTasks?: number[]; __mirrorTimes?: number[] };
+      const state = globalThis as typeof globalThis & { __longTaskObserver?: PerformanceObserver; __longTasks?: number[]; __mirrorTimes?: number[] };
+      state.__longTaskObserver?.disconnect();
       state.__longTasks = [];
       state.__mirrorTimes = [];
-      new PerformanceObserver((list) => state.__longTasks!.push(...list.getEntries().map((entry) => entry.duration))).observe({ type: "longtask" });
+      state.__longTaskObserver = new PerformanceObserver((list) => state.__longTasks!.push(...list.getEntries().map((entry) => entry.duration)));
+      state.__longTaskObserver.observe({ type: "longtask" });
       document.querySelector('[data-testid="apply"]')?.addEventListener("click", () => state.__mirrorTimes!.push(Date.now()), true);
     })));
     await application.evaluate(() => {
@@ -153,6 +155,22 @@ describe("six-pane direct compositor", () => {
     const expectedFinalValue = `final-${FINAL_INPUT_UPDATES - 1}`;
     const finalStatePreserved = await waitForFinalInput(expectedFinalValue);
     rssSamples.push(await mainProcessRssBytes());
+
+    // Long Tasks use wall-clock duration, so a descheduled CI renderer can report a
+    // host stall as one application task. End this strict workload sample before the
+    // separate ~30s cadence sampler; cadence has its own display-normalized p95 gate.
+    const rendererLongTasks = await Promise.all([chrome, ...pages].map((page) => page.evaluate(() => {
+      const state = globalThis as typeof globalThis & { __longTaskObserver?: PerformanceObserver; __longTasks?: number[] };
+      const observer = state.__longTaskObserver;
+      if (observer) {
+        state.__longTasks!.push(...observer.takeRecords().map((entry) => entry.duration));
+        observer.disconnect();
+        delete state.__longTaskObserver;
+      }
+      return state.__longTasks ?? [];
+    })));
+    const rendererLongTaskDurations = rendererLongTasks.flat();
+    const rendererLongTaskMaxMs = Math.max(0, ...rendererLongTaskDurations);
 
     // A transient renderer reload invalidates execution contexts mid-sample; retry the
     // steady-state cadence sample once instead of failing the gate opaquely.
@@ -188,8 +206,6 @@ describe("six-pane direct compositor", () => {
     }, fixtureOrigin(FIXTURE_PORT));
     rssSamples.push(await mainProcessRssBytes());
 
-    const rendererLongTasks = await Promise.all([chrome, ...pages].map((page) => page.evaluate(() => (globalThis as typeof globalThis & { __longTasks?: number[] }).__longTasks ?? [])));
-    const rendererLongTaskMaxMs = Math.max(0, ...rendererLongTasks.flat());
     const mainEventLoopDelay = await application.evaluate(() => {
       const state = globalThis as typeof globalThis & { __eventLoopDelay?: { disable(): void; max: number; percentile(value: number): number } };
       const delay = state.__eventLoopDelay;
@@ -199,7 +215,7 @@ describe("six-pane direct compositor", () => {
     });
     const rssPeakBytes = await aggregatePeakRssBytes();
     const proof = {
-      contract: "hoolypane-desktop-performance-v1",
+      contract: "hoolypane-desktop-performance-v2",
       platform: process.platform,
       durationSeconds: Math.round((Date.now() - startedAtMs) / 100) / 10,
       paneCount: 6,
@@ -208,7 +224,7 @@ describe("six-pane direct compositor", () => {
       rafP95LimitMs,
       mirror: { samples: mirrorLatencies.length, p95Ms: mirrorP95Ms },
       finalInput: { updates: FINAL_INPUT_UPDATES, expected: expectedFinalValue, preserved: finalStatePreserved },
-      longTasks: { rendererMaxMs: rendererLongTaskMaxMs, mainEventLoopDelay },
+      longTasks: { rendererCount: rendererLongTaskDurations.length, rendererMaxMs: rendererLongTaskMaxMs, mainEventLoopDelay },
       rss: { samplesBytes: rssSamples, peakBytes: rssPeakBytes },
     };
     await mkdir(dirname(OUTPUT), { recursive: true });

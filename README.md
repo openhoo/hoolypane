@@ -96,7 +96,7 @@ contracts + flow <- desktop
 
 ## Performance expectations
 
-Six continuously animated direct panes target requestAnimationFrame p95 ≤20 ms, mirrored action application p95 <16.7 ms, no final-input loss, and no main/renderer long task above 50 ms. Recording uses bounded per-viewport queues of eight frames or 32 MiB and Chromium backpressure.
+Six continuously animated direct panes target requestAnimationFrame p95 ≤20 ms, mirrored action application p95 <16.7 ms, no final-input loss, and no main/renderer long task above 50 ms during the mirrored interaction workload. Recording uses bounded per-viewport queues of eight frames or 32 MiB and Chromium backpressure.
 
 ## License
 
