@@ -5,7 +5,7 @@ import { afterAll, it } from "vitest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { launchDesktopApp, pollUntil, startFixtureServer, teardownDesktopSuite, waitForFixturePanes, type FixtureServer } from "../helpers/harness.js";
-import { FIXTURE_PORTS } from "../fixtures/ports.js";
+import { FIXTURE_PORTS, fixtureOrigin } from "../fixtures/ports.js";
 
 const FIXTURE_PORT = FIXTURE_PORTS.dragdrop;
 
@@ -21,6 +21,11 @@ interface CardBox {
   readonly y: number;
 }
 
+interface PaneBounds extends CardBox {
+  readonly width: number;
+  readonly height: number;
+}
+
 async function cardBoxes(page: Page): Promise<Map<string, CardBox>> {
   const raw = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>(".pane-card")).map((card) => ({
     id: card.querySelector("[data-pane-surface]")?.getAttribute("data-pane-surface") ?? "",
@@ -30,6 +35,31 @@ async function cardBoxes(page: Page): Promise<Map<string, CardBox>> {
   return new Map(raw.map((entry) => [entry.id, entry]));
 }
 
+async function waitForDesktopViewToMatchSurface(): Promise<void> {
+  let latest: { surface?: PaneBounds; view?: PaneBounds } = {};
+  try {
+    await pollUntil(async () => {
+      const surface = await chrome.locator('[data-pane-surface="desktop-1440"]').boundingBox();
+      const view = await application.evaluate(async ({ BrowserWindow, WebContentsView }, input) => {
+        const window = BrowserWindow.getAllWindows()[0];
+        if (!window) return undefined;
+        for (const child of window.contentView.children) {
+          if (!(child instanceof WebContentsView) || !child.webContents.getURL().startsWith(input.origin)) continue;
+          const width = await child.webContents.executeJavaScript("innerWidth").catch(() => -1);
+          if (width === input.viewportWidth) return child.getBounds();
+        }
+        return undefined;
+      }, { origin: fixtureOrigin(FIXTURE_PORT), viewportWidth: 1440 });
+      latest = { ...(surface ? { surface } : {}), ...(view ? { view } : {}) };
+      if (!surface || !view) return null;
+      return ["x", "y", "width", "height"].every((key) =>
+        Math.abs(surface[key as keyof PaneBounds] - view[key as keyof PaneBounds]) <= 1,
+      ) || null;
+    }, 10_000);
+  } catch (cause) {
+    throw new Error(`desktop native view did not converge on its moved surface: ${JSON.stringify(latest)}`, { cause });
+  }
+}
 
 it("drag and drop moves a pane and persists the position", async () => {
   fixture = await startFixtureServer(FIXTURE_PORT);
@@ -48,6 +78,7 @@ it("drag and drop moves a pane and persists the position", async () => {
 
   const before = (await cardBoxes(chrome)).get("desktop-1440");
   if (!before) throw new Error("source card missing");
+  const workspaceFile = join(userDataDir, "user-data", "workspace.json");
 
   // Synthetic drag: verifies wiring without trusted input.
   await chrome.evaluate(() => {
@@ -65,8 +96,12 @@ it("drag and drop moves a pane and persists the position", async () => {
     const current = boxes.get("desktop-1440");
     return current && current.x !== before.x ? current : null;
   }, 8_000);
+  // The synthetic move updates renderer geometry first. On slower Windows runners the old
+  // WebContentsView can still cover the header's new position and steal a trusted pointerdown.
+  // Wait for Electron's authoritative native bounds, not a timing delay, before native input.
+  await waitForDesktopViewToMatchSurface();
 
-  // Native-pointer drag of the desktop pane header toward the bottom-right.
+  // Native-pointer drag of the desktop pane header toward the top-left.
   const header = chrome.locator('[data-pane-surface="desktop-1440"]').locator("xpath=..").locator("header");
   const headerBox = await header.boundingBox();
   if (!headerBox) throw new Error("header box missing");
@@ -96,7 +131,6 @@ it("drag and drop moves a pane and persists the position", async () => {
 
   // From here on, ANY failure (flush/move pollUntils, relaunch, either axis) must preserve
   // on-disk evidence before afterAll wipes userDataDir — not just an x-axis mismatch.
-  const workspaceFile = join(userDataDir, "user-data", "workspace.json");
   try {
     // Persistence proof: the dragged card must have reached a clearly moved position AND the
     // workspace store must hold a stable entry for it. Stored coordinates live in the

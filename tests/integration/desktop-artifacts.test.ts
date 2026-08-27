@@ -83,8 +83,8 @@ beforeAll(async () => {
   application = launch.application;
   chrome = launch.chrome;
   // Native child views expose no readiness event to Playwright; poll Electron's authoritative WebContents registry.
-  await waitForFixturePanes(application, FIXTURE_PORT, 5);
-}, 30_000);
+  await waitForFixturePanes(application, FIXTURE_PORT, 5, 20_000);
+}, 45_000);
 
 let evidenceDirty = false;
 
