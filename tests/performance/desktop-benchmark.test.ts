@@ -32,12 +32,40 @@ async function waitForPaneCount(expected: number): Promise<void> {
 }
 
 async function waitForMirrorCount(expected: number): Promise<void> {
-  await pollUntil(async () => {
-    const counts = await Promise.all(remotePages().map((page) => page.evaluate(() => (globalThis as typeof globalThis & { __mirrorTimes?: number[] }).__mirrorTimes?.length ?? 0).catch(() => -1)));
-    return counts.length === 6 && counts.every((count) => count >= expected);
-  }, 5_000, 5);
+  let latestCounts: number[] = [];
+  try {
+    await pollUntil(async () => {
+      latestCounts = await Promise.all(remotePages().map((page) => page.evaluate(() => (globalThis as typeof globalThis & { __mirrorTimes?: number[] }).__mirrorTimes?.length ?? 0).catch(() => -1)));
+      return latestCounts.length === 6 && latestCounts.every((count) => count >= expected);
+    }, 5_000, 5);
+  } catch (cause) {
+    throw new Error(`mirror sample ${expected} did not reach every pane; counts=${JSON.stringify(latestCounts)}`, { cause });
+  }
 }
 
+/**
+ * A newly-created WebContents can expose visible DOM before its interaction preload has
+ * subscribed in main. Prove one real mirrored action reaches all six panes before installing
+ * measurement listeners, so startup readiness never becomes a false latency/data-loss sample.
+ */
+async function waitForMirroredActionReadiness(pages: readonly Page[]): Promise<void> {
+  let latestStatuses: Array<string | null> = [];
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await clickPaneSurface(application, chrome, { port: FIXTURE_PORT, testId: "apply", expectedStatus: "applied" });
+    try {
+      await pollUntil(async () => {
+        latestStatuses = await Promise.all(pages.map((page) => page.getByTestId("status").textContent().catch(() => null)));
+        return latestStatuses.length === 6 && latestStatuses.every((status) => status === "applied");
+      }, 5_500, 20);
+      return;
+    } catch {
+      // Main's replay timeout is 5s. Waiting 5.5s before retrying guarantees the
+      // previous action settled, so readiness attempts can never leak queued clicks
+      // into the measurement listeners installed below.
+    }
+  }
+  throw new Error(`mirrored-action readiness did not reach every pane; statuses=${JSON.stringify(latestStatuses)}`);
+}
 
 async function waitForFinalInput(expected: string): Promise<boolean> {
   try {
@@ -84,6 +112,7 @@ describe("six-pane direct compositor", () => {
     const pages = remotePages();
     await Promise.all(pages.map((page) => page.getByTestId("apply").waitFor({ state: "visible" })));
     const source = locateSourcePane(pages)!;
+    await waitForMirroredActionReadiness(pages);
     const rssSamples: number[] = [await mainProcessRssBytes()];
 
     await Promise.all([chrome, ...pages].map((page) => page.evaluate(() => {
