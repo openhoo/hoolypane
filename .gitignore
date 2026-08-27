@@ -7,3 +7,5 @@ coverage/
 .hoolypane-results/
 .tmp/
 hoolypane-results/
+/.hooversion/
+/.release-version

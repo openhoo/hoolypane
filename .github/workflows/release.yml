@@ -1,20 +1,102 @@
 name: Release
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      rebuild_tag:
+        description: Existing release tag whose artifacts should be rebuilt
+        required: false
+        type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  HOOVERSION_VERSION: 1.0.1
+
 jobs:
+  release:
+    name: Hooversion release
+    if: >-
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && !contains(github.event.workflow_run.head_commit.message, 'chore(release):')) ||
+      (github.event_name == 'workflow_dispatch' && github.ref_name == 'main')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      published: ${{ steps.rebuild.outputs.published || steps.release.outputs.published }}
+      version: ${{ steps.rebuild.outputs.version || steps.release.outputs.version }}
+      tag: ${{ steps.rebuild.outputs.tag || steps.release.outputs.tag }}
+    steps:
+      - name: Checkout validated revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.rebuild_tag || (github.event_name == 'workflow_run' && github.event.workflow_run.head_sha) || github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: inputs.rebuild_tag == ''
+        with:
+          node-version: 24
+      - name: Enable pnpm
+        if: inputs.rebuild_tag == ''
+        run: corepack enable
+      - name: Set up Hooversion
+        if: inputs.rebuild_tag == ''
+        uses: openhoo/hooversion/actions/setup@2f977d9c91d98d800cac6557fa170cf1a7fccd39 # v1.0.1
+        with:
+          version: ${{ env.HOOVERSION_VERSION }}
+      - name: Configure release git author
+        if: inputs.rebuild_tag == ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Release
+        id: release
+        if: inputs.rebuild_tag == ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: hooversion release
+      - name: Resolve rebuild target
+        id: rebuild
+        if: inputs.rebuild_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.rebuild_tag }}
+        run: |
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "rebuild_tag must be a semantic version prefixed with v" >&2
+            exit 2
+          fi
+          version="${TAG#v}"
+          manifest_version="$(node -p "require('./package.json').version")"
+          if [[ "$manifest_version" != "$version" ]]; then
+            echo "package.json version $manifest_version does not match $TAG" >&2
+            exit 2
+          fi
+          gh release view "$TAG" >/dev/null
+          {
+            echo "published=true"
+            echo "version=$version"
+            echo "tag=$TAG"
+          } >> "$GITHUB_OUTPUT"
+
   qualify:
+    needs: release
+    if: needs.release.outputs.published == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.release.outputs.tag }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
@@ -41,7 +123,8 @@ jobs:
           path: dist/*.tgz
 
   desktop:
-    needs: qualify
+    needs: [release, qualify]
+    if: needs.release.outputs.published == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -57,7 +140,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.release.outputs.tag }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
@@ -111,7 +194,8 @@ jobs:
             dist/desktop/*.dmg
 
   publish:
-    needs: [qualify, desktop]
+    needs: [release, qualify, desktop]
+    if: needs.release.outputs.published == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -128,16 +212,22 @@ jobs:
         with:
           path: release-artifacts
           merge-multiple: true
-      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          files: |
-            release-artifacts/*.AppImage
-            release-artifacts/*.deb
-            release-artifacts/*.dmg
-            release-artifacts/*.exe
-            release-artifacts/hoolypane-runner-*.tgz
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+        shell: bash
+        run: |
+          shopt -s nullglob
+          assets=(release-artifacts/*.AppImage release-artifacts/*.deb release-artifacts/*.dmg release-artifacts/*.exe release-artifacts/hoolypane-runner-*.tgz)
+          if (( ${#assets[@]} == 0 )); then
+            echo "no release assets found" >&2
+            exit 1
+          fi
+          for artifact in "${assets[@]}"; do
+            timeout 3m gh release upload "$TAG" "$artifact" --clobber
+          done
       - name: Publish runner
         if: vars.NPM_PUBLISH_ENABLED == 'true' && env.NODE_AUTH_TOKEN != ''
         continue-on-error: true
-        run: npm publish ./release-artifacts/hoolypane-runner-*.tgz --provenance --access public --tag ${{ contains(github.ref_name, '-') && 'beta' || 'latest' }}
+        run: npm publish ./release-artifacts/hoolypane-runner-*.tgz --provenance --access public --tag ${{ contains(needs.release.outputs.tag, '-') && 'beta' || 'latest' }}

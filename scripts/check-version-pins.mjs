@@ -6,6 +6,20 @@ import { glob } from "node:fs/promises";
 const manifests = ["package.json"];
 for await (const entry of glob("{apps,packages}/*/package.json")) manifests.push(entry);
 
+const releaseManifests = ["package.json", "apps/desktop/package.json", "packages/runner/package.json"];
+const releaseVersions = new Map();
+for (const manifest of releaseManifests) {
+  const version = JSON.parse(await readFile(manifest, "utf8")).version;
+  let locations = releaseVersions.get(version);
+  if (!locations) releaseVersions.set(version, (locations = []));
+  locations.push(manifest);
+}
+if (releaseVersions.size !== 1) {
+  const details = [...releaseVersions].map(([version, locations]) => `  ${version}: ${locations.join(", ")}`).join("\n");
+  console.error(`release version drift:\n${details}`);
+  process.exit(1);
+}
+
 const DEPENDENCY_TYPES = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
 // Group by package name: every distinct spec of the same name is a potential drift.
 const conflicts = [];

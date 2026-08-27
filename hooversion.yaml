@@ -1,0 +1,16 @@
+branches:
+  - main
+packages:
+  - name: hoolypane
+    path: .
+    type: node
+    manifest: package.json
+    changelog: CHANGELOG.md
+    scopes:
+      - hoolypane
+hooks:
+  afterVersion:
+    - node ./scripts/sync-release-version.mjs
+    - pnpm install --lockfile-only
+github:
+  releases: true

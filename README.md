@@ -98,6 +98,12 @@ contracts + flow <- desktop
 
 Six continuously animated direct panes target requestAnimationFrame p95 ≤20 ms, mirrored action application p95 <16.7 ms, no final-input loss, and no main/renderer long task above 50 ms during the mirrored interaction workload. Recording uses bounded per-viewport queues of eight frames or 32 MiB and Chromium backpressure.
 
+## Releases
+
+Hooversion 1.0.1 owns conventional-commit validation, version selection, changelog updates, release commits, tags, and GitHub releases. A successful `main` CI run starts the serialized release workflow; installer and runner assets are built from the immutable release tag and uploaded to that release.
+
+Preview the next version locally with `hooversion plan`. `pnpm release:dry-run` remains the full package and runtime qualification pass and does not publish anything.
+
 ## License
 
 Hoolypane is licensed under AGPL-3.0-only. Bundled FFmpeg binaries are GPL-3.0-or-later; see `packages/runner/LICENSE-FFMPEG.txt` for source and license links.
