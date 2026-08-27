@@ -60,7 +60,7 @@ it("drag and drop moves a pane and persists the position", async () => {
     window.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: rect.x + 150, clientY: rect.y + 60 }));
     window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
   });
-  await pollUntil(async () => {
+  const afterSynthetic = await pollUntil(async () => {
     const boxes = await cardBoxes(chrome);
     const current = boxes.get("desktop-1440");
     return current && current.x !== before.x ? current : null;
@@ -70,22 +70,16 @@ it("drag and drop moves a pane and persists the position", async () => {
   const header = chrome.locator('[data-pane-surface="desktop-1440"]').locator("xpath=..").locator("header");
   const headerBox = await header.boundingBox();
   if (!headerBox) throw new Error("header box missing");
-  // Grab a neutral point midway between the rename label's right edge and the
-  // header's right edge: [data-pane-name] is exempt from the drag guard, so the
-  // legacy fixed 30 px offset would land on the label and never start a drag.
-  // Fall back to that offset when the label is absent or hidden (narrow layouts).
-  const nameLabel = header.locator("[data-pane-name]");
-  const nameBox =
-    (await nameLabel.count()) > 0 ? await nameLabel.boundingBox() : null;
-  const startX =
-    nameBox === null
-      ? headerBox.x + 30
-      : (nameBox.x + nameBox.width + headerBox.x + headerBox.width) / 2;
+  // The two-pixel left gutter is guaranteed header background: the pane name begins after
+  // pl-1, while midpoint guesses can hit a toolbar button on narrower macOS/Windows screens.
+  const startX = headerBox.x + 2;
   const startY = headerBox.y + headerBox.height / 2;
   await chrome.mouse.move(startX, startY);
   await chrome.mouse.down();
   for (const step of [0.2, 0.4, 0.6, 0.8, 1]) {
-    await chrome.mouse.move(startX + 300 * step, startY + 170 * step);
+    // Synthetic setup already moved the card down/right, so an up/left native drag has
+    // guaranteed room on every runner display and cannot be masked by viewport clamping.
+    await chrome.mouse.move(startX - 80 * step, startY - 40 * step);
     await new Promise((resolveSleep) => setTimeout(resolveSleep, 40));
   }
   await chrome.mouse.up();
@@ -101,7 +95,7 @@ it("drag and drop moves a pane and persists the position", async () => {
     let stored: { x: number; y: number } | undefined;
     const moved = await pollUntil(async () => {
       const current = await cardBoxes(chrome).then((boxes) => boxes.get("desktop-1440")).catch(() => undefined);
-      if (!current || !(current.x > before.x + 150 && current.y > before.y + 80)) return null;
+      if (!current || (Math.abs(current.x - afterSynthetic.x) < 40 && Math.abs(current.y - afterSynthetic.y) < 20)) return null;
       const position = await readFile(workspaceFile, "utf8").then((raw) => JSON.parse(raw)?.positions?.["desktop-1440"]).catch(() => null);
       if (!position || Math.abs(position.x - current.x) > 1) return null;
       if (!stored || stored.x !== position.x || stored.y !== position.y) {
@@ -147,9 +141,16 @@ it("drag and drop moves a pane and persists the position", async () => {
       }
     }
   } catch (error) {
+    // Close Chromium before collecting evidence: Windows otherwise locks profile databases
+    // and a diagnostic copy failure masks the actual drag assertion.
+    await application.close().catch(() => undefined);
     // A fresh mkdtemp target needs no rmSync and can never clobber real evidence.
     const dumpDir = await mkdtemp(join(tmpdir(), "dnd-fail-dump-"));
-    cpSync(join(userDataDir, "user-data"), join(dumpDir, "user-data"), { recursive: true });
+    try {
+      cpSync(workspaceFile, join(dumpDir, "workspace.json"));
+    } catch (copyError) {
+      console.log(`DND FAIL DUMP copy failed at ${dumpDir}:`, copyError);
+    }
     const fileOnDisk = await readFile(workspaceFile, "utf8").catch(() => "MISSING");
     console.log(`DND FAIL DUMP copied to ${dumpDir}; workspace.json:`, fileOnDisk.slice(0, 600));
     throw error;
