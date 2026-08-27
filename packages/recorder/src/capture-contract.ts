@@ -1,6 +1,9 @@
 import { encodedDimension, gridDimensions, MAX_ENCODED_DIMENSION, type ViewportSpec } from "@hoolypane/contracts";
 
 export const CAPTURE_CONTRACT = "multi-viewport-cfr-v1" as const;
+// Manifest codec identity: ffmpeg encodes with -c:v libvpx, whose container codec is VP8;
+// keep encoder.ts's outputOptions in step when this ever changes.
+export const VIDEO_CODEC = "vp8" as const;
 export const VALIDATOR_VERSION = 1;
 export const POST_ROLL_US = 250_000;
 export const MAX_QUEUED_FRAMES = 8;

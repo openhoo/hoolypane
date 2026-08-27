@@ -11,8 +11,11 @@ export { startFixtureServer, type FixtureServer } from "./desktop-runtime.js";
 
 const desktopPreset = VIEWPORT_PRESETS.find((preset) => preset.id === "desktop-1440");
 if (!desktopPreset) throw new Error("desktop-1440 preset missing");
-/** Desktop pane width, kept in lockstep with integration/cdp-input.ts's clickPaneSurface scale math. */
-const DESKTOP_PANE_WIDTH = desktopPreset.width;
+/** Desktop pane geometry, the single home every suite consumes for desktop-1440 dimensions. */
+export const DESKTOP_PANE_SIZE = { width: desktopPreset.width, height: desktopPreset.height } as const;
+
+/** Default workspace ships exactly one pane per VIEWPORT_PRESETS entry (defaultWorkspace); single home for suite expectations. */
+export const DEFAULT_PANE_COUNT = VIEWPORT_PRESETS.length;
 
 /** Polls fn until it returns a value other than null, undefined, or false, or the timeout elapses. */
 export async function pollUntil<T>(
@@ -71,7 +74,7 @@ export function fixturePages(application: ElectronApplication, port: number, pat
 }
 
 /** Picks the pane whose viewport width equals `width` (the desktop-1440 source pane), falling back to the first page. */
-export function locateSourcePane(pages: readonly Page[], width = DESKTOP_PANE_WIDTH): Page | undefined {
+export function locateSourcePane(pages: readonly Page[], width = DESKTOP_PANE_SIZE.width): Page | undefined {
   return pages.find((page) => page.viewportSize()?.width === width) ?? pages[0];
 }
 

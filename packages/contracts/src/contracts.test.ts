@@ -4,7 +4,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { FAILURE_REASON_MAX_LENGTH, errorMessage, failureReason, isErrnoException } from "./errors.js";
-import { ActionEnvelopeSchema, BoundsSnapshotSchema, ChromeCommandSchema, ChromeStateSchema, GET_BY_ROLE_ROLES, HoolypaneConfigSchema, PaneGenerationSchema, REPLAY_RESULT_PHASES, RecordFailureSchema, ReplayRequestSchema, ReplayResultSchema, VIEWPORT_PRESETS, WorkspaceStateSchema, defaultWorkspace, staleGenerationMessage } from "./index.js";
+import { ActionEnvelopeSchema, BoundsSnapshotSchema, ChromeCommandSchema, ChromeStateSchema, GET_BY_ROLE_ROLES, HoolypaneConfigSchema, PaneGenerationSchema, RECORDER_IMPLICIT_ROLES, REPLAY_RESULT_PHASES, RecordFailureSchema, ReplayRequestSchema, ReplayResultSchema, VIEWPORT_PRESETS, WorkspaceStateSchema, defaultWorkspace, staleGenerationMessage } from "./index.js";
 
 describe("configuration", () => {
   it("applies all recording defaults", () => {
@@ -246,14 +246,11 @@ function playwrightCoreValidRoles(): readonly string[] {
 }
 
 describe("getByRole role table", () => {
-  // The recorder-derived subset that apps/desktop/src/preload/pane.ts pins via `satisfies` to this
-  // table (IMPLICIT_ROLES) — a name missing from the table makes flow codegen export the
-  // [role="..."] attribute fallback, which only matches explicit role attributes and therefore
-  // replays zero matches until the flow deadline.
-  const recorderImplicitRoles = ["button", "link", "combobox", "textbox", "checkbox", "radio", "searchbox", "spinbutton", "slider"] as const;
-
+  // RECORDER_IMPLICIT_ROLES is the preload recorder's derived-role set (apps/desktop pane.ts
+  // consumes the same const), so this asserts full table coverage over exactly the roles codegen
+  // can serialize as page.getByRole(...) — no hand-maintained copy to drift.
   it("covers every implicit role the recorder derives", () => {
-    for (const role of recorderImplicitRoles) expect(Object.hasOwn(GET_BY_ROLE_ROLES, role)).toBe(true);
+    for (const role of RECORDER_IMPLICIT_ROLES) expect(Object.hasOwn(GET_BY_ROLE_ROLES, role)).toBe(true);
   });
 
   it("stays identical to the installed playwright-core validRoles set", () => {

@@ -7,6 +7,7 @@ import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { runFlow } from "../../packages/runner/src/run-flow.js";
 import { OVERVIEW_ERROR_TILE_COLOR } from "../../apps/desktop/src/main/screenshots/overview-shared.js";
+import { TEST_FLOW_PATH_ENV, TEST_FLOW_SAVE_CANCEL_ENV, TEST_MODE_ENV, TEST_OVERVIEW_PNG_ENV, TEST_PANE_PNG_ENV } from "../../apps/desktop/src/main/test-env.js";
 import { launchDesktopApp, pollUntil, startFixtureServer, teardownDesktopSuite, waitForFixturePanes, type FixtureServer } from "../helpers/harness.js";
 import { inlineConfigSource } from "../helpers/inline-config.js";
 import { clickPaneSurface } from "./cdp-input.js";
@@ -73,10 +74,10 @@ beforeAll(async () => {
     port: FIXTURE_PORT,
     userDataDir: directory,
     extraEnv: {
-      HOOLYPANE_TEST_MODE: "1",
-      HOOLYPANE_TEST_PANE_PNG: panePng,
-      HOOLYPANE_TEST_OVERVIEW_PNG: overviewPng,
-      HOOLYPANE_TEST_FLOW_PATH: flowPath,
+      [TEST_MODE_ENV]: "1",
+      [TEST_PANE_PNG_ENV]: panePng,
+      [TEST_OVERVIEW_PNG_ENV]: overviewPng,
+      [TEST_FLOW_PATH_ENV]: flowPath,
     },
   });
   application = launch.application;
@@ -140,20 +141,20 @@ describe("desktop screenshots and recorded flows", () => {
 
   it("does not save an empty flow", async () => {
     const emptyPath = join(directory, "empty.flow.ts");
-    await application.evaluate((_electron, path) => { process.env.HOOLYPANE_TEST_FLOW_PATH = path; }, emptyPath);
+    await application.evaluate((_electron, [name, path]) => { process.env[name] = path; }, [TEST_FLOW_PATH_ENV, emptyPath]);
     try {
       await startRecording();
       await stopRecording();
       await expect(access(emptyPath)).rejects.toBeDefined();
     } finally {
       // Restore the launch baseline locally so no later test inherits an overridden flow path.
-      await application.evaluate((_electron, path) => { process.env.HOOLYPANE_TEST_FLOW_PATH = path; }, flowPath).catch(() => undefined);
+      await application.evaluate((_electron, [name, path]) => { process.env[name] = path; }, [TEST_FLOW_PATH_ENV, flowPath]).catch(() => undefined);
     }
   }, 20_000);
 
   it("does not save a cancelled flow despite mirrored actions", async () => {
     const canceledPath = join(directory, "canceled.flow.ts");
-    await application.evaluate((_electron, path) => { process.env.HOOLYPANE_TEST_FLOW_PATH = path; process.env.HOOLYPANE_TEST_FLOW_SAVE_CANCEL = "1"; }, canceledPath);
+    await application.evaluate((_electron, env) => { process.env[env.path] = env.value; process.env[env.saveCancel] = "1"; }, { path: TEST_FLOW_PATH_ENV, saveCancel: TEST_FLOW_SAVE_CANCEL_ENV, value: canceledPath });
     try {
       const baseline = await appliedCount();
       await startRecording();
@@ -164,8 +165,8 @@ describe("desktop screenshots and recorded flows", () => {
     } finally {
       // Restore the launch baseline locally so no later test inherits SAVE_CANCEL=1
       // or an overridden HOOLYPANE_TEST_FLOW_PATH.
-      await application.evaluate(() => { delete process.env.HOOLYPANE_TEST_FLOW_SAVE_CANCEL; }).catch(() => undefined);
-      await application.evaluate((_electron, path) => { process.env.HOOLYPANE_TEST_FLOW_PATH = path; }, flowPath).catch(() => undefined);
+      await application.evaluate((_electron, name) => { delete process.env[name]; }, TEST_FLOW_SAVE_CANCEL_ENV).catch(() => undefined);
+      await application.evaluate((_electron, [name, path]) => { process.env[name] = path; }, [TEST_FLOW_PATH_ENV, flowPath]).catch(() => undefined);
     }
   }, 30_000);
 
@@ -181,10 +182,10 @@ describe("desktop screenshots and recorded flows", () => {
       port: FIXTURE_PORT,
       userDataDir: isolatedDir,
       extraEnv: {
-        HOOLYPANE_TEST_MODE: "1",
-        HOOLYPANE_TEST_PANE_PNG: join(isolatedDir, "pane.png"),
-        HOOLYPANE_TEST_OVERVIEW_PNG: errorOverviewPng,
-        HOOLYPANE_TEST_FLOW_PATH: join(isolatedDir, "recorded.flow.ts"),
+        [TEST_MODE_ENV]: "1",
+        [TEST_PANE_PNG_ENV]: join(isolatedDir, "pane.png"),
+        [TEST_OVERVIEW_PNG_ENV]: errorOverviewPng,
+        [TEST_FLOW_PATH_ENV]: join(isolatedDir, "recorded.flow.ts"),
       },
     });
     try {

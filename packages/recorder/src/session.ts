@@ -18,6 +18,7 @@ import {
   POST_ROLL_US,
   RUN_STATE_FILE,
   VALIDATOR_VERSION,
+  VIDEO_CODEC,
   type AlignmentResult,
   type CompositeGeometry,
   type RecordingState,
@@ -44,7 +45,7 @@ interface RecordingManifest {
   readonly t1UnixUs: number;
   readonly fps: 30 | 60;
   readonly durationFrames: number;
-  readonly codec: "vp8";
+  readonly codec: typeof VIDEO_CODEC;
   readonly geometry: CompositeGeometry;
   readonly viewports: readonly {
     id: string;
@@ -248,7 +249,7 @@ export class RecordingSession {
   async finalize(input: FinalizeInput): Promise<RecordingFinalizeResult> {
     if (this.finalized) throw new Error("recording session already finalized");
     this.finalized = true;
-    let failureDiagnostics: { readonly contract: typeof CAPTURE_CONTRACT; readonly status: FinalizeInput["status"]; readonly pipelineErrorMessage: string } | undefined;
+    let failureDiagnostics: { readonly contract: typeof CAPTURE_CONTRACT; readonly status: "failed"; readonly pipelineErrorMessage: string } | undefined;
     try {
       if (this.t0Us === undefined) return await this.finalizeWithoutFrames(input);
       const manifestPath = join(this.options.outputDir, MANIFEST_FILE);
@@ -270,7 +271,7 @@ export class RecordingSession {
         // AFTER stopCapture() so close-time spool notes and captureCloseFailures are included.
         failureDiagnostics = {
           contract: CAPTURE_CONTRACT,
-          status: "failed" as const,
+          status: "failed",
           pipelineErrorMessage: `finalize pipeline failed: ${errorMessage(error)}`,
         };
         await this.discardPartialRun(manifestPath, manifestOnDisk, manifestWritten);
@@ -386,7 +387,7 @@ export class RecordingSession {
       t1UnixUs: pipeline.t1Us,
       fps: this.options.recording.fps,
       durationFrames: pipeline.durationFrames,
-      codec: "vp8",
+      codec: VIDEO_CODEC,
       geometry: pipeline.encoding.geometry,
       viewports: pipeline.aligned.map(({ context, result, geometry }) => {
         const first = context.spool.index.frames[0]!;

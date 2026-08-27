@@ -28,7 +28,8 @@ import { normalizeUrl } from "./panes/url.js";
 import { FLOW_RECORDING_ACTIVE_MESSAGE } from "./panes/workspace.js";
 import { flushWorkspaceSaves, loadWorkspace, saveWorkspace, sweepStaleTemporaries } from "./persistence/workspace-store.js";
 import { report } from "./report.js";
-import { captureOverview, capturePane, saveViaDialog, testEnvFilePath, testModeEnabled } from "./screenshots/screenshot-service.js";
+import { testModeEnabled, TEST_FLOW_PATH_ENV, TEST_FLOW_SAVE_CANCEL_ENV, TEST_REPLAY_DELAY_MS_ENV } from "./test-env.js";
+import { captureOverview, capturePane, saveViaDialog, testEnvFilePath } from "./screenshots/screenshot-service.js";
 
 let chromeWindow: BrowserWindow | undefined;
 let registry: PaneRegistry | undefined;
@@ -71,13 +72,13 @@ function publishState(): void {
 
 function testFlowSavePath(): string | undefined {
   if (!testModeEnabled()) return undefined;
-  if (process.env.HOOLYPANE_TEST_FLOW_SAVE_CANCEL === "1") return "";
-  return testEnvFilePath("HOOLYPANE_TEST_FLOW_PATH", ".ts", "TypeScript");
+  if (process.env[TEST_FLOW_SAVE_CANCEL_ENV] === "1") return "";
+  return testEnvFilePath(TEST_FLOW_PATH_ENV, ".ts", "TypeScript");
 }
 async function applyTestReplayDelay(): Promise<void> {
   if (!testModeEnabled()) return;
-  const milliseconds = Number(process.env.HOOLYPANE_TEST_REPLAY_DELAY_MS ?? 0);
-  if (!Number.isInteger(milliseconds) || milliseconds < 0 || milliseconds > 1_000) throw new Error("HOOLYPANE_TEST_REPLAY_DELAY_MS must be an integer from 0 to 1000");
+  const milliseconds = Number(process.env[TEST_REPLAY_DELAY_MS_ENV] ?? 0);
+  if (!Number.isInteger(milliseconds) || milliseconds < 0 || milliseconds > 1_000) throw new Error(`${TEST_REPLAY_DELAY_MS_ENV} must be an integer from 0 to 1000`);
   if (milliseconds === 0) return;
   const completion = Promise.withResolvers<void>();
   setTimeout(completion.resolve, milliseconds);

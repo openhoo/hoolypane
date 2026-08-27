@@ -28,11 +28,12 @@ const OVERLAY_LABELS = {
 } satisfies Record<OverlayKey, string>;
 
 const OVERLAY_ITEMS = Object.entries(OVERLAY_LABELS).map(([key, label]) => ({ key: key as OverlayKey, label }));
+// Same exhaustive-table derivation as toolbarOptions below; kept separate because menu items are keyed, not valued.
 
 // Option tables derive from the contract unions: adding or renaming a mode fails compilation
 // here instead of drifting into hand-synced literals rejected only at runtime by main's zod.
 const toolbarOptions = <K extends string>(labels: Record<K, string>): readonly { value: K; label: string }[] =>
-  // Sole string-to-union boundary, fed exclusively by exhaustive contract-keyed tables.
+  // Sole string-to-union boundary for the toolbar selects; every caller's table is satisfies-pinned to its contract union.
   Object.keys(labels).map((key): { value: K; label: string } => ({ value: key as K, label: labels[key as K] }));
 
 const LAYOUT_OPTIONS = toolbarOptions({
@@ -462,7 +463,7 @@ export const PaneCard = memo(function PaneCard({
         </IconButton>
       </header>
       {/* Placeholder for the native WebContentsView overlay; measured via getBoundingClientRect for bounds emission. */}
-      <div data-pane-surface={pane.id} aria-label={`${pane.name} browser surface`} class="relative min-h-0 flex-1 overflow-hidden bg-canvas">
+      <div data-pane-surface={pane.id} class="relative min-h-0 flex-1 overflow-hidden bg-canvas">
         <span class="pointer-events-none absolute left-1 top-1 select-none font-mono text-[10px] text-mute/80">{pane.url}</span>
       </div>
     </article>

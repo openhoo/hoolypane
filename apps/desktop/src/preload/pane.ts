@@ -1,5 +1,5 @@
 import { ipcRenderer } from "electron";
-import { FILL_DEBOUNCE_MS, GET_BY_ROLE_ROLES, IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, RECORDABLE_PRESS_KEYS, RecordFailureSchema, ReplayRequestSchema, REPLAY_RESULT_PHASES, failureReason, staleGenerationMessage, type Action, type LocatorSpec, type ReplayRequest, type ReplayResult } from "@hoolypane/contracts";
+import { FILL_DEBOUNCE_MS, IPC_CHANNELS, PaneGenerationSchema, PaneObservedActionSchema, RECORDABLE_PRESS_KEYS, RECORDER_IMPLICIT_ROLES, RecordFailureSchema, ReplayRequestSchema, REPLAY_RESULT_PHASES, failureReason, staleGenerationMessage, type Action, type LocatorSpec, type ReplayRequest, type ReplayResult } from "@hoolypane/contracts";
 
 let documentGeneration = 0;
 type SuppressionEntry = { generation: number; kind: Action["kind"]; box?: ReplayResult["box"]; confirmed?: boolean };
@@ -100,15 +100,16 @@ function elementsFor(locator: LocatorSpec, labelElements?: readonly Element[]): 
   }
 }
 
-// Implicit ARIA roles this recorder derives from element semantics below. The `satisfies` pin
-// makes every name here a key of @hoolypane/contracts GET_BY_ROLE_ROLES: that shared table decides
-// whether an exported role locator serializes as page.getByRole(...) or as the [role="..."]
-// attribute fallback — which only matches explicit role attributes, so an implicit role missing
-// there records getByRole steps that replay zero matches and deadlock the flow until its deadline
-// (recording text-like inputs as textbox once deadlocked exported flows exactly like that).
-// Adding an implicit role without a contracts-table entry therefore fails typecheck instead of
-// drifting past a prose comment.
-const IMPLICIT_ROLES = ["button", "link", "combobox", "textbox", "checkbox", "radio", "searchbox", "spinbutton", "slider"] as const satisfies readonly (keyof typeof GET_BY_ROLE_ROLES)[];
+// Implicit ARIA roles this recorder derives from element semantics below — the shared
+// @hoolypane/contracts RECORDER_IMPLICIT_ROLES list, compile-pinned there (`satisfies`) to
+// GET_BY_ROLE_ROLES: that shared table decides whether an exported role locator serializes as
+// page.getByRole(...) or as the [role="..."] attribute fallback — which only matches explicit
+// role attributes, so an implicit role missing there records getByRole steps that replay zero
+// matches and deadlock the flow until its deadline (recording text-like inputs as textbox once
+// deadlocked exported flows exactly like that). Adding an implicit role without a
+// contracts-table entry therefore fails typecheck inside contracts instead of drifting past a
+// prose comment.
+const IMPLICIT_ROLES = RECORDER_IMPLICIT_ROLES;
 type ImplicitRole = (typeof IMPLICIT_ROLES)[number];
 // Native <input> types whose implicit ARIA role differs from the textbox default; Playwright
 // resolves these under their real implicit roles, so they must be recorded as such.

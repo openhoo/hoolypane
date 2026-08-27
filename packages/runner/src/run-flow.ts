@@ -63,7 +63,7 @@ function recorderTarget(id: string, viewport: ViewportSpec, cdp: CDPSession): Re
         if (typeof quality !== "number" || typeof maxWidth !== "number" || typeof maxHeight !== "number" || typeof everyNthFrame !== "number") {
           throw new Error("Page.startScreencast requires numeric quality and geometry");
         }
-        return cdp.send("Page.startScreencast", { format: "jpeg", quality, maxWidth, maxHeight, everyNthFrame });
+        return cdp.send("Page.startScreencast", { ...params, quality, maxWidth, maxHeight, everyNthFrame });
       }
       throw new Error(`unsupported recorder CDP command: ${method}`);
     },

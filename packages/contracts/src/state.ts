@@ -6,7 +6,7 @@ import { ViewportSpecSchema, type ViewportSpec } from "./viewport.js";
 export const LayoutModeSchema = z.enum(["free", "grid", "horizontal", "focus"]);
 export type LayoutMode = z.infer<typeof LayoutModeSchema>;
 
-const PanePositionSchema = z.strictObject({
+export const PanePositionSchema = z.strictObject({
   x: z.number().int().min(0),
   y: z.number().int().min(0),
 });

@@ -48,8 +48,8 @@ describe("cli help", () => {
     const outWrite = vi.spyOn(process.stdout, "write").mockImplementation(sink);
     const errWrite = vi.spyOn(process.stderr, "write").mockImplementation(sink);
     try {
-      // Dynamic import is deliberate: cli.js runs main(process.argv) at evaluation time,
-      // so the help argv must be installed before the module is first loaded.
+      // Dynamic import keeps this test independent of cli.js's entry-guard side effects;
+      // main() reads process.argv at call time, so the help argv is observed below.
       process.argv = [originalArgv[0]!, "hoolypane", "--help"];
       const { main } = await import("./cli.js");
       await expect(main()).resolves.toBe(0);

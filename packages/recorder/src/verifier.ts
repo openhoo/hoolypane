@@ -27,7 +27,7 @@ async function ffprobeJson(executable: string, args: readonly string[]): Promise
   const child = spawn(executable, args, { stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
   child.stdout.on("data", (data: Buffer) => { stdout += data.toString(); });
-  const { completion } = awaitChildExit(child, child.stderr!, executable);
+  const { completion, stderrText } = awaitChildExit(child, child.stderr!, executable);
   const watchdog = setTimeout(() => {
     completion.reject(new Error(`${executable} did not exit within ${CHILD_GRACE_MS}ms; sending SIGKILL`));
     child.kill("SIGKILL");
@@ -37,7 +37,7 @@ async function ffprobeJson(executable: string, args: readonly string[]): Promise
   } finally {
     clearTimeout(watchdog);
   }
-  try { return JSON.parse(stdout); } catch (error) { throw new Error(`${errorMessage(error)}\n${stdout.slice(0, 1000)}`); }
+  try { return JSON.parse(stdout); } catch (error) { throw new Error(`${errorMessage(error)}\n${stdout.slice(0, 1000)}\n${stderrText()}`); }
 }
 
 async function probe(executable: string, file: string): Promise<{ stream: ProbeStream; packets: readonly ProbePacket[] }> {

@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { errorMessage, IPC_CHANNELS } from "@hoolypane/contracts";
+import { TEST_MODE_ENV, TEST_REPLAY_DELAY_MS_ENV } from "../../apps/desktop/src/main/test-env.js";
 import { fixturePages, launchDesktopApp, pollUntil, startFixtureServer, teardownDesktopSuite, type FixtureServer } from "../helpers/harness.js";
 import { FIXTURE_PORTS, fixtureOrigin } from "../fixtures/ports.js";
 
@@ -61,7 +62,7 @@ beforeAll(async () => {
   fixture = await startFixtureServer(FIXTURE_PORT);
   const launch = await launchDesktopApp({
     port: FIXTURE_PORT,
-    extraEnv: { HOOLYPANE_TEST_MODE: "1", HOOLYPANE_TEST_REPLAY_DELAY_MS: "150" },
+    extraEnv: { [TEST_MODE_ENV]: "1", [TEST_REPLAY_DELAY_MS_ENV]: "150" },
   });
   application = launch.application;
   chrome = launch.chrome;

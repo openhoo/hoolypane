@@ -1,11 +1,7 @@
 import type { ElectronApplication, Page } from "playwright";
-import { VIEWPORT_PRESETS } from "@hoolypane/contracts";
+import { DESKTOP_PANE_SIZE } from "../helpers/harness.js";
 import { fixtureOrigin } from "../fixtures/ports.js";
 
-const desktopPreset = VIEWPORT_PRESETS.find((preset) => preset.id === "desktop-1440");
-if (!desktopPreset) throw new Error("desktop-1440 preset missing");
-const desktopPaneWidth = desktopPreset.width;
-const desktopPaneHeight = desktopPreset.height;
 
 /**
  * Clicks a fixture element inside the 1440px source pane through CDP input dispatch,
@@ -25,7 +21,7 @@ export async function clickPaneSurface(
   const viewport = await chrome.evaluate(() => ({ width: innerWidth, height: innerHeight }));
   const visibleWidth = Math.max(0, Math.min(viewport.width, surface.x + surface.width) - Math.max(0, surface.x));
   const visibleHeight = Math.max(0, Math.min(viewport.height, surface.y + surface.height) - Math.max(0, surface.y));
-  const scale = Math.min(1, visibleWidth / desktopPaneWidth, visibleHeight / desktopPaneHeight);
+  const scale = Math.min(1, visibleWidth / DESKTOP_PANE_SIZE.width, visibleHeight / DESKTOP_PANE_SIZE.height);
   const result = await application.evaluate(async ({ webContents }, input) => {
     const candidates = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(input.origin));
     let source: (typeof candidates)[number] | undefined;
@@ -62,7 +58,7 @@ export async function clickPaneSurface(
       await settleDelay;
     }
     return { status, attempts, lastAttempt: attempts, lastError };
-  }, { origin: fixtureOrigin(options.port), testId: options.testId, scale, expectedStatus: options.expectedStatus, width: desktopPaneWidth });
+  }, { origin: fixtureOrigin(options.port), testId: options.testId, scale, expectedStatus: options.expectedStatus, width: DESKTOP_PANE_SIZE.width });
   if (options.expectedStatus !== undefined && result.status !== options.expectedStatus) {
     throw new Error(`source ${options.testId} click did not activate: ${JSON.stringify({ surface, scale, result })}`);
   }

@@ -1,6 +1,6 @@
 import type { ElectronApplication, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { fixturePages, launchDesktopApp, locateSourcePane, pollUntil, startFixtureServer, teardownDesktopSuite, waitForFixturePanes, withReloadRetry, type FixtureServer } from "../helpers/harness.js";
+import { DEFAULT_PANE_COUNT, fixturePages, launchDesktopApp, locateSourcePane, pollUntil, startFixtureServer, teardownDesktopSuite, waitForFixturePanes, withReloadRetry, type FixtureServer } from "../helpers/harness.js";
 import { IPC_CHANNELS } from "@hoolypane/contracts";
 import { clickPaneSurface } from "./cdp-input.js";
 import { FIXTURE_PORTS, fixtureOrigin } from "../fixtures/ports.js";
@@ -56,7 +56,7 @@ async function scrollSource(): Promise<void> {
 }
 
 async function waitForRenderedWorkspace(): Promise<void> {
-  await pollUntil(async () => (await chrome.locator(".pane-card").count()) === 5 || null, 15_000);
+  await pollUntil(async () => (await chrome.locator(".pane-card").count()) === DEFAULT_PANE_COUNT || null, 15_000);
   await pollUntil(async () => (await chrome.locator("#address").inputValue()).startsWith(fixtureOrigin(FIXTURE_PORT)) || null, 10_000);
 }
 beforeAll(async () => {
@@ -94,14 +94,14 @@ describe("direct Electron surfaces", () => {
 
   it("creates direct emulated panes with hardened sessions and tears them down", async () => {
     // Native child views expose no readiness event to Playwright; poll Electron's authoritative WebContents registry.
-    await waitForFixturePanes(application, FIXTURE_PORT, 5);
+    await waitForFixturePanes(application, FIXTURE_PORT, DEFAULT_PANE_COUNT);
     const chromeText = await chrome.locator("body").innerText();
     expect(chromeText).toContain("Desktop 1440");
     const initial = await application.evaluate(async ({ webContents }, origin) => {
       const panes = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith(origin));
       return Promise.all(panes.map(async (contents) => contents.executeJavaScript(`(async () => ({ width: innerWidth, height: innerHeight, dpr: devicePixelRatio, touch: navigator.maxTouchPoints, permission: (await navigator.permissions.query({name:'geolocation'})).state }))()`)));
     }, fixtureOrigin(FIXTURE_PORT));
-    expect(initial).toHaveLength(5);
+    expect(initial).toHaveLength(DEFAULT_PANE_COUNT);
     expect(initial.map((value) => [value.width, value.height, value.dpr])).toEqual(expect.arrayContaining([[1440, 900, 1], [1280, 800, 1], [768, 1024, 2], [390, 844, 3], [360, 800, 3]]));
     expect(initial.every((value) => value.permission === "denied")).toBe(true);
     // Mirrored native events expose completion only through page state in each independent WebContents.
@@ -116,7 +116,7 @@ describe("direct Electron surfaces", () => {
             return null;
           }
           const ready = snapshots.filter((snapshot): snapshot is PaneSnapshot => snapshot !== null);
-          return ready.length === 5 && predicate(ready) ? ready : null;
+          return ready.length === DEFAULT_PANE_COUNT && predicate(ready) ? ready : null;
         }, 10_000);
       } catch (error) {
         throw new Error(`desktop panes did not converge after ${label}: ${JSON.stringify(await paneSnapshots().catch(() => []))}`, { cause: error });
@@ -147,6 +147,6 @@ describe("direct Electron surfaces", () => {
     await chrome.getByRole("button", { name: "Unfocus" }).first().click();
     await pollUntil(async () => await chrome.locator(".pane-card.focused").count() === 0 || null, 10_000);
     await chrome.getByRole("button", { name: "Close" }).last().click();
-    await waitForFixturePanes(application, FIXTURE_PORT, 5);
+    await waitForFixturePanes(application, FIXTURE_PORT, DEFAULT_PANE_COUNT);
   }, 60_000);
 });

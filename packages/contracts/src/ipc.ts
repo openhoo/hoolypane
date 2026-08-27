@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { FAILURE_REASON_MAX_LENGTH } from "./errors.js";
 import { ActionSchema } from "./action.js";
-import { ColorSchemeModeSchema, LayoutModeSchema, OverlayKeySchema, ThrottlingModeSchema } from "./state.js";
+import { ColorSchemeModeSchema, LayoutModeSchema, OverlayKeySchema, PanePositionSchema, ThrottlingModeSchema } from "./state.js";
 import { ViewportSpecSchema } from "./viewport.js";
 
 export const IPC_CHANNELS = {
@@ -39,7 +39,7 @@ export const ChromeCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("navigate"), url: z.string().min(1) }),
   z.strictObject({ kind: z.enum(["back", "forward", "reload"]), paneId }),
   z.strictObject({ kind: z.literal("set-layout"), layout: LayoutModeSchema }),
-  z.strictObject({ kind: z.literal("move-pane"), paneId, x: z.number().int().min(0), y: z.number().int().min(0) }),
+  z.strictObject({ kind: z.literal("move-pane"), paneId, ...PanePositionSchema.shape }),
   z.strictObject({ kind: z.literal("set-sync"), enabled: z.boolean() }),
   z.strictObject({ kind: z.literal("set-color-scheme"), value: ColorSchemeModeSchema }),
   z.strictObject({ kind: z.literal("set-reduced-motion"), enabled: z.boolean() }),

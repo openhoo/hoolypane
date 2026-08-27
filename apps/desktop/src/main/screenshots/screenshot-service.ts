@@ -3,14 +3,10 @@ import { Worker } from "node:worker_threads";
 import { extname, isAbsolute } from "node:path";
 import { DEFAULT_COMPOSITE_BACKGROUND, errorMessage, formatViewportDimensions } from "@hoolypane/contracts";
 import { writeFileAtomic } from "@hoolypane/contracts/fsync";
+import { testModeEnabled, TEST_OVERVIEW_PNG_ENV, TEST_PANE_PNG_ENV } from "../test-env.js";
 import type { PaneRegistry } from "../panes/pane-registry.js";
 import { unknownPaneMessage } from "../panes/workspace.js";
 import type { OverviewInput, OverviewTileInput, OverviewWorkerResponse } from "./overview-protocol.js";
-
-/** Single source of truth for the HOOLYPANE_TEST_MODE opt-in consumed by every test-only path. */
-export function testModeEnabled(): boolean {
-  return process.env.HOOLYPANE_TEST_MODE === "1";
-}
 
 /** Test-only file override shared by E2E hooks: test-mode gating via testModeEnabled, env read, absolute-<label>-path validation. */
 export function testEnvFilePath(variable: string, extension: string, label: string): string | undefined {
@@ -39,7 +35,7 @@ export async function saveViaDialog(
 async function savePng(
   window: BrowserWindow,
   png: Uint8Array,
-  testVariable: "HOOLYPANE_TEST_PANE_PNG" | "HOOLYPANE_TEST_OVERVIEW_PNG",
+  testVariable: typeof TEST_PANE_PNG_ENV | typeof TEST_OVERVIEW_PNG_ENV,
   title: string,
   defaultPath: string,
 ): Promise<void> {
@@ -56,7 +52,7 @@ export async function capturePane(window: BrowserWindow, registry: PaneRegistry,
   const state = registry.getPaneState(paneId);
   if (!pane || !state) throw new Error(unknownPaneMessage(paneId));
   const png = (await pane.view.webContents.capturePage()).toPNG();
-  await savePng(window, png, "HOOLYPANE_TEST_PANE_PNG", `Save ${state.name} screenshot`, `${state.id}.png`);
+  await savePng(window, png, TEST_PANE_PNG_ENV, `Save ${state.name} screenshot`, `${state.id}.png`);
 }
 
 export async function captureOverview(window: BrowserWindow, registry: PaneRegistry): Promise<void> {
@@ -75,7 +71,7 @@ export async function captureOverview(window: BrowserWindow, registry: PaneRegis
     }
   }));
   const png = await composeOverview(tiles, DEFAULT_COMPOSITE_BACKGROUND);
-  await savePng(window, png, "HOOLYPANE_TEST_OVERVIEW_PNG", "Save Hoolypane overview", "hoolypane-overview.png");
+  await savePng(window, png, TEST_OVERVIEW_PNG_ENV, "Save Hoolypane overview", "hoolypane-overview.png");
 }
 
 /** Watchdog deadline for one overview composition: equal to QUIT_FLUSH_DEADLINE_MS (main/index.ts)
