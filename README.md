@@ -17,6 +17,14 @@ pnpm --filter @hoolypane/desktop start
 
 The desktop provides one address bar, preset/custom panes, free (default, drag-and-drop), grid, horizontal, focus layouts, synchronized click/form/key/ratio-scroll interactions, pane and overview PNG export, and Playwright flow recording. Remote panes share the persistent `persist:hoolypane` session. Permissions, downloads, external protocols, Node integration, and pop-up windows are denied.
 
+## Desktop
+
+| Responsive grid | Focus mode |
+| --- | --- |
+| ![Hoolypane showing five responsive Nimbus demo panes in grid layout](docs/screenshots/hoolypane-grid.png) | ![Hoolypane showing the desktop Nimbus demo pane in focus mode](docs/screenshots/hoolypane-focus.png) |
+
+Both images come from the real Electron app and its native pane surfaces. Regenerate them on a desktop with `pnpm screenshots:readme`, or headlessly on Linux with `pnpm screenshots:readme:xvfb`.
+
 ## Configuration and flows
 
 `hoolypane.config.ts`:

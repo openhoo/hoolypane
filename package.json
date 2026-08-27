@@ -2,6 +2,7 @@
   "name": "hoolypane",
   "version": "0.1.0-beta.2",
   "private": true,
+  "type": "module",
   "license": "AGPL-3.0-only",
   "engines": {
     "node": ">=24"
@@ -32,6 +33,8 @@
     "benchmark:desktop:xvfb": "pnpm run desktop:xvfb pnpm benchmark:desktop",
     "smoke:desktop-package": "node scripts/smoke-desktop-package.mjs",
     "smoke:desktop-package:xvfb": "pnpm run desktop:xvfb pnpm smoke:desktop-package",
+    "screenshots:readme": "pnpm --filter @hoolypane/desktop build && node scripts/generate-readme-screenshots.mjs",
+    "screenshots:readme:xvfb": "pnpm run desktop:xvfb pnpm screenshots:readme",
     "release:dry-run": "node scripts/release-dry-run.mjs",
     "pins:check": "node scripts/check-version-pins.mjs"
   },

@@ -24,6 +24,8 @@ export const FIXTURE_PORTS = {
   dragdrop: 4186,
   /** scripts/smoke-desktop-package.mjs */
   packageSmoke: 4188,
+  /** scripts/generate-readme-screenshots.mjs */
+  readmeScreenshots: 4189,
 } as const;
 
 /** Canonical origin string for any fixture port; the single construction point for test addressing. */
