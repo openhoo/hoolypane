@@ -70,10 +70,20 @@ it("drag and drop moves a pane and persists the position", async () => {
   const header = chrome.locator('[data-pane-surface="desktop-1440"]').locator("xpath=..").locator("header");
   const headerBox = await header.boundingBox();
   if (!headerBox) throw new Error("header box missing");
-  // The two-pixel left gutter is guaranteed header background: the pane name begins after
-  // pl-1, while midpoint guesses can hit a toolbar button on narrower macOS/Windows screens.
-  const startX = headerBox.x + 2;
-  const startY = headerBox.y + headerBox.height / 2;
+  // Resolve a point through the renderer's own hit testing. Fixed offsets can land on the
+  // article border under Windows scaling, while midpoint guesses can hit toolbar controls.
+  const start = await header.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const y = Math.floor(rect.y + rect.height / 2);
+    for (let x = Math.ceil(rect.x) + 1; x < Math.floor(rect.right); x += 1) {
+      const target = document.elementFromPoint(x, y) as HTMLElement | null;
+      if (target?.closest("[data-pane-header]") === element && !target.closest("button, input, select, [data-pane-name]")) return { x, y };
+    }
+    return null;
+  });
+  if (!start) throw new Error(`no draggable header background found in ${JSON.stringify(headerBox)}`);
+  const startX = start.x;
+  const startY = start.y;
   await chrome.mouse.move(startX, startY);
   await chrome.mouse.down();
   for (const step of [0.2, 0.4, 0.6, 0.8, 1]) {

@@ -23,15 +23,19 @@ interface ProbePacket { readonly pts?: number | string; readonly duration?: numb
 interface ProbeStream { readonly time_base?: string; readonly width?: number; readonly height?: number }
 interface PacketOutput { readonly streams?: readonly ProbeStream[]; readonly packets?: readonly ProbePacket[] }
 
+// A normal probe can pay cold binary and filesystem startup on native CI runners. Keep its
+// execution budget separate from CHILD_GRACE_MS, which only bounds failed-child teardown.
+const PROBE_TIMEOUT_MS = 30_000;
+
 async function ffprobeJson(executable: string, args: readonly string[]): Promise<unknown> {
   const child = spawn(executable, args, { stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
   child.stdout.on("data", (data: Buffer) => { stdout += data.toString(); });
   const { completion, stderrText } = awaitChildExit(child, child.stderr!, executable);
   const watchdog = setTimeout(() => {
-    completion.reject(new Error(`${executable} did not exit within ${CHILD_GRACE_MS}ms; sending SIGKILL`));
+    completion.reject(new Error(`${executable} did not exit within ${PROBE_TIMEOUT_MS}ms; sending SIGKILL`));
     child.kill("SIGKILL");
-  }, CHILD_GRACE_MS);
+  }, PROBE_TIMEOUT_MS);
   try {
     await completion.promise;
   } finally {

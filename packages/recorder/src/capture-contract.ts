@@ -9,8 +9,7 @@ export const POST_ROLL_US = 250_000;
 export const MAX_QUEUED_FRAMES = 8;
 export const MAX_QUEUED_BYTES = 32 * 1024 * 1024;
 
-// Shared grace period before SIGKILL for spawned ffmpeg-family children; the encoder shutdown
-// watchdog and the verifier probe watchdog must stay tuned together.
+// Grace period for a failed ffmpeg child to terminate before SIGKILL escalation.
 export const CHILD_GRACE_MS = 10_000;
 
 export type RecordingState = "awaiting-initial-frames" | "recording" | "post-roll" | "stopping" | "aligning" | "encoding" | "validating" | "complete" | "failed";

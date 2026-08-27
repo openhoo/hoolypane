@@ -24,7 +24,7 @@ let overviewPng = "";
 let errorOverviewPng = "";
 let flowPath = "";
 
-async function waitForFile(path: string): Promise<void> {
+async function waitForFile(path: string, timeoutMs = 10_000): Promise<void> {
   await pollUntil(async () => {
     try {
       await access(path);
@@ -32,7 +32,7 @@ async function waitForFile(path: string): Promise<void> {
     } catch {
       return null; // writer not finished
     }
-  }, 10_000);
+  }, timeoutMs);
 }
 
 async function appliedCount(): Promise<number> {
@@ -115,9 +115,11 @@ describe("desktop screenshots and recorded flows", () => {
 
   it("exports an overview still of all panes", async () => {
     await chrome.getByRole("button", { name: "Save Overview PNG" }).click();
-    await waitForFile(overviewPng);
+    // Five cold native capturePage calls can exceed 10 s on Windows runners before the
+    // separately bounded overview worker begins composing.
+    await waitForFile(overviewPng, 30_000);
     expect((await sharp(await readFile(overviewPng)).metadata()).width).toBeGreaterThan(500);
-  }, 20_000);
+  }, 40_000);
 
   it("records a flow and replays it through the runner", async () => {
     const baseline = await appliedCount();
